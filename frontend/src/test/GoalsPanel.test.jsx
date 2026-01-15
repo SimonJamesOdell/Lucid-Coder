@@ -1,0 +1,704 @@
+import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import GoalsPanel, { compareGoalsForDisplay } from '../components/GoalsPanel.jsx';
+import { useAppState } from '../context/AppStateContext.jsx';
+import * as goalsApi from '../utils/goalsApi.js';
+
+vi.mock('../context/AppStateContext.jsx', () => ({
+  useAppState: vi.fn()
+}));
+
+vi.mock('../utils/goalsApi.js');
+
+const project = { id: 1, name: 'Demo Project' };
+
+describe('GoalsPanel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows empty state when no project selected', () => {
+    useAppState.mockReturnValue({ currentProject: null, jobState: null });
+
+    render(<GoalsPanel mode="tab" />);
+
+    expect(screen.getByTestId('goals-tab')).toBeInTheDocument();
+    expect(screen.getByTestId('goals-modal-empty')).toHaveTextContent('Select a project');
+  });
+
+  it('ignores goals-updated events when no project is selected', () => {
+    useAppState.mockReturnValue({ currentProject: null, jobState: null });
+
+    render(<GoalsPanel mode="tab" />);
+
+    window.dispatchEvent(new CustomEvent('lucidcoder:goals-updated', { detail: { projectId: 1 } }));
+
+    expect(goalsApi.fetchGoals).not.toHaveBeenCalled();
+  });
+
+  it('always loads goals including completed/archived', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalledWith(1, { includeArchived: true });
+    });
+  });
+
+  it('refreshes goals when the automation flow signals goals were updated', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+
+    goalsApi.fetchGoals
+      .mockResolvedValueOnce([
+        { id: 101, prompt: 'Last step', status: 'verifying', parentGoalId: 100 },
+        { id: 100, prompt: 'Parent', status: 'planning', parentGoalId: null }
+      ])
+      .mockResolvedValueOnce([
+        { id: 101, prompt: 'Last step', status: 'ready', parentGoalId: 100 },
+        { id: 100, prompt: 'Parent', status: 'planning', parentGoalId: null }
+      ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    // Initial render shows the verifying badge.
+    const childButton = await screen.findByTestId('goals-modal-goal-101');
+    expect(within(childButton).getByText('Verifying')).toBeInTheDocument();
+
+    window.dispatchEvent(new CustomEvent('lucidcoder:goals-updated', { detail: { projectId: 1 } }));
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId('goals-modal-goal-101')).getByText('Completed')).toBeInTheDocument();
+    });
+  });
+
+  it('ignores goals-updated events for other projects and removes the listener on unmount', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    const { unmount } = render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalledWith(1, { includeArchived: true });
+    });
+
+    const callCountAfterInitialLoad = goalsApi.fetchGoals.mock.calls.length;
+
+    // Wrong project id should be ignored.
+    window.dispatchEvent(new CustomEvent('lucidcoder:goals-updated', { detail: { projectId: 999 } }));
+
+    await Promise.resolve();
+    expect(goalsApi.fetchGoals.mock.calls.length).toBe(callCountAfterInitialLoad);
+
+    // Listener is removed on unmount.
+    unmount();
+    window.dispatchEvent(new CustomEvent('lucidcoder:goals-updated', { detail: { projectId: 1 } }));
+    await Promise.resolve();
+
+    expect(goalsApi.fetchGoals.mock.calls.length).toBe(callCountAfterInitialLoad);
+  });
+
+  it('bails out of goals-updated subscription when window event APIs are missing', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    const originalAdd = window.addEventListener;
+    const originalRemove = window.removeEventListener;
+
+    // Force the effect to hit its guard path.
+    // eslint-disable-next-line no-param-reassign
+    window.addEventListener = undefined;
+    // eslint-disable-next-line no-param-reassign
+    window.removeEventListener = undefined;
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalledWith(1, { includeArchived: true });
+    });
+
+    const callsAfterInitial = goalsApi.fetchGoals.mock.calls.length;
+    window.dispatchEvent(new CustomEvent('lucidcoder:goals-updated', { detail: { projectId: 1 } }));
+    await Promise.resolve();
+
+    expect(goalsApi.fetchGoals.mock.calls.length).toBe(callsAfterInitial);
+
+    // Restore window APIs for subsequent tests.
+    // eslint-disable-next-line no-param-reassign
+    window.addEventListener = originalAdd;
+    // eslint-disable-next-line no-param-reassign
+    window.removeEventListener = originalRemove;
+  });
+
+  it('normalizes done/completed to ready and shows progress when parent has no children', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 10, prompt: 'Ship it', status: 'done', parentGoalId: null }
+    ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Ship it')).toBeInTheDocument();
+    });
+
+    // done -> ready, also triggers parent-only progress 1/1
+    const goalButton = screen.getByTestId('goals-modal-goal-10');
+    expect(within(goalButton).getByText('Completed')).toBeInTheDocument();
+    expect(within(goalButton).getByText('1/1')).toBeInTheDocument();
+    expect(within(goalButton).getByText('Ship it')).toBeInTheDocument();
+  });
+
+  it("shows 'Failed' label for failed goals", async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 11, prompt: 'Investigate bug', status: 'failed', parentGoalId: null }
+    ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Investigate bug')).toBeInTheDocument();
+    });
+
+    const goalButton = screen.getByTestId('goals-modal-goal-11');
+    expect(within(goalButton).getByText('Failed')).toBeInTheDocument();
+  });
+
+  it('loads details when selecting a goal and renders tasks (falls back to type when title missing)', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 22, prompt: 'Goal with tasks', status: 'planning', parentGoalId: null }
+    ]);
+    goalsApi.fetchGoalWithTasks.mockResolvedValue({
+      tasks: [{ id: 1, title: '', type: 'edit', status: 'done' }]
+    });
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-modal-goal-22'));
+
+    await waitFor(() => {
+      expect(goalsApi.fetchGoalWithTasks).toHaveBeenCalledWith(22);
+    });
+
+    const taskList = await screen.findByTestId('goals-modal-task-list');
+    expect(within(taskList).getByText('edit', { selector: '.goals-modal-task-title' })).toBeInTheDocument();
+    expect(within(taskList).getByText('done')).toBeInTheDocument();
+  });
+
+  it('renders child goals in creation order (oldest first)', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 10, prompt: 'Parent goal', status: 'planning', parentGoalId: null, createdAt: '2026-01-01T00:00:00.000Z' },
+      // Returned in reverse order (newest first)
+      { id: 13, prompt: 'Third', status: 'planning', parentGoalId: 10, createdAt: '2026-01-01T00:00:03.000Z' },
+      { id: 12, prompt: 'Second', status: 'planning', parentGoalId: 10, createdAt: '2026-01-01T00:00:02.000Z' },
+      { id: 11, prompt: 'First', status: 'planning', parentGoalId: 10, createdAt: '2026-01-01T00:00:01.000Z' }
+    ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Parent goal')).toBeInTheDocument();
+    });
+
+    const parentButton = screen.getByTestId('goals-modal-goal-10');
+    const group = parentButton.closest('.goals-modal-goal-group');
+    expect(group).toBeTruthy();
+
+    const titles = Array.from(group.querySelectorAll('.goals-modal-children .goals-modal-goal-title'))
+      .map((node) => node.textContent);
+
+    expect(titles).toEqual(['First', 'Second', 'Third']);
+  });
+
+  it('sorts child goals with createdAt ahead of those without', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 10, prompt: 'Parent goal', status: 'planning', parentGoalId: null, createdAt: '2026-01-01T00:00:00.000Z' },
+      // One child missing createdAt should be sorted after children with valid createdAt.
+      { id: 11, prompt: 'No timestamp', status: 'planning', parentGoalId: 10 },
+      { id: 12, prompt: 'Has timestamp', status: 'planning', parentGoalId: 10, createdAt: '2026-01-01T00:00:01.000Z' }
+    ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Parent goal')).toBeInTheDocument();
+    });
+
+    const parentButton = screen.getByTestId('goals-modal-goal-10');
+    const group = parentButton.closest('.goals-modal-goal-group');
+    expect(group).toBeTruthy();
+
+    const titles = Array.from(group.querySelectorAll('.goals-modal-children .goals-modal-goal-title'))
+      .map((node) => node.textContent);
+
+    expect(titles).toEqual(['Has timestamp', 'No timestamp']);
+  });
+
+  it('compareGoalsForDisplay orders timestamped goals before untimestamped goals', () => {
+    expect(compareGoalsForDisplay(
+      { id: 1, createdAt: '2026-01-01T00:00:01.000Z' },
+      { id: 2 }
+    )).toBeLessThan(0);
+
+    expect(compareGoalsForDisplay(
+      { id: 1 },
+      { id: 2, createdAt: '2026-01-01T00:00:01.000Z' }
+    )).toBeGreaterThan(0);
+
+    expect(compareGoalsForDisplay(
+      { id: 1 },
+      { id: 2 }
+    )).toBeLessThan(0);
+
+    expect(compareGoalsForDisplay(
+      {},
+      { id: 1 }
+    )).toBeLessThan(0);
+
+    expect(compareGoalsForDisplay(
+      { id: 1 },
+      {}
+    )).toBeGreaterThan(0);
+  });
+
+  it('shows empty details state when tasks are missing or empty', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 23, prompt: 'Goal without tasks', status: '', parentGoalId: null }
+    ]);
+    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-modal-goal-23'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/No tasks recorded/i)).toBeInTheDocument();
+    });
+
+    // status fallback: blank status -> unknown
+    expect(screen.getByText(/Status: Unknown/i)).toBeInTheDocument();
+  });
+
+  it('surfaces details load failures as an alert', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 24, prompt: 'Flaky details', status: 'planning', parentGoalId: null }
+    ]);
+    goalsApi.fetchGoalWithTasks.mockRejectedValue(new Error('boom'));
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-modal-goal-24'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to load goal details');
+    });
+  });
+
+  it('does not delete a selected goal when confirmation is declined', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 40, prompt: 'Delete me', status: 'planning', parentGoalId: null }
+    ]);
+    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-modal-goal-40'));
+
+    await user.click(screen.getByTestId('goals-modal-remove-goal'));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(goalsApi.deleteGoal).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
+  });
+
+  it('deletes a selected goal when confirmed and refreshes goals list', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+
+    goalsApi.fetchGoals
+      .mockResolvedValueOnce([{ id: 41, prompt: 'Remove me', status: 'planning', parentGoalId: null }])
+      .mockResolvedValueOnce([]);
+
+    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
+    goalsApi.deleteGoal.mockResolvedValue();
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-modal-goal-41'));
+
+    await user.click(screen.getByTestId('goals-modal-remove-goal'));
+
+    await waitFor(() => {
+      expect(goalsApi.deleteGoal).toHaveBeenCalledWith(41);
+    });
+
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText('Remove me')).not.toBeInTheDocument();
+      expect(screen.getByText(/Select a goal/i)).toBeInTheDocument();
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it('shows an error when deleteGoal fails', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 42, prompt: 'Cannot remove', status: 'planning', parentGoalId: null }
+    ]);
+    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
+    goalsApi.deleteGoal.mockRejectedValue(new Error('nope'));
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-modal-goal-42'));
+    await user.click(screen.getByTestId('goals-modal-remove-goal'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to remove goal');
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it('polls for goals while a job is active and ignores silent failures', async () => {
+    useAppState.mockReturnValue({
+      currentProject: project,
+      jobState: {
+        jobsByProject: {
+          '1': {
+            jobs: [null, { id: 'job-final', status: 'succeeded' }, { id: 'job-1', status: 'running' }]
+          }
+        }
+      }
+    });
+
+    let intervalCallback = null;
+    const setIntervalSpy = vi
+      .spyOn(window, 'setInterval')
+      .mockImplementation((callback, ms) => {
+        // Only capture the GoalsPanel polling interval (1000ms).
+        if (ms === 1000) {
+          intervalCallback = callback;
+          return 123;
+        }
+        return 999;
+      });
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval').mockImplementation(() => {});
+
+    const goal = { id: 60, prompt: 'Stays put', status: 'planning', parentGoalId: null };
+    let callCount = 0;
+    goalsApi.fetchGoals.mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 3) {
+        throw new Error('silent failure');
+      }
+      return [goal];
+    });
+
+    const { unmount } = render(<GoalsPanel mode="tab" />);
+
+    expect(await screen.findByText('Stays put')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalledWith(1, { includeArchived: true });
+    });
+
+    expect(intervalCallback).toBeTypeOf('function');
+    // Trigger the scheduled tick: this should be a silent refresh.
+    intervalCallback();
+    await Promise.resolve();
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Stays put')).toBeInTheDocument();
+
+    // After unmount, wait for cleanup so the cancelled guard is active.
+    unmount();
+    await waitFor(() => {
+      expect(clearIntervalSpy).toHaveBeenCalledWith(123);
+    });
+
+    const callCountAfterUnmount = callCount;
+    intervalCallback();
+    await Promise.resolve();
+    expect(callCount).toBe(callCountAfterUnmount);
+
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
+  });
+
+  it('disables Refresh while loading goals', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+
+    // Keep the initial goals request pending so isLoading stays true.
+    goalsApi.fetchGoals.mockImplementation(() => new Promise(() => {}));
+
+    render(<GoalsPanel mode="tab" />);
+
+    const refresh = screen.getByTestId('goals-modal-refresh');
+    await waitFor(() => {
+      expect(refresh).toBeDisabled();
+    });
+  });
+
+  it('does not start polling when all jobs are in a final state', async () => {
+    useAppState.mockReturnValue({
+      currentProject: project,
+      jobState: {
+        jobsByProject: {
+          '1': {
+            jobs: [{ id: 'job-final', status: 'succeeded' }]
+          }
+        }
+      }
+    });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
+
+    render(<GoalsPanel mode="tab" />);
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalled();
+    });
+
+    const goalsPanelPollingCalls = setIntervalSpy.mock.calls.filter((call) => call?.[1] === 1000);
+    expect(goalsPanelPollingCalls).toHaveLength(0);
+    setIntervalSpy.mockRestore();
+  });
+
+  it('stops polling after the active job completes (cancelled tick no-ops)', async () => {
+    const runningState = {
+      currentProject: project,
+      jobState: {
+        jobsByProject: {
+          '1': {
+            jobs: [{ id: 'job-1', status: 'running' }]
+          }
+        }
+      }
+    };
+
+    const finalState = {
+      currentProject: project,
+      jobState: {
+        jobsByProject: {
+          '1': {
+            jobs: [{ id: 'job-1', status: 'succeeded' }]
+          }
+        }
+      }
+    };
+
+    let appState = runningState;
+    useAppState.mockImplementation(() => appState);
+
+    let intervalCallback = null;
+    const setIntervalSpy = vi
+      .spyOn(window, 'setInterval')
+      .mockImplementation((callback) => {
+        intervalCallback = callback;
+        return 456;
+      });
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval').mockImplementation(() => {});
+
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    const { rerender } = render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(setIntervalSpy).toHaveBeenCalled();
+    });
+    expect(intervalCallback).toBeTypeOf('function');
+
+    intervalCallback();
+    await Promise.resolve();
+    const callCountBefore = goalsApi.fetchGoals.mock.calls.length;
+
+    // Trigger effect cleanup by making the active job disappear.
+    appState = finalState;
+    rerender(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(clearIntervalSpy).toHaveBeenCalledWith(456);
+    });
+
+    // When the active job finishes, GoalsPanel performs a final refresh so the
+    // last phase transition (e.g. verifying -> ready) is visible.
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals.mock.calls.length).toBe(callCountBefore + 1);
+    });
+
+    intervalCallback();
+    await Promise.resolve();
+
+    expect(goalsApi.fetchGoals.mock.calls.length).toBe(callCountBefore + 1);
+
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
+  });
+
+  it('modal close button calls onRequestClose', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    const onRequestClose = vi.fn();
+    const user = userEvent.setup();
+
+    render(<GoalsPanel mode="modal" isOpen={true} onRequestClose={onRequestClose} />);
+
+    await user.click(await screen.findByTestId('goals-modal-close'));
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the Resume automation button and calls onResumeAutomation when clicked', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    const onResumeAutomation = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <GoalsPanel
+        mode="tab"
+        automationPaused={true}
+        onResumeAutomation={onResumeAutomation}
+      />
+    );
+
+    const button = await screen.findByTestId('goals-tab-resume-automation');
+    await user.click(button);
+
+    expect(onResumeAutomation).toHaveBeenCalledTimes(1);
+  });
+
+  it('modal defaults isOpen=true when omitted', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    render(<GoalsPanel mode="modal" onRequestClose={vi.fn()} />);
+    expect(await screen.findByTestId('goals-modal')).toBeInTheDocument();
+  });
+
+  it('removes a goal without prompting when confirm is unavailable', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+
+    goalsApi.fetchGoals
+      .mockResolvedValueOnce([{ id: 77, prompt: 'SSR remove', status: 'planning', parentGoalId: null }])
+      .mockResolvedValueOnce([]);
+    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
+    goalsApi.deleteGoal.mockResolvedValue();
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-modal-goal-77'));
+
+    const originalConfirm = window.confirm;
+    window.confirm = undefined;
+    await user.click(screen.getByTestId('goals-modal-remove-goal'));
+    window.confirm = originalConfirm;
+
+    await waitFor(() => {
+      expect(goalsApi.deleteGoal).toHaveBeenCalledWith(77);
+    });
+  });
+
+  it('modal: locks body scroll, closes on Escape/backdrop, and unlocks on close', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    const onRequestClose = vi.fn();
+
+    const { rerender } = render(
+      <GoalsPanel mode="modal" isOpen={true} onRequestClose={onRequestClose} />
+    );
+
+    expect(screen.getByTestId('goals-modal')).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('hidden');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
+
+    const backdrop = screen.getByTestId('goals-modal');
+    const panel = screen.getByText('Goals & Progress').closest('.goals-modal-panel');
+    expect(panel).toBeTruthy();
+
+    // Clicking inside the panel should not close.
+    panel.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
+
+    // Clicking the backdrop itself closes.
+    fireEvent.click(backdrop);
+    expect(onRequestClose).toHaveBeenCalledTimes(2);
+
+    rerender(<GoalsPanel mode="modal" isOpen={false} onRequestClose={onRequestClose} />);
+
+    expect(screen.queryByTestId('goals-modal')).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('unset');
+  });
+});
+
+describe('GoalsPanel helper hooks', () => {
+  const hooks = GoalsPanel.__testHooks;
+
+  it('getGoalTitle falls back to prompt and default label', () => {
+    expect(hooks.getGoalTitle(null)).toBe('Goal');
+    expect(hooks.getGoalTitle({ title: '  Feature Name  ' })).toBe('Feature Name');
+    expect(hooks.getGoalTitle({ title: '  ', prompt: ' Ship feature ' })).toBe('Ship feature');
+    expect(hooks.getGoalTitle({ title: '  ', prompt: '   ' })).toBe('Goal');
+    expect(hooks.getGoalTitle({ title: '', prompt: null })).toBe('Goal');
+  });
+
+  it('normalizePhase preserves known workflow stages', () => {
+    expect(hooks.normalizePhase(' implementing ')).toBe('implementing');
+    expect(hooks.normalizePhase('Verifying')).toBe('verifying');
+  });
+
+  it('normalizePhase and formatPhaseLabel handle known aliases', () => {
+    expect(hooks.normalizePhase(' DONE ')).toBe('ready');
+    expect(hooks.normalizePhase('Completed')).toBe('ready');
+    expect(hooks.normalizePhase('done')).toBe('ready');
+    expect(hooks.normalizePhase('custom-phase')).toBe('custom-phase');
+    expect(hooks.normalizePhase('')).toBe('');
+    expect(hooks.formatPhaseLabel('ready')).toBe('Completed');
+    expect(hooks.formatPhaseLabel('failed')).toBe('Failed');
+    expect(hooks.formatPhaseLabel('planning')).toBe('Planning');
+  });
+
+  it('computeGoalProgress reports parent-only completion and child ratios', () => {
+    const parent = { id: 1, status: 'done' };
+    expect(hooks.computeGoalProgress(parent, [])).toEqual({ done: 1, total: 1, ratio: 1 });
+
+    const children = [{ id: 2, status: 'ready' }, { id: 3, status: 'failed' }];
+    const withChildren = hooks.computeGoalProgress({ id: 4, status: 'implementing' }, children);
+    expect(withChildren.done).toBe(1);
+    expect(withChildren.total).toBe(2);
+    expect(withChildren.ratio).toBe(0.5);
+  });
+});

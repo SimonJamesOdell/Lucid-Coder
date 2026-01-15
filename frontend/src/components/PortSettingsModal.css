@@ -1,0 +1,117 @@
+.port-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.port-settings-panel {
+  width: min(520px, calc(100% - 2rem));
+  background: var(--panel-bg, #141414);
+  border-radius: 12px;
+  box-shadow: 0 25px 65px rgba(0, 0, 0, 0.45);
+  padding: 24px;
+  color: var(--text-primary, #f5f5f5);
+}
+
+.port-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.port-settings-subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted, #b3b3b3);
+  font-size: 0.95rem;
+}
+
+.port-settings-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.5rem;
+  cursor: pointer;
+}
+
+.port-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.port-settings-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+
+.port-settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.port-settings-label input {
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+}
+
+.port-settings-label input:focus {
+  outline: none;
+  border-color: #7c5dff;
+  box-shadow: 0 0 0 2px rgba(124, 93, 255, 0.3);
+}
+
+.port-settings-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted, #b3b3b3);
+}
+
+.port-settings-error {
+  background: rgba(255, 82, 82, 0.15);
+  color: #ff8484;
+  border: 1px solid rgba(255, 82, 82, 0.35);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
+}
+
+.port-settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+
+.port-settings-button {
+  border: none;
+  padding: 0.75rem 1.25rem;
+  border-radius: 999px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.port-settings-button.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+}
+
+.port-settings-button.primary {
+  background: #7c5dff;
+  color: #fff;
+}
+
+@media (min-width: 640px) {
+  .port-settings-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

@@ -1,0 +1,130 @@
+.branch-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 12, 19, 0.72);
+  z-index: 2000;
+  padding: 32px;
+}
+
+.branch-modal-panel {
+  width: min(480px, 100%);
+  background: #0d1117;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  color: #f0f4ff;
+}
+
+.branch-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.branch-modal-eyebrow {
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: rgba(240, 244, 255, 0.64);
+  margin: 0 0 4px;
+}
+
+.branch-modal-header h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.branch-modal-close {
+  border: none;
+  background: transparent;
+  color: rgba(240, 244, 255, 0.64);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.branch-modal-close:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.branch-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.branch-modal-label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.branch-modal-label input,
+.branch-modal-label textarea {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(13, 17, 23, 0.8);
+  padding: 12px;
+  color: #f0f4ff;
+  font-size: 14px;
+}
+
+.branch-modal-label input:disabled,
+.branch-modal-label textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.branch-modal-hint {
+  font-size: 12px;
+  color: rgba(240, 244, 255, 0.6);
+}
+
+.branch-modal-error {
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(255, 77, 109, 0.15);
+  border: 1px solid rgba(255, 77, 109, 0.4);
+  color: #ff9bac;
+  font-size: 14px;
+}
+
+.branch-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.branch-modal-button {
+  border-radius: 999px;
+  border: none;
+  padding: 10px 20px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.branch-modal-button.ghost {
+  background: transparent;
+  color: rgba(240, 244, 255, 0.8);
+}
+
+.branch-modal-button.primary {
+  background: linear-gradient(135deg, #5c6cff, #8a7dff);
+  color: #fff;
+}
+
+.branch-modal-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

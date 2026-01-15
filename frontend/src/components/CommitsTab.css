@@ -1,0 +1,260 @@
+/* CommitsTab.css */
+.commits-tab {
+  width: 100%;
+  height: 100%;
+  padding: 1.5rem;
+  overflow: hidden;
+  background: var(--background-primary, #000);
+  color: var(--text-primary, #ffffff);
+}
+
+.commits-layout {
+  display: flex;
+  gap: 1.5rem;
+  height: 100%;
+}
+
+.commits-list-panel {
+  width: 34%;
+  min-width: 280px;
+  border-right: 1px solid var(--border-color, #2e2e2e);
+  padding-right: 1rem;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.commits-details-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow-y: auto;
+}
+
+.commits-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.commits-list-item {
+  text-align: left;
+  border: 1px solid var(--border-color, #2e2e2e);
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: var(--background-secondary, #111);
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.commits-list-item:hover {
+  border-color: var(--accent-color, #0080ff);
+}
+
+.commits-list-item.selected {
+  border-color: var(--accent-color, #0080ff);
+  background: rgba(0, 128, 255, 0.08);
+}
+
+.commit-list-primary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.commit-message {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-sha {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.commit-list-meta {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.commits-empty,
+.loading,
+.error {
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.error {
+  color: var(--error-color, #ff6b81);
+  border: 1px solid rgba(255, 107, 129, 0.5);
+}
+
+.commits-status-message {
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: rgba(76, 175, 80, 0.15);
+  border: 1px solid rgba(76, 175, 80, 0.4);
+  color: var(--success-color, #4caf50);
+}
+
+.commit-detail-header {
+  border: 1px solid var(--border-color, #2e2e2e);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--background-secondary, #111);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.commit-detail-header h3 {
+  margin: 0.25rem 0 0.4rem;
+}
+
+.commit-detail-meta {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.commit-detail-body {
+  border: 1px solid var(--border-color, #2e2e2e);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--background-secondary, #111);
+  color: var(--text-secondary, #b3b3b3);
+  line-height: 1.45;
+}
+
+.commit-files-card {
+  border: 1px solid var(--border-color, #2e2e2e);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--background-secondary, #111);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.commits-action {
+  border-radius: 0.4rem;
+  padding: 0.55rem 0.95rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  color: var(--text-primary, #ffffff);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.commits-action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.commits-action.ghost {
+  background: transparent;
+  border-color: var(--border-color, #2e2e2e);
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.commits-action.destructive {
+  border-color: rgba(255, 107, 129, 0.5);
+  color: var(--error-color, #ff6b81);
+}
+
+.commits-action.success {
+  border-color: rgba(54, 215, 135, 0.5);
+  color: rgba(200, 255, 230, 0.95);
+  background: rgba(54, 215, 135, 0.12);
+}
+
+.commit-files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.commit-file-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.9rem;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+}
+
+.commit-file-entry:not(:disabled) {
+  cursor: pointer;
+}
+
+.commit-file-entry:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.commit-file-entry:not(:disabled):hover .commit-file-path,
+.commit-file-entry:focus-visible .commit-file-path {
+  color: var(--accent-color, #1ca4ff);
+}
+
+.commit-file-status {
+  min-width: 24px;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: center;
+  text-transform: uppercase;
+  border: 1px solid var(--border-color, #2e2e2e);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.commit-file-status.status-a {
+  color: var(--success-color, #4caf50);
+  border-color: rgba(76, 175, 80, 0.5);
+}
+
+.commit-file-status.status-d {
+  color: var(--error-color, #ff6b81);
+  border-color: rgba(255, 107, 129, 0.5);
+}
+
+.commit-file-status.status-m {
+  color: var(--accent-color, #1ca4ff);
+  border-color: rgba(28, 164, 255, 0.5);
+}
+
+.commit-file-path {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  color: var(--text-primary, #ffffff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

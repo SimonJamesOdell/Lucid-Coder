@@ -1,0 +1,323 @@
+/* CSS Custom Properties for Color Schemes */
+:root {
+  /* Default theme (dark) */
+  --primary-bg: #1a1a1a;
+  --secondary-bg: #2d2d2d;
+  --text-primary: rgba(255, 255, 255, 0.87);
+  --text-secondary: rgba(255, 255, 255, 0.6);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --text-tertiary: rgba(255, 255, 255, 0.45);
+  --background-color: #111827;
+  --background-primary: #111827;
+  --background-secondary: #1f2937;
+  --background-tertiary: #374151;
+  --surface-color: #1f2937;
+  --surface-secondary: #111827;
+  --card-background: #1f1f1f;
+  --card-secondary: #262626;
+  --tag-background: rgba(255, 255, 255, 0.08);
+  --tag-text: rgba(255, 255, 255, 0.85);
+  --input-background: #0f172a;
+  --primary-color: #3b82f6;
+  --primary-hover: #2563eb;
+  --accent-color: #3b82f6;
+  --accent-hover: #2563eb;
+  --success-color: #22c55e;
+  --success-hover: #16a34a;
+  --error-color: #f87171;
+  --error-background: rgba(248, 113, 113, 0.12);
+  --info-color: #38bdf8;
+  --info-hover: #0ea5e9;
+  --hover-color: rgba(255, 255, 255, 0.08);
+  --button-text-on-info: rgba(255, 255, 255, 0.95);
+  
+  /* Navigation colors */
+  --nav-bg: #2d2d2d;
+  --nav-border: rgba(255, 255, 255, 0.1);
+  --nav-title-color: #ffffff;
+  --nav-project-color: rgba(255, 255, 255, 0.8);
+  --nav-dropdown-color: rgba(255, 255, 255, 0.9);
+  --nav-dropdown-hover-bg: rgba(255, 255, 255, 0.1);
+  --nav-dropdown-hover-border: rgba(255, 255, 255, 0.2);
+  --nav-logout-bg: #dc3545;
+  --nav-logout-color: #ffffff;
+  --nav-logout-border: #dc3545;
+  --nav-logout-hover-bg: #c82333;
+  --nav-logout-hover-border: #bd2130;
+  --nav-focus-color: #646cff;
+  
+  /* Dropdown colors */
+  --dropdown-bg: #3d3d3d;
+  --dropdown-border: rgba(255, 255, 255, 0.2);
+  --dropdown-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  --dropdown-item-color: rgba(255, 255, 255, 0.9);
+  --dropdown-item-hover-bg: rgba(255, 255, 255, 0.1);
+  --dropdown-item-active-bg: #646cff;
+  --dropdown-item-active-color: #ffffff;
+  --dropdown-divider-color: rgba(255, 255, 255, 0.1);
+  --dropdown-label-color: rgba(255, 255, 255, 0.7);
+}
+
+/* Light theme */
+[data-theme="light"] {
+  --primary-bg: #ffffff;
+  --secondary-bg: #f8f9fa;
+  --text-primary: #212529;
+  --text-secondary: #6c757d;
+  --border-color: rgba(0, 0, 0, 0.1);
+  --text-tertiary: rgba(0, 0, 0, 0.45);
+  --background-color: #f8fafc;
+  --background-primary: #f8fafc;
+  --background-secondary: #eef2ff;
+  --background-tertiary: #e2e8f0;
+  --surface-color: #ffffff;
+  --surface-secondary: #f1f5f9;
+  --card-background: #ffffff;
+  --card-secondary: #f8fafc;
+  --tag-background: rgba(59, 130, 246, 0.12);
+  --tag-text: #1d4ed8;
+  --input-background: #ffffff;
+  --primary-color: #2563eb;
+  --primary-hover: #1d4ed8;
+  --accent-color: #2563eb;
+  --accent-hover: #1e40af;
+  --success-color: #16a34a;
+  --success-hover: #15803d;
+  --error-color: #dc2626;
+  --error-background: rgba(220, 38, 38, 0.12);
+  --info-color: #0ea5e9;
+  --info-hover: #0369a1;
+  --hover-color: rgba(15, 23, 42, 0.08);
+  --button-text-on-info: #ffffff;
+  
+  /* Navigation colors */
+  --nav-bg: #f8f9fa;
+  --nav-border: rgba(0, 0, 0, 0.1);
+  --nav-title-color: #212529;
+  --nav-project-color: #495057;
+  --nav-dropdown-color: #495057;
+  --nav-dropdown-hover-bg: rgba(0, 0, 0, 0.05);
+  --nav-dropdown-hover-border: rgba(0, 0, 0, 0.1);
+  --nav-logout-bg: #dc3545;
+  --nav-logout-color: #ffffff;
+  --nav-logout-border: #dc3545;
+  --nav-logout-hover-bg: #c82333;
+  --nav-logout-hover-border: #bd2130;
+  --nav-focus-color: #0d6efd;
+  
+  /* Dropdown colors */
+  --dropdown-bg: #ffffff;
+  --dropdown-border: rgba(0, 0, 0, 0.15);
+  --dropdown-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --dropdown-item-color: #495057;
+  --dropdown-item-hover-bg: rgba(0, 0, 0, 0.05);
+  --dropdown-item-active-bg: #0d6efd;
+  --dropdown-item-active-color: #ffffff;
+  --dropdown-divider-color: rgba(0, 0, 0, 0.1);
+  --dropdown-label-color: #6c757d;
+}
+
+/* Base styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--primary-bg);
+  color: var(--text-primary);
+  min-height: 100vh;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.App {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  isolation: isolate;
+  background-color: #030312;
+}
+
+.starfield-layer {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at top, rgba(16, 32, 64, 0.6), rgba(3, 3, 18, 0.95) 55%, #010104 120%);
+}
+
+.starfield-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.main-content {
+  flex: 1;
+  margin-top: 40px; /* Account for fixed navigation */
+  padding: 2rem;
+}
+
+.settings-loading {
+  min-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.settings-loading-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.35rem;
+}
+
+.settings-loading-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-tertiary);
+}
+
+.backend-offline-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.8);
+  padding: 1.5rem;
+}
+
+.backend-offline-overlay-panel {
+  width: min(520px, 100%);
+  border-radius: 0.75rem;
+  background: var(--background-secondary);
+  border: 1px solid var(--border-color);
+  padding: 1.35rem 1.35rem;
+  box-shadow: var(--dropdown-shadow);
+}
+
+.backend-offline-overlay-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.65rem;
+}
+
+.backend-offline-overlay-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--error-color);
+}
+
+.backend-offline-overlay-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.backend-offline-overlay-message {
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+  line-height: 1.55;
+}
+
+.backend-offline-overlay-detail {
+  color: var(--text-tertiary);
+  font-size: 0.9rem;
+  word-break: break-word;
+  background: var(--tag-background);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 0.65rem 0.75rem;
+}
+
+.main-content.project-inspector-active {
+  padding: 0;
+  margin-top: 40px;
+  height: calc(100vh - 40px);
+  overflow: hidden;
+}
+
+.content-area {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.content-area h2 {
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+  font-size: 2rem;
+  font-weight: 600;
+}
+
+.content-area p {
+  color: var(--text-secondary);
+  font-size: 1.125rem;
+  line-height: 1.6;
+}
+
+/* Utility classes */
+.text-primary {
+  color: var(--text-primary);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.bg-primary {
+  background-color: var(--primary-bg);
+}
+
+.bg-secondary {
+  background-color: var(--secondary-bg);
+}
+
+/* Focus styles for accessibility */
+*:focus-visible {
+  outline: 2px solid var(--nav-focus-color);
+  outline-offset: 2px;
+}
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--secondary-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}

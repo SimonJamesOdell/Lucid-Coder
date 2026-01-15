@@ -1,0 +1,42 @@
+/* Global styles and theme initialization */
+html {
+  /* Set default theme to dark */
+  color-scheme: dark light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* Ensure smooth transitions for theme changes */
+* {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+/* Prevent transition on theme change to avoid flickering */
+.theme-changing * {
+  transition: none !important;
+}
+
+/* Base reset */
+body {
+  margin: 0;
+  font-family: inherit;
+}
+
+/* Focus management for better accessibility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

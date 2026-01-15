@@ -1,0 +1,19 @@
+.goals-tab-root {
+  height: 100%;
+  width: 100%;
+}
+
+.goals-tab-root .goals-modal-panel.goals-tab-panel {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border-radius: 0.5rem;
+  box-shadow: none;
+}
+
+@media (max-width: 860px) {
+  .goals-tab-root .goals-modal-panel.goals-tab-panel {
+    border-radius: 0.5rem;
+  }
+}

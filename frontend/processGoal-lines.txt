@@ -1,0 +1,11 @@
+21:   const error = new Error(violation?.message || 'Proposed edits exceeded the requested scope.');
+115:       setGoalCount(Array.isArray(finalGoals) ? finalGoals.length : 0);
+327:               path: error.__lucidcoderScopeViolation?.path || null
+334:               path: error.__lucidcoderScopeViolation?.path || null,
+351:               path: testsRetryContext?.path || null,
+352:               scopeWarning: testsRetryContext?.scopeWarning || null
+441:         totalEditsApplied += appliedSummary?.applied || 0;
+473:             path: error.__lucidcoderScopeViolation?.path || null
+480:             path: error.__lucidcoderScopeViolation?.path || null,
+497:             path: implRetryContext?.path || null,
+498:             scopeWarning: implRetryContext?.scopeWarning || null

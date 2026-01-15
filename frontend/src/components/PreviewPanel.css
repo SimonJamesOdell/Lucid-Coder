@@ -1,0 +1,141 @@
+/* PreviewPanel.css */
+.preview-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  background: var(--background-primary, #000);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--background-secondary, #1a1a1a);
+  border-bottom: 1px solid var(--border-color, #333);
+  padding: 0 1rem;
+  padding-left:0px;
+}
+
+.preview-tabs {
+  display: flex;
+  padding: 0;
+  margin: 0;
+  flex: 1;
+}
+
+.tab {
+  padding: 1rem 1.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #b3b3b3);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  border-bottom: 2px solid transparent;
+  position: relative;
+}
+
+.tab:hover {
+  color: var(--text-primary, #ffffff);
+  background: var(--background-tertiary, #2d2d2d);
+}
+
+.tab.active {
+  color: var(--accent-color, #007acc);
+  border-bottom-color: var(--accent-color, #007acc);
+  background: var(--background-primary, #000);
+}
+
+.tab-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.preview-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.preview-action-meta {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #b3b3b3);
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+.preview-action-button {
+  padding: 0.45rem 0.9rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border-color, #333);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.preview-action-button.toggled {
+  border-color: var(--accent-color, #007acc);
+  color: var(--accent-color, #007acc);
+}
+
+.preview-action-button:hover:not(:disabled) {
+  background: var(--background-tertiary, #222);
+  border-color: var(--accent-color, #007acc);
+}
+
+.preview-action-button.destructive {
+  border-color: var(--error-color, #ff6b81);
+  background: rgba(255, 107, 129, 0.15);
+  color: var(--error-color, #ff6b81);
+}
+
+.preview-action-button.destructive:hover:not(:disabled) {
+  background: rgba(255, 107, 129, 0.3);
+  border-color: var(--error-color, #ff6b81);
+}
+
+.preview-action-button.success {
+  border-color: var(--success-color, #4caf50);
+  background: rgba(76, 175, 80, 0.2);
+  color: var(--success-color, #4caf50);
+}
+
+.preview-action-button.success:hover:not(:disabled) {
+  background: rgba(76, 175, 80, 0.35);
+  border-color: var(--success-color, #4caf50);
+}
+
+.preview-action-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.preview-action-button.icon-only {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-action-button.icon-only svg {
+  display: block;
+}
+
+.tab.with-indicator {
+  padding-right: 2.5rem;
+}
+
+.tab-indicator {
+  position: absolute;
+  right: 1rem;
+  top: 0.65rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--warning-color, #f5a623);
+  box-shadow: 0 0 6px rgba(245, 166, 35, 0.65);
+}

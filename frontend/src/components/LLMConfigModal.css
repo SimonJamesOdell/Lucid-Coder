@@ -1,0 +1,81 @@
+.llm-config-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.llm-config-panel {
+  background: var(--secondary-bg);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  width: min(960px, 100%);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+.llm-config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1.5rem 1.5rem 1rem;
+  gap: 1rem;
+}
+
+.llm-config-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--text-primary);
+}
+
+.llm-config-subtitle {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.llm-config-close {
+  background: none;
+  border: none;
+  font-size: 1.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0.25rem;
+  border-radius: 6px;
+}
+
+.llm-config-close:hover {
+  background: var(--nav-dropdown-hover-bg);
+  color: var(--text-primary);
+}
+
+.llm-config-body {
+  padding: 0 1.5rem 1.5rem;
+  overflow-y: auto;
+}
+
+.llm-config-body .getting-started-panel {
+  margin-top: 0;
+  max-width: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+@media (max-width: 640px) {
+  .llm-config-panel {
+    border-radius: 8px;
+  }
+
+  .llm-config-header,
+  .llm-config-body {
+    padding: 1rem;
+  }
+}

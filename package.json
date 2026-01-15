@@ -1,0 +1,31 @@
+{
+  "name": "lucidcoder-fullstack",
+  "version": "1.0.0",
+  "description": "A fullstack React + Vite / Node.js + Express application",
+  "scripts": {
+    "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "frontend": "cd frontend && npm run start",
+    "backend": "cd backend && npm run start",
+    "test:e2e": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\run-tests.ps1",
+    "coverage:e2e": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\coverage-report.ps1",
+    "test:backend": "cd backend && npm test",
+    "test:frontend": "cd frontend && npm test",
+    "coverage:backend": "cd backend && npm run test:coverage",
+    "coverage:frontend": "cd frontend && npm run test:coverage",
+    "build": "cd frontend && npm run build",
+    "start": "cd backend && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "fullstack",
+    "react",
+    "vite",
+    "nodejs",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT"
+}
