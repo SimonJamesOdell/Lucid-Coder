@@ -41,6 +41,9 @@ Thumbs.db
 *.swo
 *~
 
+# User project workspaces
+projects/
+
 # Temporary files
 *.tmp
 *.temp
