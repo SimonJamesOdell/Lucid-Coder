@@ -6,7 +6,6 @@ import ProjectSelector from './components/ProjectSelector'
 import CreateProject from './components/CreateProject'
 import ImportProject from './components/ImportProject'
 import ProjectInspector from './components/ProjectInspector'
-import StarfieldBackground from './components/StarfieldBackground'
 import './App.css'
 
 function AppContent() {
@@ -84,7 +83,6 @@ function AppContent() {
     const detail = backendCheck.error || backendErrorText;
     return (
       <div className="App">
-        <StarfieldBackground />
         <div className="backend-offline-overlay" role="alert" aria-live="assertive" data-testid="backend-offline-overlay">
           <div className="backend-offline-overlay-panel">
             <div className="backend-offline-overlay-header">
@@ -109,7 +107,6 @@ function AppContent() {
   if (isSettingsLoading) {
     return (
       <div className="App">
-        <StarfieldBackground />
         {showBackendOfflineBanner && (
           <div className="backend-offline-overlay" role="alert" aria-live="assertive" data-testid="backend-offline-overlay">
             <div className="backend-offline-overlay-panel">
@@ -137,7 +134,6 @@ function AppContent() {
   if (!isLLMConfigured && !backendIsOnline) {
     return (
       <div className="App">
-        <StarfieldBackground />
         <div className="backend-offline-overlay" role="alert" aria-live="assertive" data-testid="backend-offline-overlay">
           <div className="backend-offline-overlay-panel">
             <div className="backend-offline-overlay-header">
@@ -168,7 +164,6 @@ function AppContent() {
   if (!isLLMConfigured) {
     return (
       <div className="App">
-        <StarfieldBackground />
         <main className="main-content">
           <div className="content-area">
             <GettingStarted allowConfigured />
@@ -210,7 +205,6 @@ function AppContent() {
 
   return (
     <div className="App">
-      <StarfieldBackground />
       <Navigation />
       {showBackendOfflineBanner && (
         <div className="backend-offline-overlay" role="alert" aria-live="assertive" data-testid="backend-offline-overlay">

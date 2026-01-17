@@ -17,6 +17,8 @@ const getUiSessionId = () => {
   }
 };
 
+export const readUiSessionId = () => getUiSessionId();
+
 export const fetchGoals = async (projectId, { includeArchived = false } = {}) => {
   if (!projectId) throw new Error('projectId is required');
 
@@ -115,23 +117,40 @@ export const agentAutopilotStatus = async ({ projectId, sessionId } = {}) => {
   return res.data;
 };
 
-export const agentAutopilotMessage = async ({ projectId, sessionId, message } = {}) => {
+export const agentAutopilotMessage = async ({ projectId, sessionId, message, kind, metadata } = {}) => {
   if (!projectId) throw new Error('projectId is required');
   if (!sessionId) throw new Error('sessionId is required');
   if (!message) throw new Error('message is required');
-  const res = await axios.post(`/api/agent/autopilot/sessions/${encodeURIComponent(String(sessionId))}/messages`, {
-    projectId,
-    message
-  });
+
+  const payload = { projectId, message };
+  if (kind) {
+    payload.kind = kind;
+  }
+  if (metadata && typeof metadata === 'object') {
+    payload.metadata = metadata;
+  }
+
+  const res = await axios.post(`/api/agent/autopilot/sessions/${encodeURIComponent(String(sessionId))}/messages`, payload);
   return res.data;
 };
 
-export const agentAutopilotCancel = async ({ projectId, sessionId } = {}) => {
+export const agentAutopilotCancel = async ({ projectId, sessionId, reason } = {}) => {
   if (!projectId) throw new Error('projectId is required');
   if (!sessionId) throw new Error('sessionId is required');
-  const res = await axios.post(`/api/agent/autopilot/sessions/${encodeURIComponent(String(sessionId))}/cancel`, {
-    projectId
-  });
+  const body = reason ? { projectId, reason } : { projectId };
+  const res = await axios.post(`/api/agent/autopilot/sessions/${encodeURIComponent(String(sessionId))}/cancel`, body);
+  return res.data;
+};
+
+export const agentAutopilotResume = async ({ projectId, uiSessionId, limit = 5 } = {}) => {
+  if (!projectId) throw new Error('projectId is required');
+  if (!uiSessionId) throw new Error('uiSessionId is required');
+  const payload = {
+    projectId,
+    uiSessionId,
+    limit: Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 5
+  };
+  const res = await axios.post('/api/agent/autopilot/resume', payload);
   return res.data;
 };
 
@@ -148,5 +167,7 @@ export default {
   agentAutopilot,
   agentAutopilotStatus,
   agentAutopilotMessage,
-  agentAutopilotCancel
+  agentAutopilotCancel,
+  agentAutopilotResume,
+  readUiSessionId
 };

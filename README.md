@@ -1,100 +1,54 @@
-# LucidCoder Fullstack App
+# LucidCoder
 
-A minimal fullstack application built with React + Vite for the frontend and Node.js + Express for the backend.
+Version: 0.1.0
 
-## Project Structure
+LucidCoder is a fullstack system for orchestrating goal-driven coding workflows. The frontend provides a rich React UI and the backend exposes REST and Socket.IO APIs for projects, goals, agents, and test execution.
 
-```
-lucidcoder/
-├── frontend/          # React + Vite frontend
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── App.css
-│   │   ├── index.css
-│   │   └── main.jsx
-│   ├── index.html
-│   ├── package.json
-│   └── vite.config.js
-├── backend/           # Node.js + Express backend
-│   ├── server.js
-│   ├── package.json
-│   └── .env
-└── package.json       # Root package.json with dev scripts
-```
+## Quick start
 
-## Getting Started
-
-### Prerequisites
-- Node.js (v18 or higher)
+Prerequisites:
+- Node.js 18+
 - npm
 
-### Installation
+Install dependencies:
+- npm run install-all
 
-1. Install all dependencies for both frontend and backend:
-```bash
-npm run install-all
-```
+Start dev servers:
+- npm run dev
 
-### Development
+Default endpoints:
+- Backend API: http://localhost:5000
+- Frontend dev server: http://localhost:3000
 
-1. Start both frontend and backend in development mode:
-```bash
-npm run dev
-```
+## Repository layout
 
-This will start:
-- Backend server on http://localhost:5000
-- Frontend development server on http://localhost:3000
+- frontend/ — React + Vite UI
+- backend/ — Express + Socket.IO API server, services, and storage
+- docs/ — architecture and versioning notes
+- tools/ — repo utilities
 
-### Individual Services
+## Scripts
 
-- **Frontend only**: `npm run frontend` (runs `frontend`'s `npm run start`)
-- **Backend only**: `npm run backend` (runs `backend`'s `npm run start`)
+- npm run dev — run frontend + backend
+- npm run frontend — run frontend only
+- npm run backend — run backend only
+- npm run test:backend — backend test suite
+- npm run test:frontend — frontend test suite
+- npm run test:e2e — end-to-end tests via PowerShell
 
-### Production Build
+## Configuration
 
-```bash
-npm run build
-```
+Backend reads environment variables from [backend/.env](backend/.env). For LLM-backed features, configure provider, API URL, model, and API key. Socket.IO can be disabled with `ENABLE_SOCKET_IO=false`.
 
-### Database Storage & Testing
+Database defaults to backend/lucidcoder.db. Tests use backend/test-lucidcoder.db (controlled via `DATABASE_PATH`).
 
-- Backend development writes to `backend/lucidcoder.db` by default. Delete it if you want a clean slate; a new one will be recreated on next start.
-- Backend tests always run against `backend/test-lucidcoder.db`, enforced via `cross-env`, and the file is removed before/after the suite. This keeps user-created projects such as LSML Composer intact.
-- If you need a different location, set `DATABASE_PATH` before launching the backend or a custom test command; relative paths are resolved from `backend/`.
+## Documentation
 
-## API Endpoints
+- Project overview: [docs/OVERVIEW.md](docs/OVERVIEW.md)
+- Versioning policy: [docs/VERSIONING.md](docs/VERSIONING.md)
+- Backend details: [backend/README.md](backend/README.md)
+- Frontend details: [frontend/README.md](frontend/README.md)
 
-- `GET /api/health` - Health check endpoint
-- `GET /api/data` - Get sample data
-- `POST /api/data` - Create new item
+## License
 
-## Features
-
-- ✅ React 18 with Vite for fast development
-- ✅ Express.js REST API
-- ✅ CORS enabled for frontend-backend communication
-- ✅ Proxy configuration for API calls
-- ✅ Environment variable support
-- ✅ Hot reload for both frontend and backend
-- ✅ Responsive design with light/dark mode support
-- ✅ Basic form handling and data fetching
-
-## Tech Stack
-
-**Frontend:**
-- React 18
-- Vite
-- Axios for API calls
-- CSS3 with custom properties
-
-**Backend:**
-- Node.js
-- Express.js
-- CORS middleware
-- dotenv for environment variables
-
-**Development:**
-- Nodemon for backend hot reload
-- Concurrently to run both services
-- ESLint for code linting
+MIT

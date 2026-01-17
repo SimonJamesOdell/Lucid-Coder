@@ -78,6 +78,12 @@ describe('ChatPanel', () => {
       parent: { id: 10, prompt: 'Fix failing tests' },
       children: [{ id: 11, parentGoalId: 10, prompt: 'Fix failing frontend tests' }]
     });
+    goalsApi.agentAutopilot.mockResolvedValue({ session: { id: 'session-1', status: 'pending', events: [] } });
+    goalsApi.agentAutopilotStatus.mockResolvedValue({ session: { id: 'session-1', status: 'pending', events: [] } });
+    goalsApi.agentAutopilotMessage.mockResolvedValue({ session: { id: 'session-1', status: 'running', events: [] } });
+    goalsApi.agentAutopilotCancel.mockResolvedValue({ session: { id: 'session-1', status: 'cancelled', events: [] } });
+    goalsApi.agentAutopilotResume.mockResolvedValue({ success: true, resumed: [] });
+    goalsApi.readUiSessionId = vi.fn().mockReturnValue('ui-session');
 
     goalAutomationService.handlePlanOnlyFeature.mockResolvedValue(undefined);
     goalAutomationService.handleRegularFeature.mockResolvedValue(undefined);

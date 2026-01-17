@@ -49,9 +49,19 @@ projects/
 *.temp
 
 # Test/coverage outputs
+coverage/
+**/coverage/
+**/coverage/**
 coverage-tmp/
 .nyc_output/
 .vite-cache/
+*-coverage.json
+*-vitest.json
+*-target-lines.txt
+tmp-*.txt
+tmp-*.json
+tmp_*.txt
+tmp_*.json
 
 # SQLite databases
 *.db

@@ -1,8 +1,20 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { useAppState } from '../context/AppStateContext';
 import './ChatPanel.css';
-import { agentRequest, fetchGoals, createGoal, createMetaGoalWithChildren } from '../utils/goalsApi';
+import {
+  agentRequest,
+  fetchGoals,
+  createGoal,
+  createMetaGoalWithChildren,
+  agentAutopilot,
+  agentAutopilotStatus,
+  agentAutopilotMessage,
+  agentAutopilotCancel,
+  agentAutopilotResume,
+  readUiSessionId
+} from '../utils/goalsApi';
+import AutopilotTimeline from './AutopilotTimeline.jsx';
 import { handlePlanOnlyFeature, handleRegularFeature, processGoals } from '../services/goalAutomationService';
 import { isNaturalLanguageCancel, isNaturalLanguagePause, isNaturalLanguageResume, handleChatCommand } from '../utils/chatCommandHelpers';
 import { shouldSkipAutomationTests as shouldSkipAutomationTestsHelper } from './chatPanelCssOnly';
@@ -39,6 +51,12 @@ export const formatAgentStepMessage = (step) => {
   return null;
 };
 
+const AUTOPILOT_STORAGE_KEY = 'lucidcoder.autopilotSession';
+const AUTOPILOT_ACTIVE_STATUSES = new Set(['pending', 'running', 'paused']);
+const AUTOPILOT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const MAX_JOB_LOG_LINES_PER_JOB = 60;
+const MAX_TOTAL_JOB_LOG_LINES = 200;
+
 const ChatPanel = ({
   width = 320,
   side = 'left',
@@ -66,11 +84,18 @@ const ChatPanel = ({
     markTestRunIntent,
     requestEditorFocus,
     syncBranchOverview,
-    workingBranches
+    workingBranches,
+    jobState
   } = useAppState();
   const inputRef = useRef(null);
   const autoFixInFlightRef = useRef(false);
   const autoFixCancelRef = useRef(false);
+  const [autopilotSession, setAutopilotSession] = useState(null);
+  const [autopilotEvents, setAutopilotEvents] = useState([]);
+  const [isAutopilotBusy, setAutopilotBusy] = useState(false);
+  const [autopilotStatusNote, setAutopilotStatusNote] = useState('');
+  const autopilotPollRef = useRef(null);
+  const autopilotResumeAttemptedRef = useRef(false);
 
   const shouldSkipAutomationTests = useCallback(() => {
     return shouldSkipAutomationTestsHelper({
@@ -148,6 +173,482 @@ const ChatPanel = ({
 
   const createMessage = (sender, text, options = {}) => ({ id: `${sender}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, sender, timestamp: new Date(), variant: options.variant || null });
 
+  const autopilotIsActive = useMemo(
+    () => Boolean(autopilotSession?.id && AUTOPILOT_ACTIVE_STATUSES.has(autopilotSession.status)),
+    [autopilotSession?.id, autopilotSession?.status]
+  );
+
+  const autopilotStepSnapshot = useMemo(() => {
+    const events = Array.isArray(autopilotEvents) ? autopilotEvents : [];
+    const planned = [];
+    const completed = new Set();
+    let current = null;
+
+    for (const evt of events) {
+      if (!evt || typeof evt !== 'object') {
+        continue;
+      }
+
+      if (evt.type === 'plan') {
+        const steps = Array.isArray(evt.payload?.steps) ? evt.payload.steps : [];
+        if (steps.length) {
+          planned.length = 0;
+          for (const raw of steps) {
+            const value = typeof raw === 'string' ? raw.trim() : '';
+            if (value) {
+              planned.push(value);
+            }
+          }
+        }
+        continue;
+      }
+
+      if (evt.type === 'step:start') {
+        const prompt = typeof evt.payload?.prompt === 'string' ? evt.payload.prompt.trim() : '';
+        if (prompt) {
+          current = prompt;
+        }
+        continue;
+      }
+
+      if (evt.type === 'step:done') {
+        const prompt = typeof evt.payload?.prompt === 'string' ? evt.payload.prompt.trim() : '';
+        if (prompt) {
+          completed.add(prompt);
+          if (current === prompt) {
+            current = null;
+          }
+        }
+      }
+    }
+
+    let next = null;
+    if (planned.length) {
+      const startIdx = current ? planned.indexOf(current) + 1 : 0;
+      for (let idx = Math.max(0, startIdx); idx < planned.length; idx += 1) {
+        const candidate = planned[idx];
+        if (candidate && !completed.has(candidate)) {
+          next = candidate;
+          break;
+        }
+      }
+    }
+
+    return { currentStep: current, nextStep: next };
+  }, [autopilotEvents]);
+
+  const stopAutopilotPoller = useCallback(() => {
+    if (autopilotPollRef.current) {
+      clearTimeout(autopilotPollRef.current);
+      autopilotPollRef.current = null;
+    }
+  }, []);
+
+  const clearStoredAutopilotSession = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.sessionStorage?.removeItem?.(AUTOPILOT_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures.
+    }
+  }, []);
+
+  const persistAutopilotSession = useCallback((session) => {
+    if (typeof window === 'undefined' || !session?.id || !currentProject?.id) {
+      return;
+    }
+    if (!AUTOPILOT_ACTIVE_STATUSES.has(session.status)) {
+      return;
+    }
+    try {
+      window.sessionStorage?.setItem?.(
+        AUTOPILOT_STORAGE_KEY,
+        JSON.stringify({ sessionId: session.id, projectId: currentProject.id })
+      );
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [currentProject?.id]);
+
+  const loadStoredAutopilotSession = useCallback(() => {
+    if (typeof window === 'undefined' || !currentProject?.id) {
+      return null;
+    }
+    try {
+      const raw = window.sessionStorage?.getItem?.(AUTOPILOT_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed?.sessionId) {
+        return null;
+      }
+      if (parsed.projectId && String(parsed.projectId) !== String(currentProject.id)) {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, [currentProject?.id]);
+
+  const applyAutopilotSummary = useCallback((summary, { persist = true } = {}) => {
+    if (!summary) {
+      stopAutopilotPoller();
+      setAutopilotSession(null);
+      setAutopilotEvents([]);
+      setAutopilotStatusNote('');
+      clearStoredAutopilotSession();
+      return null;
+    }
+
+    const normalized = {
+      ...summary,
+      id: String(summary.id || summary.sessionId || ''),
+      status: summary.status || 'pending',
+      statusMessage: summary.statusMessage || summary.status_message || '',
+      events: Array.isArray(summary.events) ? summary.events : []
+    };
+
+    setAutopilotSession(normalized);
+    setAutopilotEvents(normalized.events);
+    setAutopilotStatusNote(normalized.statusMessage || '');
+
+    if (persist) {
+      if (AUTOPILOT_ACTIVE_STATUSES.has(normalized.status)) {
+        persistAutopilotSession(normalized);
+      } else {
+        clearStoredAutopilotSession();
+      }
+    }
+
+    if (AUTOPILOT_TERMINAL_STATUSES.has(normalized.status)) {
+      stopAutopilotPoller();
+    }
+
+    return normalized;
+  }, [clearStoredAutopilotSession, persistAutopilotSession, stopAutopilotPoller]);
+
+  const refreshAutopilotStatus = useCallback(async (sessionId, options = {}) => {
+    if (!sessionId || !currentProject?.id) {
+      return null;
+    }
+
+    const delayMs = options.immediate === true ? 1000 : 2000;
+
+    stopAutopilotPoller();
+    try {
+      const data = await agentAutopilotStatus({ projectId: currentProject.id, sessionId });
+      const summary = data?.session || data;
+      const normalized = applyAutopilotSummary(summary);
+      if (normalized && AUTOPILOT_ACTIVE_STATUSES.has(normalized.status)) {
+        autopilotPollRef.current = setTimeout(() => {
+          refreshAutopilotStatus(sessionId);
+        }, delayMs);
+      }
+      return normalized;
+    } catch (error) {
+      console.warn('Failed to refresh autopilot session', error);
+      autopilotPollRef.current = setTimeout(() => {
+        refreshAutopilotStatus(sessionId);
+      }, 4000);
+      return null;
+    }
+  }, [applyAutopilotSummary, currentProject?.id, stopAutopilotPoller]);
+
+  useEffect(() => {
+    stopAutopilotPoller();
+
+    if (!currentProject?.id) {
+      setAutopilotSession(null);
+      setAutopilotEvents([]);
+      setAutopilotStatusNote('');
+      clearStoredAutopilotSession();
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const hydrate = async () => {
+      const stored = loadStoredAutopilotSession();
+      if (stored?.sessionId) {
+        await refreshAutopilotStatus(stored.sessionId);
+        return;
+      }
+
+      if (autopilotResumeAttemptedRef.current) {
+        return;
+      }
+
+      autopilotResumeAttemptedRef.current = true;
+      const uiSessionId = readUiSessionId?.();
+      if (!uiSessionId) {
+        return;
+      }
+
+      try {
+        const resumed = await agentAutopilotResume({ projectId: currentProject.id, uiSessionId, limit: 1 });
+        if (cancelled) {
+          return;
+        }
+        const first = resumed?.resumed?.[0];
+        if (first?.id) {
+          applyAutopilotSummary(first);
+          await refreshAutopilotStatus(first.id);
+        }
+      } catch (error) {
+        console.warn('Failed to resume autopilot session', error);
+      }
+    };
+
+    if (ChatPanel.__testHooks) {
+      ChatPanel.__testHooks.hydrateAutopilot = hydrate;
+    }
+
+    hydrate();
+
+    return () => {
+      cancelled = true;
+      autopilotResumeAttemptedRef.current = false;
+      stopAutopilotPoller();
+      if (ChatPanel.__testHooks) {
+        delete ChatPanel.__testHooks.hydrateAutopilot;
+      }
+    };
+  }, [applyAutopilotSummary, clearStoredAutopilotSession, currentProject?.id, loadStoredAutopilotSession, refreshAutopilotStatus, stopAutopilotPoller]);
+
+  useEffect(() => () => {
+    stopAutopilotPoller();
+  }, [stopAutopilotPoller]);
+
+  const handleAutopilotMessage = useCallback(
+    async (message, options = {}) => {
+      if (!autopilotSession?.id || !currentProject?.id) {
+        setAutopilotStatusNote('Autopilot is not running.');
+        return null;
+      }
+
+      const trimmed = typeof message === 'string' ? message.trim() : '';
+      if (!trimmed) {
+        return null;
+      }
+
+      setAutopilotBusy(true);
+      let normalizedResult = null;
+
+      try {
+        const data = await agentAutopilotMessage({
+          projectId: currentProject.id,
+          sessionId: autopilotSession.id,
+          message: trimmed,
+          kind: options.kind,
+          metadata: options.metadata
+        });
+        const summary = data?.session || data;
+        normalizedResult = applyAutopilotSummary(summary);
+        if (normalizedResult?.id) {
+          refreshAutopilotStatus(normalizedResult.id, { immediate: true });
+        }
+        setAutopilotStatusNote('Guidance sent to autopilot.');
+      } catch (error) {
+        console.warn('Failed to send autopilot guidance', error);
+        setAutopilotStatusNote('Failed to send guidance to autopilot.');
+        normalizedResult = null;
+      }
+
+      setAutopilotBusy(false);
+      return normalizedResult;
+    },
+    [applyAutopilotSummary, autopilotSession?.id, currentProject?.id, refreshAutopilotStatus]
+  );
+
+  const handleAutopilotControl = useCallback(
+    async (action) => {
+      if (!autopilotSession?.id || !currentProject?.id) {
+        setAutopilotStatusNote('Autopilot is not running.');
+        return;
+      }
+
+      const normalizedAction = typeof action === 'string' ? action.trim().toLowerCase() : '';
+      const isCancelAction = normalizedAction === 'cancel';
+      const isPauseOrResume = normalizedAction === 'pause' || normalizedAction === 'resume';
+
+      if (!isCancelAction && !isPauseOrResume) {
+        setAutopilotStatusNote('Unsupported autopilot control.');
+        return;
+      }
+
+      setAutopilotBusy(true);
+      try {
+        if (isCancelAction) {
+          const data = await agentAutopilotCancel({
+            projectId: currentProject.id,
+            sessionId: autopilotSession.id,
+            reason: 'User requested stop'
+          });
+          applyAutopilotSummary(data?.session || data);
+        } else if (isPauseOrResume) {
+          const data = await agentAutopilotMessage({
+            projectId: currentProject.id,
+            sessionId: autopilotSession.id,
+            message: normalizedAction,
+            kind: normalizedAction
+          });
+          applyAutopilotSummary(data?.session || data);
+        }
+
+        refreshAutopilotStatus(autopilotSession.id, { immediate: true });
+        setAutopilotStatusNote(
+          isCancelAction ? 'Autopilot cancellation requested.' : `Autopilot ${normalizedAction} requested.`
+        );
+      } catch (error) {
+        console.warn(`Failed to ${normalizedAction} autopilot`, error);
+        setAutopilotStatusNote(`Failed to ${normalizedAction} autopilot.`);
+      }
+
+      setAutopilotBusy(false);
+    },
+    [applyAutopilotSummary, autopilotSession?.id, currentProject?.id, refreshAutopilotStatus]
+  );
+
+  const handleStartAutopilot = useCallback(async () => {
+    const prompt = inputValue.trim();
+    if (!prompt) {
+      setErrorMessage('Describe the feature you want before starting autopilot.');
+      return;
+    }
+    if (!currentProject?.id) {
+      setErrorMessage('Select a project before starting autopilot.');
+      return;
+    }
+
+    setErrorMessage('');
+    setAutopilotBusy(true);
+    try {
+      const result = await agentAutopilot({ projectId: currentProject.id, prompt });
+      const summary = result?.session || result;
+      if (!summary?.id) {
+        throw new Error('Autopilot session did not return an id.');
+      }
+      setInputValue('');
+      setMessages((prev) => [
+        ...prev,
+        createMessage('assistant', 'Autopilot is working on that goal.', { variant: 'status' })
+      ]);
+      const normalized = applyAutopilotSummary(summary);
+      if (normalized?.id) {
+        refreshAutopilotStatus(normalized.id, { immediate: true });
+      }
+    } catch (error) {
+      console.warn('Failed to start autopilot', error);
+      setMessages((prev) => [
+        ...prev,
+        createMessage('assistant', error?.message || 'Failed to start autopilot.', { variant: 'error' })
+      ]);
+    } finally {
+      setAutopilotBusy(false);
+    }
+  }, [applyAutopilotSummary, createMessage, currentProject?.id, inputValue, refreshAutopilotStatus, setMessages]);
+
+  const handleChangeDirectionPrompt = useCallback(() => {
+    if (!autopilotIsActive) {
+      setAutopilotStatusNote('Autopilot must be running before changing direction.');
+      return;
+    }
+    setInputValue((prev) => (prev && prev.trim() ? prev : 'Please change direction by '));
+    setTimeout(() => {
+      inputRef.current?.focus?.();
+    }, 0);
+  }, [autopilotIsActive]);
+
+  const handleUndoLastChangePrompt = useCallback(() => {
+    if (!autopilotIsActive) {
+      setAutopilotStatusNote('Autopilot must be running before undoing a change.');
+      return;
+    }
+    setInputValue('Undo the last change and explain what will be rolled back.');
+    setTimeout(() => {
+      inputRef.current?.focus?.();
+    }, 0);
+  }, [autopilotIsActive]);
+
+  if (ChatPanel.__testHooks) {
+    // Surface critical autopilot handlers so tests can exercise guard rails.
+    ChatPanel.__testHooks.handlers = {
+      startAutopilot: handleStartAutopilot,
+      changeDirectionPrompt: handleChangeDirectionPrompt,
+      undoLastChangePrompt: handleUndoLastChangePrompt,
+      autopilotMessage: handleAutopilotMessage,
+      autopilotControl: handleAutopilotControl
+    };
+    ChatPanel.__testHooks.latestInstance = {
+      autopilotResumeAttemptedRef,
+      refreshAutopilotStatus,
+      stopAutopilotPoller,
+      setAutopilotSession,
+      setAutopilotEvents
+    };
+    ChatPanel.__testHooks.storage = {
+      clearStoredAutopilotSession,
+      persistAutopilotSession,
+      loadStoredAutopilotSession,
+      applyAutopilotSummary,
+      stopAutopilotPoller
+    };
+  }
+
+  const autopilotJobLogs = useMemo(() => {
+    if (!autopilotIsActive || !currentProject?.id) {
+      return [];
+    }
+
+    const jobs = jobState?.jobsByProject?.[String(currentProject.id)]?.jobs;
+    if (!Array.isArray(jobs) || jobs.length === 0) {
+      return [];
+    }
+
+    const lines = [];
+    let totalLines = 0;
+
+    jobs.forEach((job, jobIndex) => {
+      if (!job || job.type !== 'test-run' || !Array.isArray(job.logs) || job.logs.length === 0) {
+        return;
+      }
+
+      const logSlice = job.logs.slice(-MAX_JOB_LOG_LINES_PER_JOB);
+      if (logSlice.length === 0) {
+        return;
+      }
+
+      lines.push({
+        key: `job-${jobIndex}-header`,
+        text: `${job.displayName || 'Test Run'} • ${job.status || 'pending'}`,
+        variant: 'header'
+      });
+
+      logSlice.forEach((entry, entryIdx) => {
+        if (totalLines >= MAX_TOTAL_JOB_LOG_LINES) {
+          return;
+        }
+        totalLines += 1;
+        lines.push({
+          key: `job-${jobIndex}-log-${entryIdx}`,
+          text: entry?.message || '',
+          stream: entry?.stream || 'stdout'
+        });
+      });
+    });
+
+    return lines;
+  }, [autopilotIsActive, currentProject?.id, jobState]);
+
+  const autopilotStatusValue = autopilotSession?.status || 'idle';
+  const autopilotCanPause = autopilotStatusValue === 'running';
+  const autopilotCanResume = autopilotStatusValue === 'paused';
+  const autopilotStartDisabled = isAutopilotBusy || !inputValue.trim() || !currentProject?.id;
+
   const panelClassName = `chat-panel ${side === 'right' ? 'chat-panel--right' : 'chat-panel--left'} ${isResizing ? 'chat-panel--resizing' : ''}`;
   const panelStyle = {
     width: typeof width === 'number' ? `${width}px` : width
@@ -190,23 +691,40 @@ const ChatPanel = ({
   };
 
   const submitPrompt = useCallback(async (rawPrompt, { origin = 'user' } = {}) => {
-    const trimmed = rawPrompt.trim();
+    const trimmed = typeof rawPrompt === 'string' ? rawPrompt.trim() : '';
     if (!trimmed) {
       return;
     }
 
-    setInputValue('');
-    setMessages((prev) => [...prev, createMessage('user', trimmed)]);
+    const respondNoRun = () => {
+      setMessages((prev) => [
+        ...prev,
+        createMessage('assistant', 'Nothing is currently running.', { variant: 'status' })
+      ]);
+    };
 
-    // Handle natural language stop/pause/resume commands.
+    const handleControlCommand = async (action) => {
+      if (autopilotIsActive) {
+        await handleAutopilotControl(action);
+      } else {
+        respondNoRun();
+      }
+    };
+
     if (isNaturalLanguageCancel(trimmed)) {
-      setMessages((prev) => [...prev, createMessage('assistant', 'Nothing is currently running.', { variant: 'status' })]);
+      await handleControlCommand('cancel');
       setInputValue('');
       return;
     }
 
-    if (isNaturalLanguagePause(trimmed) || isNaturalLanguageResume(trimmed)) {
-      setMessages((prev) => [...prev, createMessage('assistant', 'Nothing is currently running.', { variant: 'status' })]);
+    if (isNaturalLanguagePause(trimmed)) {
+      await handleControlCommand('pause');
+      setInputValue('');
+      return;
+    }
+
+    if (isNaturalLanguageResume(trimmed)) {
+      await handleControlCommand('resume');
       setInputValue('');
       return;
     }
@@ -216,16 +734,20 @@ const ChatPanel = ({
       if (commandResult.action === 'help') {
         setMessages((prev) => [
           ...prev,
-          createMessage(
-            'assistant',
-            'Commands: /stop (or just type "stop")',
-            { variant: 'status' }
-          )
+          createMessage('assistant', 'Commands: /stop, /pause, /resume', { variant: 'status' })
         ]);
       } else if (commandResult.action === 'cancel') {
-        setMessages((prev) => [...prev, createMessage('assistant', 'Nothing is currently running.', { variant: 'status' })]);
+        await handleControlCommand('cancel');
       }
       setInputValue('');
+      return;
+    }
+
+    setInputValue('');
+    setMessages((prev) => [...prev, createMessage('user', trimmed)]);
+
+    if (autopilotIsActive) {
+      await handleAutopilotMessage(trimmed);
       return;
     }
 
@@ -288,7 +810,6 @@ const ChatPanel = ({
               createMessage('assistant', 'Starting frontend + backend test runs…', { variant: 'status' })
             ]);
 
-            // These suites are started automatically as part of an agent run.
             markTestRunIntent?.('automation');
 
             const settled = await Promise.allSettled([
@@ -328,9 +849,12 @@ const ChatPanel = ({
     }
   }, [
     appendAgentSteps,
+    autopilotIsActive,
     callAgentWithTimeout,
     createMessage,
     currentProject,
+    handleAutopilotControl,
+    handleAutopilotMessage,
     markTestRunIntent,
     setPreviewPanelTab,
     stageAiChange,
@@ -512,6 +1036,11 @@ const ChatPanel = ({
     syncBranchOverview
   ]);
 
+  if (ChatPanel.__testHooks?.handlers) {
+    ChatPanel.__testHooks.handlers.submitPrompt = submitPrompt;
+    ChatPanel.__testHooks.handlers.runAutomatedTestFixGoal = runAutomatedTestFixGoal;
+  }
+
   useEffect(() => {
     if (
       typeof window === 'undefined' ||
@@ -641,6 +1170,51 @@ const ChatPanel = ({
         )}
       </div>
 
+      {autopilotSession ? (
+        <div className="chat-inspector" data-testid="chat-inspector">
+          <details open>
+            <summary className="chat-inspector__summary">
+              Autopilot · {autopilotSession.statusMessage || autopilotSession.status || 'pending'}
+            </summary>
+            <div className="chat-inspector__status-rows">
+              <div className="chat-inspector__status-row">
+                Session ID: {autopilotSession.id}
+              </div>
+              {autopilotStepSnapshot.currentStep ? (
+                <div className="chat-inspector__status-row">
+                  Current step: {autopilotStepSnapshot.currentStep}
+                </div>
+              ) : null}
+              {autopilotStepSnapshot.nextStep ? (
+                <div className="chat-inspector__status-row">
+                  Next step: {autopilotStepSnapshot.nextStep}
+                </div>
+              ) : null}
+            </div>
+            <AutopilotTimeline events={autopilotEvents} />
+          </details>
+        </div>
+      ) : null}
+
+      {autopilotIsActive && autopilotJobLogs.length > 0 && (
+        <div className="chat-job-logs" data-testid="chat-job-logs">
+          <div className="chat-job-logs__title">
+            Autopilot test runs
+            {autopilotStepSnapshot.currentStep ? ` · ${autopilotStepSnapshot.currentStep}` : ''}
+          </div>
+          <div className="chat-job-logs__body">
+            {autopilotJobLogs.map((line) => (
+              <div
+                key={line.key}
+                className={`chat-job-logs__line${line.variant === 'header' ? ' chat-job-logs__line--header' : ''}`}
+              >
+                {line.text}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {isSending && !errorMessage && (
         <div className="chat-status" data-testid="chat-status">
           Assistant is thinking about your request...
@@ -654,6 +1228,74 @@ const ChatPanel = ({
       )}
 
       <div className="chat-panel-controls" data-testid="chat-bottom-controls">
+        {autopilotIsActive ? (
+          <>
+            <button
+              type="button"
+              className="chat-autopilot-button"
+              data-testid="autopilot-control-stop"
+              onClick={() => handleAutopilotControl('cancel')}
+              disabled={isAutopilotBusy}
+            >
+              Stop
+            </button>
+            {autopilotCanPause && (
+              <button
+                type="button"
+                className="chat-autopilot-button"
+                data-testid="autopilot-control-pause"
+                onClick={() => handleAutopilotControl('pause')}
+                disabled={isAutopilotBusy}
+              >
+                Pause
+              </button>
+            )}
+            {autopilotCanResume && (
+              <button
+                type="button"
+                className="chat-autopilot-button"
+                data-testid="autopilot-control-resume"
+                onClick={() => handleAutopilotControl('resume')}
+                disabled={isAutopilotBusy}
+              >
+                Resume
+              </button>
+            )}
+            <button
+              type="button"
+              className="chat-autopilot-button"
+              data-testid="autopilot-control-change-direction"
+              onClick={handleChangeDirectionPrompt}
+              disabled={isAutopilotBusy}
+            >
+              Change Direction
+            </button>
+            <button
+              type="button"
+              className="chat-autopilot-button"
+              data-testid="autopilot-control-undo-last-change"
+              onClick={handleUndoLastChangePrompt}
+              disabled={isAutopilotBusy}
+            >
+              Undo Last Change
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="chat-autopilot-start"
+            data-testid="autopilot-control-start"
+            onClick={handleStartAutopilot}
+            disabled={autopilotStartDisabled}
+          >
+            Start Autopilot
+          </button>
+        )}
+        {autopilotStatusNote ? (
+          <div className="chat-autopilot-note" data-testid="autopilot-status-note">
+            {autopilotStatusNote}
+          </div>
+        ) : null}
       </div>
 
       <div className="chat-input-container">
@@ -679,5 +1321,13 @@ const ChatPanel = ({
     </div>
   );
 };
+
+ChatPanel.__testHooks = ChatPanel.__testHooks || {};
+Object.assign(ChatPanel.__testHooks, {
+  getLatestInstance: () => ChatPanel.__testHooks.latestInstance || null,
+  clearLatestInstance: () => {
+    delete ChatPanel.__testHooks.latestInstance;
+  }
+});
 
 export default ChatPanel;

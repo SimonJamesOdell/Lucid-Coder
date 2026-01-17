@@ -9,6 +9,14 @@ import {
   listUiCommands,
   upsertUiSnapshot
 } from '../services/agentUiState.js';
+import {
+  AutopilotSessionErrorCodes,
+  cancelAutopilotSession,
+  createAutopilotSession,
+  enqueueAutopilotSessionMessage,
+  getAutopilotSession,
+  resumeAutopilotSessions
+} from '../services/autopilotSessions.js';
 
 const router = express.Router();
 
@@ -101,6 +109,124 @@ router.post('/ui/commands/ack', (req, res) => {
   } catch (error) {
     console.error('[Agent UI] Command acknowledgment failed:', error);
     res.status(500).json({ error: 'Failed to acknowledge UI commands' });
+  }
+});
+
+router.post('/autopilot', async (req, res) => {
+  try {
+    const { projectId, prompt, options, uiSessionId } = req.body || {};
+    if (!projectId) {
+      return res.status(400).json({ error: 'projectId is required' });
+    }
+    if (!prompt) {
+      return res.status(400).json({ error: 'prompt is required' });
+    }
+    const session = await createAutopilotSession({ projectId, prompt, options, uiSessionId });
+    res.status(202).json({ success: true, session });
+  } catch (error) {
+    console.error('[Agent Autopilot] Start failed:', error);
+    res.status(500).json({
+      error: 'Failed to start autopilot session',
+      details: error?.message || 'Unknown error'
+    });
+  }
+});
+
+router.get('/autopilot/sessions/:sessionId', (req, res) => {
+  try {
+    const { projectId } = req.query || {};
+    if (!projectId) {
+      return res.status(400).json({ error: 'projectId is required' });
+    }
+
+    const session = getAutopilotSession(req.params.sessionId);
+    if (!session || String(session.projectId) !== String(projectId)) {
+      return res.status(404).json({ error: 'Autopilot session not found' });
+    }
+
+    res.status(200).json({ success: true, session });
+  } catch (error) {
+    console.error('[Agent Autopilot] Status failed:', error);
+    res.status(500).json({
+      error: 'Failed to fetch autopilot session',
+      details: error?.message || 'Unknown error'
+    });
+  }
+});
+
+router.post('/autopilot/sessions/:sessionId/messages', (req, res) => {
+  try {
+    const { projectId, message, kind, metadata } = req.body || {};
+    if (!projectId) {
+      return res.status(400).json({ error: 'projectId is required' });
+    }
+    if (!message) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const session = enqueueAutopilotSessionMessage({
+      sessionId: req.params.sessionId,
+      projectId,
+      message,
+      kind,
+      metadata
+    });
+    res.status(200).json({ success: true, session });
+  } catch (error) {
+    if (error?.code === AutopilotSessionErrorCodes.NOT_FOUND) {
+      return res.status(404).json({ error: 'Autopilot session not found' });
+    }
+    console.error('[Agent Autopilot] Message failed:', error);
+    res.status(500).json({
+      error: 'Failed to enqueue autopilot message',
+      details: error?.message || 'Unknown error'
+    });
+  }
+});
+
+router.post('/autopilot/sessions/:sessionId/cancel', (req, res) => {
+  try {
+    const { projectId, reason } = req.body || {};
+    if (!projectId) {
+      return res.status(400).json({ error: 'projectId is required' });
+    }
+
+    const session = cancelAutopilotSession({
+      sessionId: req.params.sessionId,
+      projectId,
+      reason
+    });
+    res.status(200).json({ success: true, session });
+  } catch (error) {
+    if (error?.code === AutopilotSessionErrorCodes.NOT_FOUND) {
+      return res.status(404).json({ error: 'Autopilot session not found' });
+    }
+    console.error('[Agent Autopilot] Cancel failed:', error);
+    res.status(500).json({
+      error: 'Failed to cancel autopilot session',
+      details: error?.message || 'Unknown error'
+    });
+  }
+});
+
+router.post('/autopilot/resume', (req, res) => {
+  try {
+    const { projectId, uiSessionId, limit } = req.body || {};
+    if (!projectId) {
+      return res.status(400).json({ error: 'projectId is required' });
+    }
+    if (!uiSessionId) {
+      return res.status(400).json({ error: 'uiSessionId is required' });
+    }
+
+    const result = resumeAutopilotSessions({ projectId, uiSessionId, limit });
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('[Agent Autopilot] Resume failed:', error);
+    res.status(500).json({
+      error: 'Failed to resume autopilot sessions',
+      details: error?.message || 'Unknown error'
+    });
   }
 });
 

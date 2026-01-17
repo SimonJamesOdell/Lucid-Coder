@@ -2202,9 +2202,13 @@ describe('useBranchTabState targeted guards', () => {
       .mockResolvedValueOnce({ data: { overview: commitOverview } })
       .mockResolvedValueOnce({ data: { success: true, overview: mergedOverview } });
 
-    axios.get
-      .mockResolvedValueOnce({ data: stagedOverview })
-      .mockResolvedValueOnce({ data: commitOverview });
+    axios.get.mockImplementation((url) => {
+      if (typeof url === 'string' && url.includes(`/branches/${branchName}/css-only`)) {
+        return Promise.resolve({ data: { isCssOnly: true } });
+      }
+
+      return Promise.resolve({ data: stagedOverview });
+    });
 
     await act(async () => {
       await getState().handleTestAndMerge(branchName);

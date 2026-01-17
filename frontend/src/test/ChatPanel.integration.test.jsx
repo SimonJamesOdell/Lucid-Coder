@@ -8,7 +8,12 @@ vi.mock('../context/AppStateContext');
 vi.mock('../utils/goalsApi', () => ({
   fetchGoals: vi.fn().mockResolvedValue([]),
   agentRequest: vi.fn().mockResolvedValue({ kind: 'question', answer: 'Test', steps: [] }),
-  agentAutopilotStatus: vi.fn().mockResolvedValue({ status: 'completed' })
+  agentAutopilotStatus: vi.fn().mockResolvedValue({ status: 'completed' }),
+  agentAutopilotResume: vi.fn().mockResolvedValue({ resumed: [] }),
+  agentAutopilot: vi.fn(),
+  agentAutopilotMessage: vi.fn(),
+  agentAutopilotCancel: vi.fn(),
+  readUiSessionId: vi.fn()
 }));
 vi.mock('socket.io-client', () => ({
   io: vi.fn(() => ({

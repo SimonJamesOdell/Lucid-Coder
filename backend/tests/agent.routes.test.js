@@ -23,6 +23,15 @@ vi.mock('../services/agentUiState.js', () => ({
   upsertUiSnapshot: vi.fn()
 }));
 
+vi.mock('../services/autopilotSessions.js', () => ({
+  AutopilotSessionErrorCodes: { NOT_FOUND: 'NOT_FOUND' },
+  cancelAutopilotSession: vi.fn(),
+  createAutopilotSession: vi.fn(),
+  enqueueAutopilotSessionMessage: vi.fn(),
+  getAutopilotSession: vi.fn(),
+  resumeAutopilotSessions: vi.fn()
+}));
+
 import agentRoutes from '../routes/agent.js';
 import { handleAgentRequest } from '../services/agentRequestHandler.js';
 import {
@@ -32,6 +41,14 @@ import {
   listUiCommands,
   upsertUiSnapshot
 } from '../services/agentUiState.js';
+import {
+  AutopilotSessionErrorCodes,
+  cancelAutopilotSession,
+  createAutopilotSession,
+  enqueueAutopilotSessionMessage,
+  getAutopilotSession,
+  resumeAutopilotSessions
+} from '../services/autopilotSessions.js';
 
 describe('Agent routes', () => {
   let app;
@@ -43,6 +60,30 @@ describe('Agent routes', () => {
     }
     instance.use('/api/agent', agentRoutes);
     return instance;
+  };
+
+  const findRouteHandler = (path, method) => {
+    const layer = agentRoutes.stack.find((entry) => entry.route?.path === path && entry.route?.methods?.[method]);
+    if (!layer) {
+      throw new Error(`Route handler not found for ${method.toUpperCase()} ${path}`);
+    }
+    return layer.route.stack[0].handle;
+  };
+
+  const invokeRoute = async (path, method, reqOverrides = {}) => {
+    const handler = findRouteHandler(path, method);
+    const status = vi.fn().mockReturnThis();
+    const json = vi.fn().mockReturnThis();
+    const res = { status, json };
+    const req = {
+      body: undefined,
+      params: {},
+      query: undefined,
+      ...reqOverrides
+    };
+
+    await handler(req, res);
+    return { status, json };
   };
 
   beforeEach(() => {
@@ -347,6 +388,448 @@ describe('Agent routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body).toEqual({ error: 'Failed to acknowledge UI commands' });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('Autopilot route validation', () => {
+    test('POST /api/agent/autopilot rejects missing projectId', async () => {
+      const response = await request(app)
+        .post('/api/agent/autopilot')
+        .send({ prompt: 'Need a plan' });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'projectId is required' });
+    });
+
+    test('POST /api/agent/autopilot rejects missing prompt', async () => {
+      const response = await request(app)
+        .post('/api/agent/autopilot')
+        .send({ projectId: 'proj-1' });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'prompt is required' });
+    });
+
+    test('GET /api/agent/autopilot/sessions/:sessionId rejects missing projectId', async () => {
+      const response = await request(app)
+        .get('/api/agent/autopilot/sessions/session-1');
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'projectId is required' });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/messages rejects missing projectId', async () => {
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-1/messages')
+        .send({ message: 'hi' });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'projectId is required' });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/messages rejects missing message', async () => {
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-1/messages')
+        .send({ projectId: 'proj-1' });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'message is required' });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/cancel rejects missing projectId', async () => {
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-1/cancel')
+        .send({ reason: 'user' });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'projectId is required' });
+    });
+
+    test('POST /api/agent/autopilot/resume rejects missing projectId', async () => {
+      const response = await request(app)
+        .post('/api/agent/autopilot/resume')
+        .send({ uiSessionId: 'ui-1' });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'projectId is required' });
+    });
+
+    test('POST /api/agent/autopilot/resume rejects missing uiSessionId', async () => {
+      const response = await request(app)
+        .post('/api/agent/autopilot/resume')
+        .send({ projectId: 'proj-1' });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'uiSessionId is required' });
+    });
+  });
+
+  describe('Autopilot route fallbacks with undefined body/query', () => {
+    test('POST /api/agent/autopilot handles undefined body by treating it as empty object', async () => {
+      const { status, json } = await invokeRoute('/autopilot', 'post');
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({ error: 'projectId is required' });
+    });
+
+    test('GET /api/agent/autopilot/sessions/:sessionId handles undefined query by treating it as empty object', async () => {
+      const { status, json } = await invokeRoute('/autopilot/sessions/:sessionId', 'get', {
+        params: { sessionId: 'undefined-query' }
+      });
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({ error: 'projectId is required' });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/messages handles undefined body', async () => {
+      const { status, json } = await invokeRoute('/autopilot/sessions/:sessionId/messages', 'post', {
+        params: { sessionId: 'missing-body' }
+      });
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({ error: 'projectId is required' });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/cancel handles undefined body', async () => {
+      const { status, json } = await invokeRoute('/autopilot/sessions/:sessionId/cancel', 'post', {
+        params: { sessionId: 'missing-body' }
+      });
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({ error: 'projectId is required' });
+    });
+
+    test('POST /api/agent/autopilot/resume handles undefined body', async () => {
+      const { status, json } = await invokeRoute('/autopilot/resume', 'post');
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({ error: 'projectId is required' });
+    });
+  });
+
+  describe('Autopilot routes success cases', () => {
+    test('POST /api/agent/autopilot starts a session', async () => {
+      const session = { id: 'session-123', projectId: 'proj-1' };
+      createAutopilotSession.mockResolvedValue(session);
+
+      const response = await request(app)
+        .post('/api/agent/autopilot')
+        .send({ projectId: 'proj-1', prompt: 'Ship it', options: { depth: 2 }, uiSessionId: 'ui-1' });
+
+      expect(response.status).toBe(202);
+      expect(response.body).toEqual({ success: true, session });
+      expect(createAutopilotSession).toHaveBeenCalledWith({
+        projectId: 'proj-1',
+        prompt: 'Ship it',
+        options: { depth: 2 },
+        uiSessionId: 'ui-1'
+      });
+    });
+
+    test('GET /api/agent/autopilot/sessions/:sessionId returns session when project matches', async () => {
+      const session = { id: 'session-1', projectId: 'proj-1', state: 'running' };
+      getAutopilotSession.mockReturnValue(session);
+
+      const response = await request(app)
+        .get('/api/agent/autopilot/sessions/session-1')
+        .query({ projectId: 'proj-1' });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ success: true, session });
+    });
+
+    test('GET /api/agent/autopilot/sessions/:sessionId returns 404 when project mismatches', async () => {
+      const session = { id: 'session-1', projectId: 'proj-2' };
+      getAutopilotSession.mockReturnValue(session);
+
+      const response = await request(app)
+        .get('/api/agent/autopilot/sessions/session-1')
+        .query({ projectId: 'proj-1' });
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({ error: 'Autopilot session not found' });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/messages enqueues message', async () => {
+      const session = { id: 'session-99', latestMessage: 'Hello' };
+      enqueueAutopilotSessionMessage.mockReturnValue(session);
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-99/messages')
+        .send({ projectId: 'proj-9', message: 'Hi', kind: 'user', metadata: { foo: 'bar' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ success: true, session });
+      expect(enqueueAutopilotSessionMessage).toHaveBeenCalledWith({
+        sessionId: 'session-99',
+        projectId: 'proj-9',
+        message: 'Hi',
+        kind: 'user',
+        metadata: { foo: 'bar' }
+      });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/messages returns 404 when session is missing', async () => {
+      const notFoundError = new Error('missing');
+      notFoundError.code = AutopilotSessionErrorCodes.NOT_FOUND;
+      enqueueAutopilotSessionMessage.mockImplementation(() => {
+        throw notFoundError;
+      });
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-404/messages')
+        .send({ projectId: 'proj-9', message: 'Hi again' });
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({ error: 'Autopilot session not found' });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/cancel returns session metadata', async () => {
+      const session = { id: 'session-4', status: 'cancelling' };
+      cancelAutopilotSession.mockReturnValue(session);
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-4/cancel')
+        .send({ projectId: 'proj-4', reason: 'user-request' });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ success: true, session });
+      expect(cancelAutopilotSession).toHaveBeenCalledWith({
+        sessionId: 'session-4',
+        projectId: 'proj-4',
+        reason: 'user-request'
+      });
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/cancel returns 404 for missing session', async () => {
+      const notFoundError = new Error('missing');
+      notFoundError.code = AutopilotSessionErrorCodes.NOT_FOUND;
+      cancelAutopilotSession.mockImplementation(() => {
+        throw notFoundError;
+      });
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-404/cancel')
+        .send({ projectId: 'proj-4' });
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({ error: 'Autopilot session not found' });
+    });
+
+    test('POST /api/agent/autopilot/resume resumes sessions', async () => {
+      const resumeResult = { success: true, resumedSessionIds: ['session-1'] };
+      resumeAutopilotSessions.mockReturnValue(resumeResult);
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/resume')
+        .send({ projectId: 'proj-1', uiSessionId: 'ui-1', limit: 3 });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(resumeResult);
+      expect(resumeAutopilotSessions).toHaveBeenCalledWith({
+        projectId: 'proj-1',
+        uiSessionId: 'ui-1',
+        limit: 3
+      });
+    });
+  });
+
+  describe('Autopilot routes error handling', () => {
+    test('POST /api/agent/autopilot surfaces server errors', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      createAutopilotSession.mockRejectedValue(new Error('planner offline'));
+
+      const response = await request(app)
+        .post('/api/agent/autopilot')
+        .send({ projectId: 'proj-1', prompt: 'Ship it' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to start autopilot session',
+        details: 'planner offline'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('POST /api/agent/autopilot falls back to Unknown error when thrown value lacks message', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      createAutopilotSession.mockRejectedValue({});
+
+      const response = await request(app)
+        .post('/api/agent/autopilot')
+        .send({ projectId: 'proj-1', prompt: 'Ship it' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to start autopilot session',
+        details: 'Unknown error'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('GET /api/agent/autopilot/sessions/:sessionId returns 500 when retrieval fails', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      getAutopilotSession.mockImplementation(() => {
+        throw new Error('db exploded');
+      });
+
+      const response = await request(app)
+        .get('/api/agent/autopilot/sessions/session-1')
+        .query({ projectId: 'proj-1' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to fetch autopilot session',
+        details: 'db exploded'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('GET /api/agent/autopilot/sessions/:sessionId falls back to Unknown error when retrieval throws without message', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      getAutopilotSession.mockImplementation(() => {
+        const err = {};
+        throw err;
+      });
+
+      const response = await request(app)
+        .get('/api/agent/autopilot/sessions/session-1')
+        .query({ projectId: 'proj-1' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to fetch autopilot session',
+        details: 'Unknown error'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/messages returns 500 when enqueue fails', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      enqueueAutopilotSessionMessage.mockImplementation(() => {
+        throw new Error('queue down');
+      });
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-1/messages')
+        .send({ projectId: 'proj-1', message: 'Hello world' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to enqueue autopilot message',
+        details: 'queue down'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/messages falls back to Unknown error when enqueue throws without message', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      enqueueAutopilotSessionMessage.mockImplementation(() => {
+        throw {};
+      });
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-1/messages')
+        .send({ projectId: 'proj-1', message: 'Hello world' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to enqueue autopilot message',
+        details: 'Unknown error'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/cancel returns 500 when cancel fails', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      cancelAutopilotSession.mockImplementation(() => {
+        throw new Error('cancellation blocked');
+      });
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-1/cancel')
+        .send({ projectId: 'proj-1', reason: 'user-request' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to cancel autopilot session',
+        details: 'cancellation blocked'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('POST /api/agent/autopilot/sessions/:sessionId/cancel falls back to Unknown error when cancel throws without message', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      cancelAutopilotSession.mockImplementation(() => {
+        throw {};
+      });
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/sessions/session-1/cancel')
+        .send({ projectId: 'proj-1', reason: 'user-request' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to cancel autopilot session',
+        details: 'Unknown error'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('POST /api/agent/autopilot/resume returns 500 when resume fails', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      resumeAutopilotSessions.mockImplementation(() => {
+        throw new Error('resume boom');
+      });
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/resume')
+        .send({ projectId: 'proj-1', uiSessionId: 'ui-1' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to resume autopilot sessions',
+        details: 'resume boom'
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('POST /api/agent/autopilot/resume falls back to Unknown error when resume throws without message', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      resumeAutopilotSessions.mockImplementation(() => {
+        throw {};
+      });
+
+      const response = await request(app)
+        .post('/api/agent/autopilot/resume')
+        .send({ projectId: 'proj-1', uiSessionId: 'ui-1' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        error: 'Failed to resume autopilot sessions',
+        details: 'Unknown error'
+      });
 
       expect(consoleSpy).toHaveBeenCalled();
       consoleSpy.mockRestore();

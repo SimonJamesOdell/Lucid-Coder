@@ -2,6 +2,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
+import * as branchTabUtils from '../components/branch-tab/utils';
 import CommitsTab from '../components/CommitsTab';
 
 const mockRequestEditorFocus = vi.fn();
@@ -1778,6 +1779,33 @@ describe('CommitsTab', () => {
     expect(await screen.findByTestId('commit-gate-coverage')).toHaveTextContent('Coverage: 95% / Unknown');
   });
 
+  test('gate status coverage label shows Unknown when summary is missing but tests are required', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-missing-summary',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        testsRequired: true,
+        mergeBlockedReason: null,
+        stagedFiles: []
+      }
+    };
+
+    axios.get.mockImplementation((url) => {
+      if (url === `/api/projects/${mockProject.id}/commits`) {
+        return Promise.resolve({ data: { success: true, commits: baseCommits } });
+      }
+      if (url.startsWith(`/api/projects/${mockProject.id}/commits/`)) {
+        return Promise.resolve({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+
+    await renderCommitsTab();
+
+    expect(await screen.findByTestId('commit-gate-coverage')).toHaveTextContent('Coverage: Unknown');
+  });
+
   test('gate status shows Coverage optional when tests are optional and no summary is available', async () => {
     workingBranchesValue = {
       [mockProject.id]: {
@@ -1803,6 +1831,85 @@ describe('CommitsTab', () => {
     await renderCommitsTab();
 
     expect(await screen.findByTestId('commit-gate-coverage')).toHaveTextContent('Coverage: Optional');
+  });
+
+  test('gate status tests label shows Failed when the last run failed', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-tests-failed',
+        status: 'needs-fix',
+        lastTestStatus: 'failed',
+        testsRequired: true,
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
+      }
+    };
+
+    axios.get.mockImplementation((url) => {
+      if (url === `/api/projects/${mockProject.id}/commits`) {
+        return Promise.resolve({ data: { success: true, commits: baseCommits } });
+      }
+      if (url.startsWith(`/api/projects/${mockProject.id}/commits/`)) {
+        return Promise.resolve({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+
+    await renderCommitsTab();
+
+    expect(await screen.findByTestId('commit-gate-tests')).toHaveTextContent('Tests: Failed');
+  });
+
+  test('gate status tests label shows Not run when no results are available', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-tests-pending',
+        status: 'needs-fix',
+        lastTestStatus: null,
+        testsRequired: true,
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
+      }
+    };
+
+    axios.get.mockImplementation((url) => {
+      if (url === `/api/projects/${mockProject.id}/commits`) {
+        return Promise.resolve({ data: { success: true, commits: baseCommits } });
+      }
+      if (url.startsWith(`/api/projects/${mockProject.id}/commits/`)) {
+        return Promise.resolve({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+
+    await renderCommitsTab();
+
+    expect(await screen.findByTestId('commit-gate-tests')).toHaveTextContent('Tests: Not run');
+  });
+
+  test('gate status shows Tests optional when requirements are disabled without CSS-only changes', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-optional-tests',
+        status: 'ready-for-merge',
+        lastTestStatus: null,
+        testsRequired: false,
+        mergeBlockedReason: null,
+        stagedFiles: [{ path: 'src/components/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
+      }
+    };
+
+    axios.get.mockImplementation((url) => {
+      if (url === `/api/projects/${mockProject.id}/commits`) {
+        return Promise.resolve({ data: { success: true, commits: baseCommits } });
+      }
+      if (url.startsWith(`/api/projects/${mockProject.id}/commits/`)) {
+        return Promise.resolve({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+
+    await renderCommitsTab();
+
+    expect(await screen.findByTestId('commit-gate-tests')).toHaveTextContent('Tests: Optional');
   });
 
   test('gate status and merge blocker copy reflect CSS-only staged changes', async () => {
@@ -1832,6 +1939,40 @@ describe('CommitsTab', () => {
     expect(screen.getByTestId('commit-gate-coverage')).toHaveTextContent('Coverage: CSS-only (tests optional)');
     expect(screen.getByTestId('commit-gate-merge')).toHaveTextContent('Merge: Blocked (Commit CSS-only changes before merging)');
     expect(await screen.findByTestId('commit-merge-blocked')).toHaveTextContent('Commit CSS-only changes before merging');
+  });
+
+  test('merge gate falls back to generic blocked copy when blocker text is unavailable', async () => {
+    const describeSpy = vi.spyOn(branchTabUtils, 'describeMergeBlocker').mockReturnValue(null);
+
+    try {
+      workingBranchesValue = {
+        [mockProject.id]: {
+          name: 'feature-missing-blocker',
+          status: 'needs-fix',
+          lastTestStatus: null,
+          testsRequired: true,
+          mergeBlockedReason: null,
+          stagedFiles: [{ path: 'src/components/Nav.jsx', source: 'editor', timestamp: '2025-01-02T12:00:00.000Z' }]
+        }
+      };
+
+      axios.get.mockImplementation((url) => {
+        if (url === `/api/projects/${mockProject.id}/commits`) {
+          return Promise.resolve({ data: { success: true, commits: baseCommits } });
+        }
+        if (url.startsWith(`/api/projects/${mockProject.id}/commits/`)) {
+          return Promise.resolve({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+        }
+        return Promise.resolve({ data: { success: true } });
+      });
+
+      await renderCommitsTab();
+
+      expect(await screen.findByTestId('commit-gate-merge')).toHaveTextContent('Merge: Blocked');
+      expect(screen.queryByTestId('commit-merge-blocked')).not.toBeInTheDocument();
+    } finally {
+      describeSpy.mockRestore();
+    }
   });
 
   test('requestSquashSelectedCommits exits when project id is missing via test API', async () => {

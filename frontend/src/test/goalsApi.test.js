@@ -14,7 +14,8 @@ import {
   agentAutopilot,
   agentAutopilotStatus,
   agentAutopilotMessage,
-  agentAutopilotCancel
+  agentAutopilotCancel,
+  agentAutopilotResume
 } from '../utils/goalsApi.js';
 
 vi.mock('axios');
@@ -320,6 +321,35 @@ describe('goalsApi', () => {
       message: 'Update goal'
     });
     expect(result).toEqual({ queued: true, messageId: 1 });
+
+    axios.post.mockResolvedValueOnce({ data: { queued: true } });
+    await agentAutopilotMessage({
+      projectId: 1,
+      sessionId: 's2',
+      message: 'Pause please',
+      kind: 'pause',
+      metadata: { reason: 'tests failing' }
+    });
+
+    expect(axios.post).toHaveBeenLastCalledWith('/api/agent/autopilot/sessions/s2/messages', {
+      projectId: 1,
+      message: 'Pause please',
+      kind: 'pause',
+      metadata: { reason: 'tests failing' }
+    });
+  });
+
+  it('agentAutopilotMessage ignores metadata that is not an object', async () => {
+    axios.post.mockResolvedValueOnce({ data: { accepted: true } });
+
+    const payload = { projectId: 2, sessionId: 'meta', message: 'hello', metadata: 'nope' };
+    const data = await agentAutopilotMessage(payload);
+
+    expect(axios.post).toHaveBeenCalledWith('/api/agent/autopilot/sessions/meta/messages', {
+      projectId: 2,
+      message: 'hello'
+    });
+    expect(data).toEqual({ accepted: true });
   });
 
   it('agentAutopilotCancel requires fields and posts to cancel endpoint', async () => {
@@ -327,11 +357,49 @@ describe('goalsApi', () => {
     await expect(agentAutopilotCancel({ sessionId: 's1' })).rejects.toThrow('projectId is required');
 
     axios.post.mockResolvedValueOnce({ data: { cancelled: true } });
-    const result = await agentAutopilotCancel({ projectId: 1, sessionId: 's1' });
+    const result = await agentAutopilotCancel({ projectId: 1, sessionId: 's1', reason: 'user' });
 
     expect(axios.post).toHaveBeenCalledWith('/api/agent/autopilot/sessions/s1/cancel', {
-      projectId: 1
+      projectId: 1,
+      reason: 'user'
     });
     expect(result).toEqual({ cancelled: true });
+  });
+
+  it('agentAutopilotCancel omits reason when not provided', async () => {
+    axios.post.mockResolvedValueOnce({ data: { cancelled: true } });
+
+    await agentAutopilotCancel({ projectId: 3, sessionId: 's4' });
+
+    expect(axios.post).toHaveBeenCalledWith('/api/agent/autopilot/sessions/s4/cancel', {
+      projectId: 3
+    });
+  });
+
+  it('agentAutopilotResume requires parameters and posts to resume endpoint', async () => {
+    await expect(agentAutopilotResume({ uiSessionId: 'ui-1' })).rejects.toThrow('projectId is required');
+    await expect(agentAutopilotResume({ projectId: 1 })).rejects.toThrow('uiSessionId is required');
+
+    axios.post.mockResolvedValueOnce({ data: { success: true, resumed: [] } });
+    const payload = await agentAutopilotResume({ projectId: 1, uiSessionId: 'ui-1', limit: 2 });
+
+    expect(axios.post).toHaveBeenCalledWith('/api/agent/autopilot/resume', {
+      projectId: 1,
+      uiSessionId: 'ui-1',
+      limit: 2
+    });
+    expect(payload).toEqual({ success: true, resumed: [] });
+  });
+
+  it('agentAutopilotResume falls back to default limit when value is invalid', async () => {
+    axios.post.mockResolvedValueOnce({ data: { success: true } });
+
+    await agentAutopilotResume({ projectId: 5, uiSessionId: 'ui-5', limit: 'invalid' });
+
+    expect(axios.post).toHaveBeenCalledWith('/api/agent/autopilot/resume', {
+      projectId: 5,
+      uiSessionId: 'ui-5',
+      limit: 5
+    });
   });
 });

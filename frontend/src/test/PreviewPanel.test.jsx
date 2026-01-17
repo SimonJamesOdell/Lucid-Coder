@@ -994,6 +994,31 @@ describe('PreviewPanel', () => {
     });
   });
 
+  test('changing projects while the commits tab is active requests another commit autofill', async () => {
+    const appState = createAppState({ currentProject: { id: 23, name: 'Autofill Switch' } });
+    useAppState.mockImplementation(() => appState);
+
+    const user = userEvent.setup();
+    const { rerender } = render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('commits-tab'));
+
+    await waitFor(() => {
+      expect(commitsTabPropsRef.current.autofillRequestId).toBe(1);
+    });
+
+    appState.currentProject = { id: 24, name: 'Autofill Switch Next' };
+
+    await act(async () => {
+      rerender(<PreviewPanel />);
+      await flushPromises();
+    });
+
+    await waitFor(() => {
+      expect(commitsTabPropsRef.current.autofillRequestId).toBe(2);
+    });
+  });
+
   test('BranchTab can request navigation to Commits tab', async () => {
     useAppState.mockReturnValue(createAppState({
       currentProject: { id: 'proj-1', name: 'Demo' }
