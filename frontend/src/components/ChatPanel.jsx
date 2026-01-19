@@ -647,7 +647,6 @@ const ChatPanel = ({
   const autopilotStatusValue = autopilotSession?.status || 'idle';
   const autopilotCanPause = autopilotStatusValue === 'running';
   const autopilotCanResume = autopilotStatusValue === 'paused';
-  const autopilotStartDisabled = isAutopilotBusy || !inputValue.trim() || !currentProject?.id;
 
   const panelClassName = `chat-panel ${side === 'right' ? 'chat-panel--right' : 'chat-panel--left'} ${isResizing ? 'chat-panel--resizing' : ''}`;
   const panelStyle = {
@@ -1227,76 +1226,68 @@ const ChatPanel = ({
         </div>
       )}
 
-      <div className="chat-panel-controls" data-testid="chat-bottom-controls">
-        {autopilotIsActive ? (
-          <>
-            <button
-              type="button"
-              className="chat-autopilot-button"
-              data-testid="autopilot-control-stop"
-              onClick={() => handleAutopilotControl('cancel')}
-              disabled={isAutopilotBusy}
-            >
-              Stop
-            </button>
-            {autopilotCanPause && (
+      {autopilotIsActive || autopilotStatusNote ? (
+        <div className="chat-panel-controls" data-testid="chat-bottom-controls">
+          {autopilotIsActive ? (
+            <>
               <button
                 type="button"
                 className="chat-autopilot-button"
-                data-testid="autopilot-control-pause"
-                onClick={() => handleAutopilotControl('pause')}
+                data-testid="autopilot-control-stop"
+                onClick={() => handleAutopilotControl('cancel')}
                 disabled={isAutopilotBusy}
               >
-                Pause
+                Stop
               </button>
-            )}
-            {autopilotCanResume && (
+              {autopilotCanPause && (
+                <button
+                  type="button"
+                  className="chat-autopilot-button"
+                  data-testid="autopilot-control-pause"
+                  onClick={() => handleAutopilotControl('pause')}
+                  disabled={isAutopilotBusy}
+                >
+                  Pause
+                </button>
+              )}
+              {autopilotCanResume && (
+                <button
+                  type="button"
+                  className="chat-autopilot-button"
+                  data-testid="autopilot-control-resume"
+                  onClick={() => handleAutopilotControl('resume')}
+                  disabled={isAutopilotBusy}
+                >
+                  Resume
+                </button>
+              )}
               <button
                 type="button"
                 className="chat-autopilot-button"
-                data-testid="autopilot-control-resume"
-                onClick={() => handleAutopilotControl('resume')}
+                data-testid="autopilot-control-change-direction"
+                onClick={handleChangeDirectionPrompt}
                 disabled={isAutopilotBusy}
               >
-                Resume
+                Change Direction
               </button>
-            )}
-            <button
-              type="button"
-              className="chat-autopilot-button"
-              data-testid="autopilot-control-change-direction"
-              onClick={handleChangeDirectionPrompt}
-              disabled={isAutopilotBusy}
-            >
-              Change Direction
-            </button>
-            <button
-              type="button"
-              className="chat-autopilot-button"
-              data-testid="autopilot-control-undo-last-change"
-              onClick={handleUndoLastChangePrompt}
-              disabled={isAutopilotBusy}
-            >
-              Undo Last Change
-            </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            className="chat-autopilot-start"
-            data-testid="autopilot-control-start"
-            onClick={handleStartAutopilot}
-            disabled={autopilotStartDisabled}
-          >
-            Start Autopilot
-          </button>
-        )}
-        {autopilotStatusNote ? (
-          <div className="chat-autopilot-note" data-testid="autopilot-status-note">
-            {autopilotStatusNote}
-          </div>
-        ) : null}
-      </div>
+              <button
+                type="button"
+                className="chat-autopilot-button"
+                data-testid="autopilot-control-undo-last-change"
+                onClick={handleUndoLastChangePrompt}
+                disabled={isAutopilotBusy}
+              >
+                Undo Last Change
+              </button>
+            </>
+          ) : null}
+          {autopilotStatusNote ? (
+            <div className="chat-autopilot-note" data-testid="autopilot-status-note">
+              {autopilotStatusNote}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="chat-input-container">
         <textarea

@@ -98,7 +98,10 @@ const startAutopilotSession = async (overrides = {}) => {
   const utils = renderWithAppState(overrides);
   const input = screen.getByTestId('chat-input');
   await userEvent.type(input, 'Trigger autopilot session');
-  await userEvent.click(screen.getByTestId('autopilot-control-start'));
+  const { startAutopilot } = getAutopilotHandlers();
+  await act(async () => {
+    await startAutopilot?.();
+  });
   await waitFor(() => {
     expect(goalsApi.agentAutopilot).toHaveBeenCalled();
   });
@@ -871,7 +874,7 @@ describe('ChatPanel - Autopilot Features', () => {
   });
 
   describe('Autopilot Control Buttons', () => {
-    it('shows start button and launches autopilot when clicked', async () => {
+    it('does not render a Start Autopilot button, but can still launch autopilot', async () => {
       useAppState.mockReturnValue({
         currentProject: { id: 555 },
         jobState: { jobsByProject: {} },
@@ -892,16 +895,15 @@ describe('ChatPanel - Autopilot Features', () => {
 
       render(<ChatPanel width={320} side="left" />);
 
-      const startButton = await screen.findByTestId('autopilot-control-start');
-      expect(startButton).toBeDisabled();
+      expect(screen.queryByTestId('autopilot-control-start')).toBeNull();
 
       const input = screen.getByTestId('chat-input');
       await userEvent.type(input, 'Implement autopilot');
-      await waitFor(() => {
-        expect(screen.getByTestId('autopilot-control-start')).not.toBeDisabled();
-      });
 
-      await userEvent.click(screen.getByTestId('autopilot-control-start'));
+      const { startAutopilot } = getAutopilotHandlers();
+      await act(async () => {
+        await startAutopilot?.();
+      });
 
       await waitFor(() => {
         expect(goalsApi.agentAutopilot).toHaveBeenCalledWith({ projectId: 555, prompt: 'Implement autopilot' });
@@ -942,7 +944,10 @@ describe('ChatPanel - Autopilot Features', () => {
 
       const input = screen.getByTestId('chat-input');
       await userEvent.type(input, 'Ship it');
-      await userEvent.click(screen.getByTestId('autopilot-control-start'));
+      const { startAutopilot } = getAutopilotHandlers();
+      await act(async () => {
+        await startAutopilot?.();
+      });
 
       await waitFor(() => {
         expect(screen.getByTestId('autopilot-control-stop')).toBeInTheDocument();
@@ -1003,7 +1008,10 @@ describe('ChatPanel - Autopilot Features', () => {
 
       const input = screen.getByTestId('chat-input');
       await userEvent.type(input, 'Automate release notes');
-      await userEvent.click(screen.getByTestId('autopilot-control-start'));
+      const { startAutopilot } = getAutopilotHandlers();
+      await act(async () => {
+        await startAutopilot?.();
+      });
 
       await waitFor(() => {
         expect(screen.getByTestId('autopilot-control-stop')).toBeInTheDocument();
@@ -1412,7 +1420,11 @@ describe('ChatPanel - Autopilot Features', () => {
 
       const input = screen.getByTestId('chat-input');
       await userEvent.type(input, 'Start autopilot please');
-      await userEvent.click(screen.getByTestId('autopilot-control-start'));
+
+      const { startAutopilot } = getAutopilotHandlers();
+      await act(async () => {
+        await startAutopilot?.();
+      });
 
       await waitFor(() => {
         expect(screen.getByText('Autopilot session did not return an id.')).toBeInTheDocument();
@@ -1427,7 +1439,11 @@ describe('ChatPanel - Autopilot Features', () => {
 
       const input = screen.getByTestId('chat-input');
       await userEvent.type(input, 'Start autopilot please');
-      await userEvent.click(screen.getByTestId('autopilot-control-start'));
+
+      const { startAutopilot } = getAutopilotHandlers();
+      await act(async () => {
+        await startAutopilot?.();
+      });
 
       await waitFor(() => {
         expect(screen.getByText('Failed to start autopilot.')).toBeInTheDocument();
@@ -1445,7 +1461,11 @@ describe('ChatPanel - Autopilot Features', () => {
 
       const input = screen.getByTestId('chat-input');
       await userEvent.type(input, 'Direct session response');
-      await userEvent.click(screen.getByTestId('autopilot-control-start'));
+
+      const { startAutopilot } = getAutopilotHandlers();
+      await act(async () => {
+        await startAutopilot?.();
+      });
 
       await waitFor(() => {
         expect(goalsApi.agentAutopilotStatus).toHaveBeenCalledWith({ projectId: 901, sessionId: 'session-direct' });
