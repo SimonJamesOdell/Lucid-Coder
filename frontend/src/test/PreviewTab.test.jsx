@@ -42,19 +42,11 @@ describe('PreviewTab', () => {
     vi.clearAllMocks();
   });
 
-  test('shows not-running empty state when process status is unavailable', async () => {
-    const onRestartProject = vi.fn().mockResolvedValue(null);
+  test('attempts to load the preview when process status is unavailable', () => {
+    renderPreviewTab({ processInfo: null });
 
-    renderPreviewTab({ processInfo: null, onRestartProject });
-
-    expect(screen.getByTestId('preview-not-running')).toBeInTheDocument();
-    expect(screen.queryByTestId('preview-iframe')).toBeNull();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Start project' }));
-    });
-
-    expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
+    expect(screen.queryByTestId('preview-not-running')).toBeNull();
+    expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
   });
 
   test('shows not-running empty state and starts project when frontend is idle', async () => {
@@ -240,12 +232,15 @@ describe('PreviewTab', () => {
     });
   });
 
-  test('uses active frontend port from process info when building preview URL', () => {
+  test('builds preview URL using the backend /preview/:projectId proxy', () => {
     const processInfo = buildProcessInfo();
     const { previewRef } = renderPreviewTab({ processInfo });
 
     const url = previewRef.current.getPreviewUrl();
-    expect(url).toContain(':5555');
+
+    const { origin } = window.location;
+    const expectedOrigin = origin.replace(/:(3000|5173)$/, ':5000');
+    expect(url).toBe(`${expectedOrigin}/preview/${mockProject.id}`);
   });
 
   test('normalizeHostname defensively coerces invalid values to localhost', () => {
@@ -257,7 +252,7 @@ describe('PreviewTab', () => {
     expect(previewRef.current.__testHooks.normalizeHostname('devbox')).toBe('devbox');
   });
 
-  test('applyHostnameOverride updates preview URL and reloads iframe', () => {
+  test('applyHostnameOverride updates backend hostname and reloads iframe', () => {
     const processInfo = buildProcessInfo();
     const { previewRef } = renderPreviewTab({ processInfo });
 
@@ -266,13 +261,15 @@ describe('PreviewTab', () => {
     act(() => {
       previewRef.current.__testHooks.applyHostnameOverride('localhost');
     });
-    expect(previewRef.current.getPreviewUrl()).toContain('//localhost:5555');
+    expect(previewRef.current.getPreviewUrl()).toContain(`//localhost`);
+    expect(previewRef.current.getPreviewUrl()).toContain(`/preview/${mockProject.id}`);
     expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(initialKey);
 
     act(() => {
       previewRef.current.__testHooks.applyHostnameOverride('127.0.0.1');
     });
-    expect(previewRef.current.getPreviewUrl()).toContain('//127.0.0.1:5555');
+    expect(previewRef.current.getPreviewUrl()).toContain('//127.0.0.1');
+    expect(previewRef.current.getPreviewUrl()).toContain(`/preview/${mockProject.id}`);
   });
 
   test('returns blank preview when no project is selected', () => {
@@ -293,7 +290,7 @@ describe('PreviewTab', () => {
     });
     const { previewRef } = renderPreviewTab({ processInfo });
 
-    expect(previewRef.current.getPreviewUrl()).toBe('about:blank');
+    expect(previewRef.current.__testHooks.resolveFrontendPort()).toBe(0);
   });
 
   test('uses stored frontend port when active data is missing', () => {
@@ -306,7 +303,7 @@ describe('PreviewTab', () => {
     });
     const { previewRef } = renderPreviewTab({ processInfo });
 
-    expect(previewRef.current.getPreviewUrl()).toContain(':6200');
+    expect(previewRef.current.__testHooks.resolveFrontendPort()).toBe(6200);
   });
 
   test('falls back to preferred frontend port when others are unavailable', () => {
@@ -319,7 +316,7 @@ describe('PreviewTab', () => {
     });
     const { previewRef } = renderPreviewTab({ processInfo });
 
-    expect(previewRef.current.getPreviewUrl()).toContain(':6400');
+    expect(previewRef.current.__testHooks.resolveFrontendPort()).toBe(6400);
   });
 
   test('uses framework defaults when no runtime ports exist', () => {
@@ -329,7 +326,7 @@ describe('PreviewTab', () => {
     };
     const { previewRef } = renderPreviewTab({ project: nextProject, processInfo: null });
 
-    expect(previewRef.current.getPreviewUrl()).toContain(':3000');
+    expect(previewRef.current.__testHooks.resolveFrontendPort()).toBe(3000);
   });
 
   test('falls back to React default when framework is unknown', () => {
@@ -339,7 +336,7 @@ describe('PreviewTab', () => {
     };
     const { previewRef } = renderPreviewTab({ project: customProject, processInfo: null });
 
-    expect(previewRef.current.getPreviewUrl()).toContain(':5173');
+    expect(previewRef.current.__testHooks.resolveFrontendPort()).toBe(5173);
   });
 
   test('falls back to React default when frontend metadata is missing', () => {
@@ -349,7 +346,7 @@ describe('PreviewTab', () => {
     };
     const { previewRef } = renderPreviewTab({ project: projectWithoutMetadata, processInfo: null });
 
-    expect(previewRef.current.getPreviewUrl()).toContain(':5173');
+    expect(previewRef.current.__testHooks.resolveFrontendPort()).toBe(5173);
   });
 
   test('renders URL bar with current preview URL and updates when navigation changes', () => {
@@ -431,6 +428,169 @@ describe('PreviewTab', () => {
     expect(previewRef.current.__testHooks.getDisplayedUrl()).toBe('http://localhost:5555/dashboard');
   });
 
+  test('updates displayed URL when the preview bridge posts navigation messages', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = {};
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/bridge-route' },
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Preview URL')).toHaveValue('http://localhost/bridge-route');
+    });
+    expect(previewRef.current.__testHooks.getDisplayedUrl()).toBe('http://localhost/bridge-route');
+  });
+
+  test('detects proxy placeholder by title', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    Object.defineProperty(iframe, 'contentDocument', {
+      configurable: true,
+      value: { title: 'Preview proxy error', querySelector: vi.fn() }
+    });
+    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+
+    expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(true);
+  });
+
+  test('detects proxy placeholder by heading', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const heading = { textContent: 'Preview unavailable' };
+    Object.defineProperty(iframe, 'contentDocument', {
+      configurable: true,
+      value: { title: '', querySelector: vi.fn(() => heading) }
+    });
+    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+
+    expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(true);
+  });
+
+  test('placeholder detection returns false when iframe is missing', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    previewRef.current.__testHooks.setIframeNodeForTests(null);
+
+    expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(false);
+  });
+
+  test('placeholder detection returns false when contentDocument throws', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    Object.defineProperty(iframe, 'contentDocument', {
+      configurable: true,
+      get: () => {
+        throw new Error('boom');
+      }
+    });
+    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+
+    expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(false);
+  });
+
+  test('keeps loading state when placeholder page loads', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const fakeIframe = {
+      contentDocument: { title: 'Preview proxy error', querySelector: vi.fn() }
+    };
+    previewRef.current.__testHooks.setIframeNodeForTests(fakeIframe);
+
+    act(() => {
+      previewRef.current.__testHooks.triggerIframeLoad();
+    });
+
+    expect(screen.queryByText('Failed to load preview')).toBeNull();
+  });
+
+  test('ignores preview bridge messages when iframe window is unavailable', async () => {
+    const processInfo = buildProcessInfo();
+    renderPreviewTab({ processInfo });
+
+    const input = screen.getByLabelText('Preview URL');
+    const initialValue = input.value;
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/ignored' },
+          source: {}
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Preview URL')).toHaveValue(initialValue);
+    });
+  });
+
+  test('ignores preview bridge messages with invalid payloads', async () => {
+    const processInfo = buildProcessInfo();
+    renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = {};
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const input = screen.getByLabelText('Preview URL');
+    const initialValue = input.value;
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: 'not-an-object',
+          source: iframeWindow
+        })
+      );
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'OTHER_EVENT', href: 'http://localhost/ignored' },
+          source: iframeWindow
+        })
+      );
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: '' },
+          source: iframeWindow
+        })
+      );
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/wrong-source' },
+          source: {}
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Preview URL')).toHaveValue(initialValue);
+    });
+  });
+
   test('iframe error view shows expected URL and recovers on retry', async () => {
     const onRestartProject = vi.fn().mockResolvedValue(null);
     const processInfo = buildProcessInfo();
@@ -502,7 +662,8 @@ describe('PreviewTab', () => {
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Try localhost' }));
       });
-      expect(previewRef.current.getPreviewUrl()).toContain('//localhost:5555');
+      expect(previewRef.current.getPreviewUrl()).toContain('//localhost');
+      expect(previewRef.current.getPreviewUrl()).toContain(`/preview/${mockProject.id}`);
       expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(initialKey);
 
       await act(async () => {
@@ -513,7 +674,8 @@ describe('PreviewTab', () => {
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Try 127.0.0.1' }));
       });
-      expect(previewRef.current.getPreviewUrl()).toContain('//127.0.0.1:5555');
+      expect(previewRef.current.getPreviewUrl()).toContain('//127.0.0.1');
+      expect(previewRef.current.getPreviewUrl()).toContain(`/preview/${mockProject.id}`);
     } finally {
       try {
         Object.defineProperty(window.location, 'hostname', {

@@ -15,6 +15,7 @@ import settingsRoutes from './routes/settings.js';
 import jobRoutes from './routes/jobs.js';
 import goalsRoutes from './routes/goals.js';
 import agentRoutes from './routes/agent.js';
+import { createPreviewProxy } from './routes/previewProxy.js';
 import { attachSocketServer } from './socket/createSocketServer.js';
 import { auditHttpRequestsMiddleware } from './services/auditLog.js';
 import http from 'http';
@@ -190,6 +191,9 @@ app.use(
   agentRoutes
 );
 
+const previewProxy = createPreviewProxy({ logger: console });
+app.use(previewProxy.middleware);
+
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('❌ Server error:', error);
@@ -241,6 +245,8 @@ const startServer = async () => {
       console.error('❌ Server failed to start:', err);
       process.exit(1);
     });
+
+    previewProxy.registerUpgradeHandler(server);
 
     server.listen(port, () => {
       console.log(`🚀 Server is running on http://localhost:${port}`);

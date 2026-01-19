@@ -104,6 +104,7 @@ export const AppStateProvider = ({ children }) => {
   });
   const hydratedProjectFromStorageRef = useRef(false);
   const autoClosedProjectIdRef = useRef(null);
+  const autoStartedProjectIdRef = useRef(null);
   const llmStatusRequestIdRef = useRef(0);
   const [currentProject, setCurrentProject] = useState(null);
   const [projects, setProjects] = useState([]);
@@ -132,6 +133,17 @@ export const AppStateProvider = ({ children }) => {
     status: 'unknown',
     lastError: null
   });
+
+  if (isTestEnv) {
+    __appStateTestHelpers.setAutoStartState = ({ autoStartedProjectId, hydratedProjectFromStorage } = {}) => {
+      if (typeof hydratedProjectFromStorage === 'boolean') {
+        hydratedProjectFromStorageRef.current = hydratedProjectFromStorage;
+      }
+      if (autoStartedProjectId !== undefined) {
+        autoStartedProjectIdRef.current = autoStartedProjectId;
+      }
+    };
+  }
 
   const markTestRunIntent = useCallback((source = 'unknown') => {
     const normalized = typeof source === 'string' ? source.trim() : '';
@@ -692,6 +704,46 @@ export const AppStateProvider = ({ children }) => {
     autoClosedProjectIdRef.current = currentProject.id;
     void closeProject();
   }, [closeProject, currentProject?.id, isLLMConfigured, llmStatusLoaded]);
+
+  // If a project was hydrated from storage and the LLM is ready, auto-start it
+  // so the preview loads after a hard refresh.
+  useEffect(() => {
+    if (!llmStatusLoaded || !isLLMConfigured) {
+      return;
+    }
+
+    const projectSnapshot = currentProject;
+    if (!projectSnapshot?.id || !hydratedProjectFromStorageRef.current) {
+      return;
+    }
+
+    if (autoStartedProjectIdRef.current === projectSnapshot.id) {
+      return;
+    }
+
+    autoStartedProjectIdRef.current = projectSnapshot.id;
+    hydratedProjectFromStorageRef.current = false;
+
+    void selectProjectWithProcesses({
+      project: projectSnapshot,
+      currentProject: projectSnapshot,
+      closeProject,
+      setCurrentProject,
+      fetchProjectGitSettings,
+      trackedFetch,
+      applyProcessSnapshot,
+      refreshProcessStatus
+    });
+  }, [
+    applyProcessSnapshot,
+    closeProject,
+    currentProject,
+    fetchProjectGitSettings,
+    isLLMConfigured,
+    llmStatusLoaded,
+    refreshProcessStatus,
+    trackedFetch
+  ]);
 
   const stopProject = useCallback(
     (projectId = currentProject?.id) => stopProjectProcesses({

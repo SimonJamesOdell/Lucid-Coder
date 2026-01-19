@@ -21,6 +21,31 @@ const PreviewTab = forwardRef(
   const loadTimeoutRef = useRef(null);
   const iframeRef = useRef(null);
 
+  const guessBackendOrigin = () => {
+    if (typeof window === 'undefined') {
+      return '';
+    }
+
+    const origin = window.location?.origin || '';
+    const hostname = window.location?.hostname || 'localhost';
+    const protocol = window.location?.protocol || 'http:';
+    const port = window.location?.port || '';
+
+    const resolvedHostname = normalizeHostname(hostnameOverride || hostname);
+
+    // Dev default: the LucidCoder frontend runs on 3000 and the backend runs on 5000.
+    if ((port === '3000' || port === '5173') && resolvedHostname) {
+      return `${protocol}//${resolvedHostname}:5000`;
+    }
+
+    if (hostnameOverride) {
+      const suffix = port ? `:${port}` : '';
+      return `${protocol}//${resolvedHostname}${suffix}`;
+    }
+
+    return origin;
+  };
+
   useEffect(() => {
     return () => {
       if (reloadTimeoutRef.current) {
@@ -55,7 +80,15 @@ const PreviewTab = forwardRef(
     (frontendDisplayStatus === 'running' || frontendDisplayStatus === 'starting')
   );
 
-  const showNotRunningState = Boolean(project?.id && onRestartProject && !isFrontendReadyForPreview);
+  // When processInfo is missing or stale (e.g. right after a hard refresh or project switch),
+  // treat the runtime status as "unknown" and attempt to load the preview anyway.
+  // The backend preview proxy will return a clear "Preview unavailable" response if needed.
+  const showNotRunningState = Boolean(
+    project?.id &&
+      onRestartProject &&
+      isProcessInfoCurrent &&
+      !isFrontendReadyForPreview
+  );
   const resolvePortValue = (portBundle, key) => {
     if (!portBundle) {
       return null;
@@ -95,20 +128,20 @@ const PreviewTab = forwardRef(
     return trimmed;
   };
 
-  const getFrontendUrl = () => {
-    if (!project) return 'about:blank';
-
-    const port = chooseFrontendPort();
-    if (!port) {
+  const getPreviewProxyUrl = () => {
+    if (!project?.id) {
       return 'about:blank';
     }
 
-    const currentHostname = normalizeHostname(window.location.hostname);
-    const hostname = normalizeHostname(hostnameOverride || currentHostname);
-    return `${window.location.protocol}//${hostname}:${port}`;
+    const backendOrigin = guessBackendOrigin();
+    if (!backendOrigin) {
+      return 'about:blank';
+    }
+
+    return `${backendOrigin}/preview/${encodeURIComponent(project.id)}`;
   };
 
-  const previewUrl = previewUrlOverride ?? getFrontendUrl();
+  const previewUrl = previewUrlOverride ?? getPreviewProxyUrl();
   const [displayedUrl, setDisplayedUrl] = useState(previewUrl);
   const previewUrlRef = useRef(previewUrl);
   const displayedUrlRef = useRef(previewUrl);
@@ -146,6 +179,59 @@ const PreviewTab = forwardRef(
       // Ignore cross-origin access errors. We fall back to the last known preview URL.
     }
   }, [setDisplayedUrl]);
+
+  const isLucidCoderProxyPlaceholderPage = () => {
+    const iframe = iframeRef.current;
+    if (!iframe) {
+      return false;
+    }
+
+    try {
+      const doc = iframe.contentDocument;
+      const title = typeof doc?.title === 'string' ? doc.title : '';
+      if (/^preview proxy error$/i.test(title) || /^preview unavailable$/i.test(title)) {
+        return true;
+      }
+
+      const h1 = doc?.querySelector?.('h1');
+      const headingText = typeof h1?.textContent === 'string' ? h1.textContent : '';
+      return /^preview proxy error$/i.test(headingText) || /^preview unavailable$/i.test(headingText);
+    } catch {
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handleMessage = (event) => {
+      const iframeWindow = iframeRef.current?.contentWindow;
+      if (!iframeWindow || event.source !== iframeWindow) {
+        return;
+      }
+
+      const payload = event.data;
+      if (!payload || typeof payload !== 'object') {
+        return;
+      }
+
+      if (payload.type !== 'LUCIDCODER_PREVIEW_NAV') {
+        return;
+      }
+
+      const href = payload.href;
+      if (typeof href === 'string' && href && href !== displayedUrlRef.current) {
+        setDisplayedUrl(href);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, []);
 
   const ensureNavigationPolling = () => {
     if (
@@ -196,6 +282,15 @@ const PreviewTab = forwardRef(
   };
 
   const handleIframeLoad = () => {
+    // If the preview proxy is still warming up, it may briefly serve a same-origin
+    // placeholder page that auto-reloads. Keep the loading overlay up so users don't
+    // see error-page flashes while the dev server comes online.
+    if (isLucidCoderProxyPlaceholderPage()) {
+      setIframeError(false);
+      setIframeLoading(true);
+      return;
+    }
+
     clearLoadTimeout();
     setIframeLoading(false);
     setIframeError(false);
@@ -260,7 +355,8 @@ const PreviewTab = forwardRef(
   useImperativeHandle(ref, () => ({
     reloadPreview: reloadIframe,
     restartProject: handleRestartProject,
-    getPreviewUrl: () => getFrontendUrl(),
+    getPreviewUrl: () => previewUrlRef.current,
+    getDisplayedUrl: () => displayedUrlRef.current,
     __testHooks: {
       triggerIframeError: handleIframeError,
       triggerIframeLoad: handleIframeLoad,
@@ -274,6 +370,7 @@ const PreviewTab = forwardRef(
       setIframeNodeForTests: (node) => {
         iframeRef.current = node;
       },
+      isProxyPlaceholderPageForTests: () => isLucidCoderProxyPlaceholderPage(),
       updateDisplayedUrlFromIframe,
       startNavigationPollingForTests: () => ensureNavigationPolling()
     }
@@ -418,7 +515,7 @@ const PreviewTab = forwardRef(
         <iframe
           ref={iframeRef}
           data-testid="preview-iframe"
-          className="full-iframe"
+          className={`full-iframe${iframeLoading ? ' full-iframe--loading' : ''}`}
           key={iframeKey}
           src={previewUrl}
           title={`${project?.name || 'Project'} Preview`}

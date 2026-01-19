@@ -1054,8 +1054,166 @@ describe('AppStateContext integrations', () => {
     });
 
     await waitFor(() => {
+      const started = fetchMock.mock.calls.some(([url, options]) =>
+        typeof url === 'string' &&
+        url.includes('/api/projects/proj-boot/start') &&
+        options?.method === 'POST'
+      );
+      expect(started).toBe(true);
+    });
+
+    await waitFor(() => {
       expect(result.current.jobState.error).toBe('Failed to load jobs');
     });
+  });
+
+  test('auto-starts a hydrated project only once', async () => {
+    localStorage.setItem('currentProject', JSON.stringify({ id: 'proj-once', name: 'Once Project' }));
+
+    fetchMock.mockImplementation((url, options) => {
+      if (url === '/api/llm/status') {
+        return Promise.resolve(createResponse(true, {
+          success: true,
+          configured: true,
+          ready: true,
+          config: {
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            api_url: 'https://api.openai.com/v1',
+            requires_api_key: true,
+            has_api_key: true
+          }
+        }));
+      }
+      if (url === '/api/projects') {
+        return Promise.resolve(createResponse(true, { success: true, projects: [] }));
+      }
+      if (url === '/api/settings/git') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (url === '/api/settings/ports') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-once/git-settings')) {
+        return Promise.resolve(createResponse(true, { success: true, inheritsFromGlobal: true, projectSettings: null, settings: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-once/start')) {
+        return Promise.resolve(createResponse(true, { success: true, message: 'started', processes: { frontend: { status: 'starting' } } }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-once/processes')) {
+        return Promise.resolve(createResponse(true, { success: true, projectId: 'proj-once', processes: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-once/jobs')) {
+        return Promise.resolve(createResponse(true, { success: true, jobs: [] }));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.currentProject?.id).toBe('proj-once');
+    });
+
+    await waitFor(() => {
+      const starts = fetchMock.mock.calls.filter(([url, options]) =>
+        typeof url === 'string' &&
+        url.includes('/api/projects/proj-once/start') &&
+        options?.method === 'POST'
+      );
+      expect(starts).toHaveLength(1);
+    });
+
+    await act(async () => {
+      await result.current.refreshLLMStatus();
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLLMConfigured).toBe(true);
+    });
+
+    const repeatedStarts = fetchMock.mock.calls.filter(([url, options]) =>
+      typeof url === 'string' &&
+      url.includes('/api/projects/proj-once/start') &&
+      options?.method === 'POST'
+    );
+    expect(repeatedStarts).toHaveLength(1);
+  });
+
+  test('auto-start guard skips when project already started', async () => {
+    localStorage.setItem('currentProject', JSON.stringify({ id: 'proj-guard', name: 'Guard Project' }));
+
+    fetchMock.mockImplementation((url, options) => {
+      if (url === '/api/llm/status') {
+        return Promise.resolve(createResponse(true, {
+          success: true,
+          configured: true,
+          ready: true,
+          config: {
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            api_url: 'https://api.openai.com/v1',
+            requires_api_key: true,
+            has_api_key: true
+          }
+        }));
+      }
+      if (url === '/api/projects') {
+        return Promise.resolve(createResponse(true, { success: true, projects: [] }));
+      }
+      if (url === '/api/settings/git') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (url === '/api/settings/ports') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-guard/git-settings')) {
+        return Promise.resolve(createResponse(true, { success: true, inheritsFromGlobal: true, projectSettings: null, settings: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-guard/start')) {
+        return Promise.resolve(createResponse(true, { success: true, message: 'started', processes: { frontend: { status: 'starting' } } }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-guard/processes')) {
+        return Promise.resolve(createResponse(true, { success: true, projectId: 'proj-guard', processes: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-guard/jobs')) {
+        return Promise.resolve(createResponse(true, { success: true, jobs: [] }));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.currentProject?.id).toBe('proj-guard');
+    });
+
+    await waitFor(() => {
+      const starts = fetchMock.mock.calls.filter(([url, options]) =>
+        typeof url === 'string' &&
+        url.includes('/api/projects/proj-guard/start') &&
+        options?.method === 'POST'
+      );
+      expect(starts).toHaveLength(1);
+    });
+
+    act(() => {
+      __appStateTestHelpers.setAutoStartState({
+        autoStartedProjectId: 'proj-guard',
+        hydratedProjectFromStorage: true
+      });
+    });
+
+    await act(async () => {
+      await result.current.refreshLLMStatus();
+    });
+
+    const repeatedStarts = fetchMock.mock.calls.filter(([url, options]) =>
+      typeof url === 'string' &&
+      url.includes('/api/projects/proj-guard/start') &&
+      options?.method === 'POST'
+    );
+    expect(repeatedStarts).toHaveLength(1);
   });
 
   test('initial load closes hydrated currentProject when LLM is not configured', async () => {

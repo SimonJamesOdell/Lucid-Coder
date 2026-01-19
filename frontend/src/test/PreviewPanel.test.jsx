@@ -17,6 +17,7 @@ vi.mock('../utils/agentUiBridge', () => ({
 const reloadPreviewMock = vi.fn();
 const restartProjectMock = vi.fn();
 const getPreviewUrlMock = vi.fn(() => 'http://localhost:5173');
+const getDisplayedUrlMock = vi.fn(() => null);
 const filesTabControls = {
   onFileSaved: null,
   registerSaveHandler: null
@@ -45,7 +46,8 @@ vi.mock('../components/PreviewTab', () => ({
     useImperativeHandle(ref, () => ({
       reloadPreview: reloadPreviewMock,
       restartProject: restartProjectMock,
-      getPreviewUrl: getPreviewUrlMock
+      getPreviewUrl: getPreviewUrlMock,
+      getDisplayedUrl: getDisplayedUrlMock
     }));
     return <div data-testid="mock-preview-tab" />;
   })
@@ -143,6 +145,8 @@ describe('PreviewPanel', () => {
     restartProjectMock.mockClear();
     getPreviewUrlMock.mockClear();
     getPreviewUrlMock.mockReturnValue('http://localhost:5173');
+    getDisplayedUrlMock.mockClear();
+    getDisplayedUrlMock.mockReturnValue(null);
     filesTabControls.onFileSaved = null;
     filesTabControls.registerSaveHandler = null;
     testTabControls.register = null;
@@ -898,8 +902,27 @@ describe('PreviewPanel', () => {
   });
 
   test('opens preview in new tab when button is clicked', async () => {
+    getDisplayedUrlMock.mockReturnValue('http://localhost:5173/about');
     useAppState.mockReturnValue(
       createAppState({ currentProject: { id: 1, name: 'Test Project' } })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    const button = screen.getByTestId('open-preview-tab');
+    expect(button).toBeEnabled();
+
+    await user.click(button);
+
+    expect(window.open).toHaveBeenCalledWith('http://localhost:5173/about', '_blank', 'noopener,noreferrer');
+  });
+
+  test('opens preview url when displayed url is unavailable', async () => {
+    getDisplayedUrlMock.mockReturnValue(null);
+    getPreviewUrlMock.mockReturnValue('http://localhost:5173');
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 101, name: 'Fallback Project' } })
     );
 
     const user = userEvent.setup();
@@ -914,6 +937,7 @@ describe('PreviewPanel', () => {
   });
 
   test('does not open a new tab when preview URL is blank', async () => {
+    getDisplayedUrlMock.mockReturnValue(null);
     getPreviewUrlMock.mockReturnValue('about:blank');
     useAppState.mockReturnValue(
       createAppState({ currentProject: { id: 2, name: 'No Preview' } })

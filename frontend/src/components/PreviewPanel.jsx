@@ -362,7 +362,9 @@ const PreviewPanel = () => {
       return;
     }
 
-    const targetUrl = previewRef.current.getPreviewUrl?.();
+    const targetUrl =
+      previewRef.current.getDisplayedUrl?.() ||
+      previewRef.current.getPreviewUrl?.();
     if (!targetUrl || targetUrl === 'about:blank') {
       return;
     }
