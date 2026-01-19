@@ -508,6 +508,34 @@ describe('PreviewTab', () => {
     expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(false);
   });
 
+  test('clears pending error confirmation on load', () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+
+      act(() => {
+        previewRef.current.__testHooks.setHasConfirmedPreviewForTests(true);
+      });
+
+      act(() => {
+        previewRef.current.__testHooks.triggerIframeError();
+      });
+
+      const callsAfterError = clearTimeoutSpy.mock.calls.length;
+
+      act(() => {
+        previewRef.current.__testHooks.triggerIframeLoad();
+      });
+
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(callsAfterError);
+    } finally {
+      vi.useRealTimers();
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+
   test('keeps loading state when placeholder page loads', () => {
     const processInfo = buildProcessInfo();
     const { previewRef } = renderPreviewTab({ processInfo });
@@ -522,6 +550,41 @@ describe('PreviewTab', () => {
     });
 
     expect(screen.queryByText('Failed to load preview')).toBeNull();
+  });
+
+  test('setErrorGracePeriod handles non-finite values', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(5000);
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorGracePeriodForTests(Number.NaN);
+    });
+
+    expect(previewRef.current.__testHooks.getErrorGraceUntilForTests()).toBe(5000);
+
+    nowSpy.mockRestore();
+  });
+
+  test('clears error confirmation timeout on unmount', () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef, unmount } = renderPreviewTab({ processInfo });
+
+      act(() => {
+        previewRef.current.__testHooks.triggerIframeError();
+      });
+
+      const callsBeforeUnmount = clearTimeoutSpy.mock.calls.length;
+      unmount();
+
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(callsBeforeUnmount);
+    } finally {
+      vi.useRealTimers();
+      clearTimeoutSpy.mockRestore();
+    }
   });
 
   test('ignores preview bridge messages when iframe window is unavailable', async () => {
@@ -592,50 +655,56 @@ describe('PreviewTab', () => {
   });
 
   test('iframe error view shows expected URL and recovers on retry', async () => {
-    const onRestartProject = vi.fn().mockResolvedValue(null);
-    const processInfo = buildProcessInfo();
-    const { previewRef } = renderPreviewTab({ onRestartProject, processInfo });
+    vi.useFakeTimers();
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    window.setInterval = vi.fn(() => 1);
+    window.clearInterval = vi.fn();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
 
-    await act(async () => {
-      previewRef.current.__testHooks.triggerIframeError();
-    });
+      act(() => {
+        previewRef.current.__testHooks.setHasConfirmedPreviewForTests(true);
+      });
 
-    await waitFor(() => {
+      await act(async () => {
+        previewRef.current.__testHooks.triggerIframeError();
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(1200);
+      });
+
+      act(() => {
+        previewRef.current.__testHooks.setHasConfirmedPreviewForTests(true);
+      });
+
       expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-    });
 
-    expect(screen.getByText(/didn.?t finish loading|blocks embedding|unreachable/i)).toBeInTheDocument();
+      expect(screen.getByText(/didn.?t finish loading|blocks embedding|unreachable/i)).toBeInTheDocument();
 
-    const expectedUrl = previewRef.current.getPreviewUrl();
-    expect(screen.getByText((_, element) => element?.tagName === 'CODE' && element.textContent === expectedUrl)).toBeTruthy();
+      const expectedUrl = previewRef.current.getPreviewUrl();
+      expect(screen.getByText((_, element) => element?.tagName === 'CODE' && element.textContent === expectedUrl)).toBeTruthy();
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Restart project' }));
-    });
+      await act(async () => {
+        fireEvent.click(screen.getByText('Retry'));
+      });
 
-    expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
-    await waitFor(() => {
-      expect(screen.getByTestId('preview-status')).toBeInTheDocument();
-    });
-    expect(
-      screen.getByText(/restarting project|project restarted/i)
-    ).toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('Retry'));
-    });
-
-    await waitFor(() => {
       expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
-    });
 
-    await act(async () => {
-      previewRef.current.__testHooks.triggerIframeLoad();
-    });
-    expect(screen.queryByText('Failed to load preview')).not.toBeInTheDocument();
+      await act(async () => {
+        previewRef.current.__testHooks.triggerIframeLoad();
+      });
+      expect(screen.queryByText('Failed to load preview')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
   });
 
-  test('iframe error view suggests localhost alternatives when hostname is not localhost', async () => {
+  test('applyHostnameOverride suggests localhost alternatives when hostname is not localhost', async () => {
     const originalHostname = window.location.hostname;
     try {
       try {
@@ -651,31 +720,80 @@ describe('PreviewTab', () => {
       const processInfo = buildProcessInfo();
       const { previewRef } = renderPreviewTab({ processInfo });
 
-      await act(async () => {
-        previewRef.current.__testHooks.triggerIframeError();
-      });
-
-      expect(await screen.findByText('Failed to load preview')).toBeInTheDocument();
-
       const initialKey = previewRef.current.__testHooks.getIframeKey();
 
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Try localhost' }));
+      act(() => {
+        previewRef.current.__testHooks.applyHostnameOverride('localhost');
       });
       expect(previewRef.current.getPreviewUrl()).toContain('//localhost');
       expect(previewRef.current.getPreviewUrl()).toContain(`/preview/${mockProject.id}`);
       expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(initialKey);
 
-      await act(async () => {
-        previewRef.current.__testHooks.triggerIframeError();
+      const nextKey = previewRef.current.__testHooks.getIframeKey();
+
+      act(() => {
+        previewRef.current.__testHooks.applyHostnameOverride('127.0.0.1');
       });
-      expect(await screen.findByText('Failed to load preview')).toBeInTheDocument();
+      expect(previewRef.current.getPreviewUrl()).toContain('//127.0.0.1');
+      expect(previewRef.current.getPreviewUrl()).toContain(`/preview/${mockProject.id}`);
+      expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(nextKey);
+    } finally {
+      try {
+        Object.defineProperty(window.location, 'hostname', {
+          configurable: true,
+          value: originalHostname
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test('error view renders localhost alternative buttons', async () => {
+    const originalHostname = window.location.hostname;
+    try {
+      try {
+        Object.defineProperty(window.location, 'hostname', {
+          configurable: true,
+          value: 'devbox'
+        });
+      } catch {
+        window.location.hostname = 'devbox';
+      }
+
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({
+          error: true,
+          loading: false,
+          pending: false
+        });
+      });
+
+      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+
+      expect(screen.getByRole('button', { name: 'Try localhost' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Try 127.0.0.1' })).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Try localhost' }));
+      });
+      expect(previewRef.current.getPreviewUrl()).toContain('//localhost');
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({
+          error: true,
+          loading: false,
+          pending: false
+        });
+      });
 
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Try 127.0.0.1' }));
       });
       expect(previewRef.current.getPreviewUrl()).toContain('//127.0.0.1');
-      expect(previewRef.current.getPreviewUrl()).toContain(`/preview/${mockProject.id}`);
     } finally {
       try {
         Object.defineProperty(window.location, 'hostname', {
@@ -696,6 +814,10 @@ describe('PreviewTab', () => {
 
       await act(async () => {
         vi.advanceTimersByTime(8000);
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(1200);
       });
 
       expect(screen.getByText('Failed to load preview')).toBeInTheDocument();

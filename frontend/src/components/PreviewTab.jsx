@@ -12,6 +12,8 @@ const PreviewTab = forwardRef(
   ({ project, processInfo, onRestartProject }, ref) => {
   const [iframeError, setIframeError] = useState(false);
   const [iframeLoading, setIframeLoading] = useState(false);
+  const [pendingIframeError, setPendingIframeError] = useState(false);
+  const [hasConfirmedPreview, setHasConfirmedPreview] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
   const [restartStatus, setRestartStatus] = useState(null);
   const [startInFlight, setStartInFlight] = useState(false);
@@ -19,6 +21,8 @@ const PreviewTab = forwardRef(
   const [previewUrlOverride, setPreviewUrlOverride] = useState(null);
   const reloadTimeoutRef = useRef(null);
   const loadTimeoutRef = useRef(null);
+  const errorConfirmTimeoutRef = useRef(null);
+  const errorGraceUntilRef = useRef(0);
   const iframeRef = useRef(null);
 
   const guessBackendOrigin = () => {
@@ -56,6 +60,11 @@ const PreviewTab = forwardRef(
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
+      }
+
+      if (errorConfirmTimeoutRef.current) {
+        clearTimeout(errorConfirmTimeoutRef.current);
+        errorConfirmTimeoutRef.current = null;
       }
     };
   }, []);
@@ -154,6 +163,7 @@ const PreviewTab = forwardRef(
     if (previewUrl !== previewUrlRef.current) {
       previewUrlRef.current = previewUrl;
       setDisplayedUrl(previewUrl);
+      setHasConfirmedPreview(false);
     }
   }, [previewUrl]);
 
@@ -162,6 +172,36 @@ const PreviewTab = forwardRef(
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
     }
+  };
+
+  const clearErrorConfirmTimeout = () => {
+    if (errorConfirmTimeoutRef.current) {
+      clearTimeout(errorConfirmTimeoutRef.current);
+      errorConfirmTimeoutRef.current = null;
+    }
+  };
+
+  const setErrorGracePeriod = (durationMs) => {
+    const safeDuration = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
+    errorGraceUntilRef.current = Date.now() + safeDuration;
+  };
+
+  const scheduleErrorConfirmation = () => {
+    setIframeLoading(true);
+    setPendingIframeError(true);
+    clearErrorConfirmTimeout();
+
+    const now = Date.now();
+    const graceUntil = errorGraceUntilRef.current || 0;
+    const graceDelay = Math.max(0, graceUntil - now);
+    const confirmDelay = graceDelay + 1200;
+
+    errorConfirmTimeoutRef.current = setTimeout(() => {
+      errorConfirmTimeoutRef.current = null;
+      setPendingIframeError(false);
+      setIframeLoading(false);
+      setIframeError(true);
+    }, confirmDelay);
   };
 
   const updateDisplayedUrlFromIframe = useCallback(() => {
@@ -225,6 +265,8 @@ const PreviewTab = forwardRef(
       if (typeof href === 'string' && href && href !== displayedUrlRef.current) {
         setDisplayedUrl(href);
       }
+
+      setHasConfirmedPreview(true);
     };
 
     window.addEventListener('message', handleMessage);
@@ -253,21 +295,23 @@ const PreviewTab = forwardRef(
 
   useEffect(() => {
     clearLoadTimeout();
-    setIframeLoading(false);
+    clearErrorConfirmTimeout();
+    setPendingIframeError(false);
 
     if (showNotRunningState || iframeError) {
+      setIframeLoading(false);
       return;
     }
 
     if (!previewUrl || previewUrl === 'about:blank') {
+      setIframeLoading(false);
       return;
     }
 
     setIframeLoading(true);
     loadTimeoutRef.current = setTimeout(() => {
       loadTimeoutRef.current = null;
-      setIframeLoading(false);
-      setIframeError(true);
+      scheduleErrorConfirmation();
     }, 8000);
 
     return () => {
@@ -277,8 +321,7 @@ const PreviewTab = forwardRef(
 
   const handleIframeError = () => {
     clearLoadTimeout();
-    setIframeLoading(false);
-    setIframeError(true);
+    scheduleErrorConfirmation();
   };
 
   const handleIframeLoad = () => {
@@ -288,19 +331,28 @@ const PreviewTab = forwardRef(
     if (isLucidCoderProxyPlaceholderPage()) {
       setIframeError(false);
       setIframeLoading(true);
+      setPendingIframeError(false);
+      clearErrorConfirmTimeout();
       return;
     }
 
     clearLoadTimeout();
+    clearErrorConfirmTimeout();
     setIframeLoading(false);
     setIframeError(false);
+    setPendingIframeError(false);
+    errorGraceUntilRef.current = 0;
     updateDisplayedUrlFromIframe();
   };
 
   const reloadIframe = () => {
     setRestartStatus(null);
     setIframeError(false);
-    setIframeLoading(false);
+    setIframeLoading(true);
+    setPendingIframeError(false);
+    clearErrorConfirmTimeout();
+    setErrorGracePeriod(4000);
+    setHasConfirmedPreview(false);
     setIframeKey((prev) => prev + 1);
   };
 
@@ -325,6 +377,9 @@ const PreviewTab = forwardRef(
     }
 
     setRestartStatus({ type: 'info', message: 'Restarting project…' });
+    setIframeLoading(true);
+    setErrorGracePeriod(4000);
+    setHasConfirmedPreview(false);
 
     try {
       await onRestartProject(project.id);
@@ -339,6 +394,9 @@ const PreviewTab = forwardRef(
   const handleStartProject = async () => {
     setStartInFlight(true);
     setRestartStatus({ type: 'info', message: 'Starting project…' });
+    setIframeLoading(true);
+    setErrorGracePeriod(4000);
+    setHasConfirmedPreview(false);
 
     try {
       await onRestartProject(project.id);
@@ -371,6 +429,24 @@ const PreviewTab = forwardRef(
         iframeRef.current = node;
       },
       isProxyPlaceholderPageForTests: () => isLucidCoderProxyPlaceholderPage(),
+      setHasConfirmedPreviewForTests: (value) => {
+        setHasConfirmedPreview(Boolean(value));
+      },
+      setErrorGracePeriodForTests: (value) => {
+        setErrorGracePeriod(value);
+      },
+      getErrorGraceUntilForTests: () => errorGraceUntilRef.current,
+      setErrorStateForTests: ({ error, loading, pending } = {}) => {
+        if (typeof error === 'boolean') {
+          setIframeError(error);
+        }
+        if (typeof loading === 'boolean') {
+          setIframeLoading(loading);
+        }
+        if (typeof pending === 'boolean') {
+          setPendingIframeError(pending);
+        }
+      },
       updateDisplayedUrlFromIframe,
       startNavigationPollingForTests: () => ensureNavigationPolling()
     }
@@ -413,7 +489,7 @@ const PreviewTab = forwardRef(
     );
   }
 
-  if (iframeError) {
+  if (iframeError && !iframeLoading && !pendingIframeError) {
     const expectedUrl = previewUrl;
     const canRestart = Boolean(project?.id && onRestartProject);
 
@@ -515,7 +591,7 @@ const PreviewTab = forwardRef(
         <iframe
           ref={iframeRef}
           data-testid="preview-iframe"
-          className={`full-iframe${iframeLoading ? ' full-iframe--loading' : ''}`}
+          className={`full-iframe${iframeLoading || pendingIframeError || !hasConfirmedPreview ? ' full-iframe--loading' : ''}`}
           key={iframeKey}
           src={previewUrl}
           title={`${project?.name || 'Project'} Preview`}
