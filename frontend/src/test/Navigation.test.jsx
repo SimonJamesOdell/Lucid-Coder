@@ -74,6 +74,13 @@ describe('Navigation Component', () => {
     expect(screen.getByText('Lucid Coder')).toBeInTheDocument();
   });
 
+  test('renders version badge when provided', () => {
+    useAppState.mockReturnValue(baseState());
+    render(<Navigation versionLabel="0.1.0" />);
+
+    expect(screen.getByTestId('nav-version')).toHaveTextContent('v0.1.0');
+  });
+
   test('shows disabled dropdowns when LLM not configured', () => {
     renderNavigation({
       isLLMConfigured: false,

@@ -11,7 +11,7 @@ vi.mock('../context/AppStateContext', () => ({
 }))
 
 vi.mock('../components/Navigation', () => ({
-  default: () => <div data-testid="nav" />
+  default: (props) => <div data-testid="nav" data-version={props?.versionLabel || ''} />
 }))
 
 vi.mock('../components/StatusPanel', () => ({
@@ -41,6 +41,9 @@ describe('App coverage branches', () => {
     global.fetch = vi.fn((url) => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -83,6 +86,9 @@ describe('App coverage branches', () => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false }) })
       }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+      }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
 
@@ -99,6 +105,9 @@ describe('App coverage branches', () => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: true, status: 200, json: async () => 'not-an-object' })
       }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+      }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
 
@@ -114,6 +123,9 @@ describe('App coverage branches', () => {
       if (url === '/api/health') {
         return Promise.reject(abortError)
       }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+      }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
 
@@ -127,6 +139,9 @@ describe('App coverage branches', () => {
     global.fetch = vi.fn((url) => {
       if (url === '/api/health') {
         return Promise.reject({})
+      }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -227,6 +242,88 @@ describe('App coverage branches', () => {
 
     view.rerender(<App />)
     expect(await screen.findByTestId('project-inspector')).toBeInTheDocument()
+  })
+
+  test('passes backend version label to navigation when /api/version responds', async () => {
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', '0.1.0')
+    })
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/version', expect.any(Object))
+  })
+
+  test('falls back to versionFile when /api/version omits version', async () => {
+    global.fetch = vi.fn((url) => {
+      if (url === '/api/health') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ versionFile: '0.1.0' }) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    })
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', '0.1.0')
+    })
+  })
+
+  test('keeps navigation version empty when /api/version is non-OK', async () => {
+    global.fetch = vi.fn((url) => {
+      if (url === '/api/health') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false }) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    })
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', '')
+    })
+  })
+
+  test('keeps navigation version empty when /api/version returns invalid JSON', async () => {
+    global.fetch = vi.fn((url) => {
+      if (url === '/api/health') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => 'not-an-object' })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    })
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', '')
+    })
+  })
+
+  test('keeps navigation version empty when /api/version fetch rejects', async () => {
+    global.fetch = vi.fn((url) => {
+      if (url === '/api/health') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      }
+      if (url === '/api/version') {
+        return Promise.reject(new Error('nope'))
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    })
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', '')
+    })
   })
 
   test('shows the persistent backend-offline banner while the app is otherwise usable', async () => {

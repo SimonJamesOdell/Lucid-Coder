@@ -34,6 +34,8 @@ function AppContent() {
     error: null
   });
 
+  const [backendVersionLabel, setBackendVersionLabel] = useState(null);
+
   const checkBackendNow = useCallback(async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1500);
@@ -74,6 +76,51 @@ function AppContent() {
   useEffect(() => {
     checkBackendNow();
   }, [checkBackendNow]);
+
+  useEffect(() => {
+    if (backendCheck.status !== 'online') {
+      setBackendVersionLabel(null);
+      return;
+    }
+
+    let didCancel = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1500);
+
+    (async () => {
+      try {
+        const response = await fetch('/api/version', { signal: controller.signal });
+        if (!response.ok) {
+          return;
+        }
+
+        const data = await response.json().catch(() => null);
+        if (!data || typeof data !== 'object') {
+          return;
+        }
+
+        const candidate = typeof data?.version === 'string'
+          ? data.version
+          : typeof data?.versionFile === 'string'
+            ? data.versionFile
+            : null;
+
+        if (!didCancel) {
+          setBackendVersionLabel(candidate);
+        }
+      } catch (error) {
+        // Ignore version probe errors.
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
+
+    return () => {
+      didCancel = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [backendCheck.status]);
 
   const showBackendOfflineBanner = backendConnectivity?.status === 'offline';
   const backendIsOnline = backendConnectivity?.status === 'online';
@@ -205,7 +252,7 @@ function AppContent() {
 
   return (
     <div className="App">
-      <Navigation />
+      <Navigation versionLabel={backendVersionLabel} />
       {showBackendOfflineBanner && (
         <div className="backend-offline-overlay" role="alert" aria-live="assertive" data-testid="backend-offline-overlay">
           <div className="backend-offline-overlay-panel">

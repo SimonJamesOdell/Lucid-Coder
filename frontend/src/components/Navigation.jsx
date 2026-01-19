@@ -8,7 +8,7 @@ import PortSettingsModal from './PortSettingsModal';
 import LLMConfigModal from './LLMConfigModal';
 import './Navigation.css';
 
-const Navigation = () => {
+const Navigation = ({ versionLabel = null }) => {
   const {
     isLLMConfigured,
     currentProject,
@@ -133,6 +133,9 @@ const Navigation = () => {
     <nav className="navigation">
       <div className="nav-left">
         <h1 className="nav-title">Lucid Coder</h1>
+        {versionLabel ? (
+          <span className="nav-version" data-testid="nav-version">v{versionLabel}</span>
+        ) : null}
         
         <Dropdown 
           title="Projects" 

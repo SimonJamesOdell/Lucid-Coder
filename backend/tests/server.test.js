@@ -1,6 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 
+const readFileSyncMock = vi.hoisted(() => vi.fn());
+vi.mock('node:fs', () => ({
+  readFileSync: readFileSyncMock
+}));
+
 const httpServerStub = vi.hoisted(() => ({
   close: vi.fn(),
   on: vi.fn(),
@@ -118,6 +123,7 @@ describe('server bootstrap and middleware', () => {
     llmClientStub.initialize.mockReset();
     llmClientStub.config = null;
     attachSocketServerMock.mockReset();
+    readFileSyncMock.mockReset();
     routerStub.mockImplementation((req, res, next) => next());
     createServerMock.mockClear();
     httpServerStub.close.mockReset();
@@ -155,6 +161,56 @@ describe('server bootstrap and middleware', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.llm).toBe('not configured');
+  });
+
+  test('version endpoint reports the repo versions', async () => {
+    readFileSyncMock.mockImplementation((filePath) => {
+      const normalized = String(filePath).replace(/\\/g, '/');
+
+      if (normalized.endsWith('/VERSION')) {
+        return '0.1.0\n';
+      }
+
+      if (normalized.endsWith('/frontend/package.json')) {
+        return JSON.stringify({ name: 'lucidcoder-frontend', version: '0.1.0' });
+      }
+
+      if (normalized.endsWith('/backend/package.json')) {
+        return JSON.stringify({ name: 'lucidcoder-backend', version: '0.1.0' });
+      }
+
+      if (normalized.endsWith('/package.json')) {
+        return JSON.stringify({ name: 'lucidcoder', version: '0.1.0' });
+      }
+
+      return '';
+    });
+
+    const response = await request(app).get('/api/version');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(expect.objectContaining({
+      success: true,
+      version: '0.1.0',
+      versionFile: '0.1.0'
+    }));
+    expect(response.body.root).toEqual({ name: 'lucidcoder', version: '0.1.0' });
+    expect(response.body.backend).toEqual({ name: 'lucidcoder-backend', version: '0.1.0' });
+    expect(response.body.frontend).toEqual({ name: 'lucidcoder-frontend', version: '0.1.0' });
+  });
+
+  test('version endpoint returns 500 when reading versions fails', async () => {
+    readFileSyncMock.mockImplementation(() => {
+      throw new Error('boom');
+    });
+
+    const response = await request(app).get('/api/version');
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({
+      success: false,
+      error: 'Failed to load version information'
+    });
   });
 
   test('blocks POST /api/agent/request when llm is not configured', async () => {

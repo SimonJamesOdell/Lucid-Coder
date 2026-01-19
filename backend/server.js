@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'node:fs';
 import { initializeDatabase } from './database.js';
 import { llmClient } from './llm-client.js';
 import llmRoutes from './routes/llm.js';
@@ -111,6 +112,45 @@ app.get('/api/health', (req, res) => {
     database: 'connected',
     llm: llmClient.config ? 'configured' : 'not configured'
   });
+});
+
+const readJsonFile = (filePath) => JSON.parse(readFileSync(filePath, 'utf8'));
+const readTextFile = (filePath) => readFileSync(filePath, 'utf8');
+
+// Version info route
+app.get('/api/version', (req, res) => {
+  try {
+    const repoRoot = path.resolve(__dirname, '..');
+
+    const versionFile = readTextFile(path.join(repoRoot, 'VERSION')).trim();
+    const rootPackage = readJsonFile(path.join(repoRoot, 'package.json'));
+    const backendPackage = readJsonFile(path.join(__dirname, 'package.json'));
+    const frontendPackage = readJsonFile(path.join(repoRoot, 'frontend', 'package.json'));
+
+    res.json({
+      success: true,
+      version: versionFile,
+      versionFile,
+      root: {
+        name: rootPackage.name,
+        version: rootPackage.version
+      },
+      backend: {
+        name: backendPackage.name,
+        version: backendPackage.version
+      },
+      frontend: {
+        name: frontendPackage.name,
+        version: frontendPackage.version
+      }
+    });
+  } catch (error) {
+    console.error('❌ Version endpoint failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load version information'
+    });
+  }
 });
 
 // Routes
