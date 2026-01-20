@@ -7,17 +7,13 @@ import {
   fetchGoals,
   createGoal,
   createMetaGoalWithChildren,
-  agentAutopilot,
-  agentAutopilotStatus,
-  agentAutopilotMessage,
-  agentAutopilotCancel,
-  agentAutopilotResume,
-  readUiSessionId
+  agentAutopilot
 } from '../utils/goalsApi';
 import AutopilotTimeline from './AutopilotTimeline.jsx';
 import { handlePlanOnlyFeature, handleRegularFeature, processGoals } from '../services/goalAutomationService';
 import { isNaturalLanguageCancel, isNaturalLanguagePause, isNaturalLanguageResume, handleChatCommand } from '../utils/chatCommandHelpers';
 import { shouldSkipAutomationTests as shouldSkipAutomationTestsHelper } from './chatPanelCssOnly';
+import { useAutopilotSession } from './chatPanel/useAutopilotSession';
 
 export const formatAgentStepMessage = (step) => {
   if (!step || typeof step !== 'object') {
@@ -51,9 +47,6 @@ export const formatAgentStepMessage = (step) => {
   return null;
 };
 
-const AUTOPILOT_STORAGE_KEY = 'lucidcoder.autopilotSession';
-const AUTOPILOT_ACTIVE_STATUSES = new Set(['pending', 'running', 'paused']);
-const AUTOPILOT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const MAX_JOB_LOG_LINES_PER_JOB = 60;
 const MAX_TOTAL_JOB_LOG_LINES = 200;
 
@@ -90,12 +83,28 @@ const ChatPanel = ({
   const inputRef = useRef(null);
   const autoFixInFlightRef = useRef(false);
   const autoFixCancelRef = useRef(false);
-  const [autopilotSession, setAutopilotSession] = useState(null);
-  const [autopilotEvents, setAutopilotEvents] = useState([]);
-  const [isAutopilotBusy, setAutopilotBusy] = useState(false);
-  const [autopilotStatusNote, setAutopilotStatusNote] = useState('');
-  const autopilotPollRef = useRef(null);
-  const autopilotResumeAttemptedRef = useRef(false);
+  const {
+    autopilotSession,
+    autopilotEvents,
+    autopilotStatusNote,
+    autopilotIsActive,
+    autopilotStepSnapshot,
+    isAutopilotBusy,
+    autopilotResumeAttemptedRef,
+    setAutopilotBusy,
+    setAutopilotStatusNote,
+    setAutopilotSession,
+    setAutopilotEvents,
+    hydrateAutopilot,
+    stopAutopilotPoller,
+    clearStoredAutopilotSession,
+    persistAutopilotSession,
+    loadStoredAutopilotSession,
+    applyAutopilotSummary,
+    refreshAutopilotStatus,
+    handleAutopilotMessage,
+    handleAutopilotControl
+  } = useAutopilotSession({ currentProjectId: currentProject?.id });
 
   const shouldSkipAutomationTests = useCallback(() => {
     return shouldSkipAutomationTestsHelper({
@@ -173,345 +182,15 @@ const ChatPanel = ({
 
   const createMessage = (sender, text, options = {}) => ({ id: `${sender}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, sender, timestamp: new Date(), variant: options.variant || null });
 
-  const autopilotIsActive = useMemo(
-    () => Boolean(autopilotSession?.id && AUTOPILOT_ACTIVE_STATUSES.has(autopilotSession.status)),
-    [autopilotSession?.id, autopilotSession?.status]
-  );
-
-  const autopilotStepSnapshot = useMemo(() => {
-    const events = Array.isArray(autopilotEvents) ? autopilotEvents : [];
-    const planned = [];
-    const completed = new Set();
-    let current = null;
-
-    for (const evt of events) {
-      if (!evt || typeof evt !== 'object') {
-        continue;
-      }
-
-      if (evt.type === 'plan') {
-        const steps = Array.isArray(evt.payload?.steps) ? evt.payload.steps : [];
-        if (steps.length) {
-          planned.length = 0;
-          for (const raw of steps) {
-            const value = typeof raw === 'string' ? raw.trim() : '';
-            if (value) {
-              planned.push(value);
-            }
-          }
-        }
-        continue;
-      }
-
-      if (evt.type === 'step:start') {
-        const prompt = typeof evt.payload?.prompt === 'string' ? evt.payload.prompt.trim() : '';
-        if (prompt) {
-          current = prompt;
-        }
-        continue;
-      }
-
-      if (evt.type === 'step:done') {
-        const prompt = typeof evt.payload?.prompt === 'string' ? evt.payload.prompt.trim() : '';
-        if (prompt) {
-          completed.add(prompt);
-          if (current === prompt) {
-            current = null;
-          }
-        }
-      }
-    }
-
-    let next = null;
-    if (planned.length) {
-      const startIdx = current ? planned.indexOf(current) + 1 : 0;
-      for (let idx = Math.max(0, startIdx); idx < planned.length; idx += 1) {
-        const candidate = planned[idx];
-        if (candidate && !completed.has(candidate)) {
-          next = candidate;
-          break;
-        }
-      }
-    }
-
-    return { currentStep: current, nextStep: next };
-  }, [autopilotEvents]);
-
-  const stopAutopilotPoller = useCallback(() => {
-    if (autopilotPollRef.current) {
-      clearTimeout(autopilotPollRef.current);
-      autopilotPollRef.current = null;
-    }
-  }, []);
-
-  const clearStoredAutopilotSession = useCallback(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    try {
-      window.sessionStorage?.removeItem?.(AUTOPILOT_STORAGE_KEY);
-    } catch {
-      // Ignore storage failures.
-    }
-  }, []);
-
-  const persistAutopilotSession = useCallback((session) => {
-    if (typeof window === 'undefined' || !session?.id || !currentProject?.id) {
-      return;
-    }
-    if (!AUTOPILOT_ACTIVE_STATUSES.has(session.status)) {
-      return;
-    }
-    try {
-      window.sessionStorage?.setItem?.(
-        AUTOPILOT_STORAGE_KEY,
-        JSON.stringify({ sessionId: session.id, projectId: currentProject.id })
-      );
-    } catch {
-      // Ignore storage failures.
-    }
-  }, [currentProject?.id]);
-
-  const loadStoredAutopilotSession = useCallback(() => {
-    if (typeof window === 'undefined' || !currentProject?.id) {
-      return null;
-    }
-    try {
-      const raw = window.sessionStorage?.getItem?.(AUTOPILOT_STORAGE_KEY);
-      if (!raw) {
-        return null;
-      }
-      const parsed = JSON.parse(raw);
-      if (!parsed?.sessionId) {
-        return null;
-      }
-      if (parsed.projectId && String(parsed.projectId) !== String(currentProject.id)) {
-        return null;
-      }
-      return parsed;
-    } catch {
-      return null;
-    }
-  }, [currentProject?.id]);
-
-  const applyAutopilotSummary = useCallback((summary, { persist = true } = {}) => {
-    if (!summary) {
-      stopAutopilotPoller();
-      setAutopilotSession(null);
-      setAutopilotEvents([]);
-      setAutopilotStatusNote('');
-      clearStoredAutopilotSession();
-      return null;
-    }
-
-    const normalized = {
-      ...summary,
-      id: String(summary.id || summary.sessionId || ''),
-      status: summary.status || 'pending',
-      statusMessage: summary.statusMessage || summary.status_message || '',
-      events: Array.isArray(summary.events) ? summary.events : []
-    };
-
-    setAutopilotSession(normalized);
-    setAutopilotEvents(normalized.events);
-    setAutopilotStatusNote(normalized.statusMessage || '');
-
-    if (persist) {
-      if (AUTOPILOT_ACTIVE_STATUSES.has(normalized.status)) {
-        persistAutopilotSession(normalized);
-      } else {
-        clearStoredAutopilotSession();
-      }
-    }
-
-    if (AUTOPILOT_TERMINAL_STATUSES.has(normalized.status)) {
-      stopAutopilotPoller();
-    }
-
-    return normalized;
-  }, [clearStoredAutopilotSession, persistAutopilotSession, stopAutopilotPoller]);
-
-  const refreshAutopilotStatus = useCallback(async (sessionId, options = {}) => {
-    if (!sessionId || !currentProject?.id) {
-      return null;
-    }
-
-    const delayMs = options.immediate === true ? 1000 : 2000;
-
-    stopAutopilotPoller();
-    try {
-      const data = await agentAutopilotStatus({ projectId: currentProject.id, sessionId });
-      const summary = data?.session || data;
-      const normalized = applyAutopilotSummary(summary);
-      if (normalized && AUTOPILOT_ACTIVE_STATUSES.has(normalized.status)) {
-        autopilotPollRef.current = setTimeout(() => {
-          refreshAutopilotStatus(sessionId);
-        }, delayMs);
-      }
-      return normalized;
-    } catch (error) {
-      console.warn('Failed to refresh autopilot session', error);
-      autopilotPollRef.current = setTimeout(() => {
-        refreshAutopilotStatus(sessionId);
-      }, 4000);
-      return null;
-    }
-  }, [applyAutopilotSummary, currentProject?.id, stopAutopilotPoller]);
-
   useEffect(() => {
-    stopAutopilotPoller();
-
-    if (!currentProject?.id) {
-      setAutopilotSession(null);
-      setAutopilotEvents([]);
-      setAutopilotStatusNote('');
-      clearStoredAutopilotSession();
-      return undefined;
-    }
-
-    let cancelled = false;
-
-    const hydrate = async () => {
-      const stored = loadStoredAutopilotSession();
-      if (stored?.sessionId) {
-        await refreshAutopilotStatus(stored.sessionId);
-        return;
-      }
-
-      if (autopilotResumeAttemptedRef.current) {
-        return;
-      }
-
-      autopilotResumeAttemptedRef.current = true;
-      const uiSessionId = readUiSessionId?.();
-      if (!uiSessionId) {
-        return;
-      }
-
-      try {
-        const resumed = await agentAutopilotResume({ projectId: currentProject.id, uiSessionId, limit: 1 });
-        if (cancelled) {
-          return;
-        }
-        const first = resumed?.resumed?.[0];
-        if (first?.id) {
-          applyAutopilotSummary(first);
-          await refreshAutopilotStatus(first.id);
-        }
-      } catch (error) {
-        console.warn('Failed to resume autopilot session', error);
-      }
-    };
-
     if (ChatPanel.__testHooks) {
-      ChatPanel.__testHooks.hydrateAutopilot = hydrate;
-    }
-
-    hydrate();
-
-    return () => {
-      cancelled = true;
-      autopilotResumeAttemptedRef.current = false;
-      stopAutopilotPoller();
-      if (ChatPanel.__testHooks) {
+      ChatPanel.__testHooks.hydrateAutopilot = hydrateAutopilot;
+      return () => {
         delete ChatPanel.__testHooks.hydrateAutopilot;
-      }
-    };
-  }, [applyAutopilotSummary, clearStoredAutopilotSession, currentProject?.id, loadStoredAutopilotSession, refreshAutopilotStatus, stopAutopilotPoller]);
-
-  useEffect(() => () => {
-    stopAutopilotPoller();
-  }, [stopAutopilotPoller]);
-
-  const handleAutopilotMessage = useCallback(
-    async (message, options = {}) => {
-      if (!autopilotSession?.id || !currentProject?.id) {
-        setAutopilotStatusNote('Autopilot is not running.');
-        return null;
-      }
-
-      const trimmed = typeof message === 'string' ? message.trim() : '';
-      if (!trimmed) {
-        return null;
-      }
-
-      setAutopilotBusy(true);
-      let normalizedResult = null;
-
-      try {
-        const data = await agentAutopilotMessage({
-          projectId: currentProject.id,
-          sessionId: autopilotSession.id,
-          message: trimmed,
-          kind: options.kind,
-          metadata: options.metadata
-        });
-        const summary = data?.session || data;
-        normalizedResult = applyAutopilotSummary(summary);
-        if (normalizedResult?.id) {
-          refreshAutopilotStatus(normalizedResult.id, { immediate: true });
-        }
-        setAutopilotStatusNote('Guidance sent to autopilot.');
-      } catch (error) {
-        console.warn('Failed to send autopilot guidance', error);
-        setAutopilotStatusNote('Failed to send guidance to autopilot.');
-        normalizedResult = null;
-      }
-
-      setAutopilotBusy(false);
-      return normalizedResult;
-    },
-    [applyAutopilotSummary, autopilotSession?.id, currentProject?.id, refreshAutopilotStatus]
-  );
-
-  const handleAutopilotControl = useCallback(
-    async (action) => {
-      if (!autopilotSession?.id || !currentProject?.id) {
-        setAutopilotStatusNote('Autopilot is not running.');
-        return;
-      }
-
-      const normalizedAction = typeof action === 'string' ? action.trim().toLowerCase() : '';
-      const isCancelAction = normalizedAction === 'cancel';
-      const isPauseOrResume = normalizedAction === 'pause' || normalizedAction === 'resume';
-
-      if (!isCancelAction && !isPauseOrResume) {
-        setAutopilotStatusNote('Unsupported autopilot control.');
-        return;
-      }
-
-      setAutopilotBusy(true);
-      try {
-        if (isCancelAction) {
-          const data = await agentAutopilotCancel({
-            projectId: currentProject.id,
-            sessionId: autopilotSession.id,
-            reason: 'User requested stop'
-          });
-          applyAutopilotSummary(data?.session || data);
-        } else if (isPauseOrResume) {
-          const data = await agentAutopilotMessage({
-            projectId: currentProject.id,
-            sessionId: autopilotSession.id,
-            message: normalizedAction,
-            kind: normalizedAction
-          });
-          applyAutopilotSummary(data?.session || data);
-        }
-
-        refreshAutopilotStatus(autopilotSession.id, { immediate: true });
-        setAutopilotStatusNote(
-          isCancelAction ? 'Autopilot cancellation requested.' : `Autopilot ${normalizedAction} requested.`
-        );
-      } catch (error) {
-        console.warn(`Failed to ${normalizedAction} autopilot`, error);
-        setAutopilotStatusNote(`Failed to ${normalizedAction} autopilot.`);
-      }
-
-      setAutopilotBusy(false);
-    },
-    [applyAutopilotSummary, autopilotSession?.id, currentProject?.id, refreshAutopilotStatus]
-  );
+      };
+    }
+    return undefined;
+  }, [hydrateAutopilot]);
 
   const handleStartAutopilot = useCallback(async () => {
     const prompt = inputValue.trim();

@@ -1225,6 +1225,78 @@ describe('autopilotFeatureRequest', () => {
     expect(guidanceRuns).toHaveLength(1);
   });
 
+  test('cancels during user guidance when cancellation is requested', async () => {
+    const appendEvent = createAppendEvent();
+    const plan = vi.fn().mockResolvedValue(defaultPlan());
+    let allowCancel = false;
+    const runTests = vi.fn(() => {
+      allowCancel = true;
+      return Promise.resolve(runResult('failed'));
+    });
+
+    const deps = {
+      plan,
+      edit: vi.fn().mockResolvedValue(createEditResult()),
+      createBranch: vi.fn(),
+      checkout: vi.fn(),
+      runTests,
+      commit: vi.fn().mockResolvedValue({ commit: { sha: 'cancel-guidance' } }),
+      merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+      rollback: vi.fn(),
+      consumeUserUpdates: vi.fn(() => []),
+      shouldCancel: vi.fn(() => allowCancel),
+      shouldPause: vi.fn(() => false),
+      reportStatus: vi.fn(),
+      getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+      appendEvent
+    };
+
+    await expect(
+      autopilotFeatureRequest({
+        projectId: 47,
+        prompt: 'Cancel during guidance',
+        deps,
+        options: { verificationFixRetries: 0 }
+      })
+    ).rejects.toMatchObject({ code: 'AUTOPILOT_CANCELLED' });
+
+    expect(runTests).toHaveBeenCalled();
+  });
+
+  test('cancels immediately at start of guidance loop', async () => {
+    const appendEvent = createAppendEvent();
+    const plan = vi.fn().mockResolvedValue(defaultPlan());
+    const runTests = vi.fn(() => Promise.resolve(runResult('failed')));
+
+    const deps = {
+      plan,
+      edit: vi.fn().mockResolvedValue(createEditResult()),
+      createBranch: vi.fn(),
+      checkout: vi.fn(),
+      runTests,
+      commit: vi.fn().mockResolvedValue({ commit: { sha: 'cancel-guidance-start' } }),
+      merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+      rollback: vi.fn(),
+      consumeUserUpdates: vi.fn(() => []),
+      shouldCancel: createStackTargetedShouldCancel(601),
+      shouldPause: vi.fn(() => false),
+      reportStatus: vi.fn(),
+      getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+      appendEvent
+    };
+
+    await expect(
+      autopilotFeatureRequest({
+        projectId: 48,
+        prompt: 'Cancel at guidance start',
+        deps,
+        options: { verificationFixRetries: 0 }
+      })
+    ).rejects.toMatchObject({ code: 'AUTOPILOT_CANCELLED' });
+
+    expect(runTests).toHaveBeenCalled();
+  });
+
   test('applies early user updates without replans', async () => {
     const plan = vi.fn().mockResolvedValue(defaultPlan(['Initial work']));
     const scriptedUpdates = new Map([[1, ['Add docs']]]);
@@ -2050,7 +2122,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(874),
+      shouldCancel: createStackTargetedShouldCancel(517),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2078,7 +2150,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(922),
+      shouldCancel: createStackTargetedShouldCancel(565),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2178,7 +2250,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(958),
+      shouldCancel: createStackTargetedShouldCancel(250),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(() => {}),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2223,7 +2295,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates,
-      shouldCancel: createStackTargetedShouldCancel(992),
+      shouldCancel: createStackTargetedShouldCancel(635),
       shouldPause: vi.fn(() => false),
       reportStatus,
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2356,7 +2428,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(675),
+      shouldCancel: createStackTargetedShouldCancel(318),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2464,7 +2536,7 @@ describe('autopilotFeatureRequest', () => {
           merge: vi.fn(),
           rollback: vi.fn(),
           consumeUserUpdates: vi.fn(() => []),
-          shouldCancel: createStackTargetedShouldCancel(588),
+          shouldCancel: createStackTargetedShouldCancel(231),
           shouldPause: vi.fn(() => false),
           reportStatus: vi.fn(),
           getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),

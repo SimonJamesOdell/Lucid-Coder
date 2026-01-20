@@ -2,71 +2,17 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import axios from 'axios';
 import { useAppState } from '../context/AppStateContext';
 import { useCommitComposer } from './branch-tab/useCommitComposer';
-import CommitComposer from './branch-tab/CommitComposer';
 import { describeMergeBlocker, isPassingTestStatus } from './branch-tab/utils';
 import Modal from './Modal';
 import './CommitsTab.css';
 import './BranchTab.css';
+import CommitListPanel from './commitsTab/CommitListPanel';
+import CommitDetailsPanel from './commitsTab/CommitDetailsPanel';
+import { dedupeCommitsBySha, formatCoverageGateLabel } from './commitsTab/formatters';
 
 const PENDING_COMMIT_SELECTION = '__pending__';
 const CSS_ONLY_GATE_LABEL = 'CSS-only (tests optional)';
 const CSS_ONLY_MERGE_BLOCK_LABEL = 'Commit CSS-only changes before merging';
-
-const dedupeCommitsBySha = (commits = []) => {
-  if (!Array.isArray(commits) || commits.length === 0) {
-    return [];
-  }
-
-  const seen = new Set();
-  return commits.filter((commit) => {
-    const sha = typeof commit?.sha === 'string' ? commit.sha : '';
-    if (!sha) {
-      return true;
-    }
-    if (seen.has(sha)) {
-      return false;
-    }
-    seen.add(sha);
-    return true;
-  });
-};
-
-const formatGateValue = (value) => {
-  if (value == null) {
-    return 'Unknown';
-  }
-  return String(value);
-};
-
-const formatCoverageGateLabel = (summary) => {
-  const coverage = summary?.coverage;
-  const pct = coverage?.totals?.lines?.pct;
-  const required = coverage?.thresholds?.lines;
-
-  const hasPct = typeof pct === 'number' && Number.isFinite(pct);
-  const hasRequired = typeof required === 'number' && Number.isFinite(required);
-
-  if (!hasPct && !hasRequired) {
-    return null;
-  }
-
-  const pctLabel = hasPct ? `${Math.round(pct)}%` : 'Unknown';
-  const requiredLabel = hasRequired ? `${Math.round(required)}%` : 'Unknown';
-  return `${pctLabel} / ${requiredLabel}`;
-};
-
-const formatTimestamp = (value) => {
-  if (!value) {
-    return 'Unknown time';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return 'Unknown time';
-  }
-
-  return date.toLocaleString();
-};
 
 const CommitsTab = ({
   project,
@@ -728,288 +674,70 @@ const CommitsTab = ({
 
       {!loading && !error && (
         <div className="commits-layout">
-          <aside className="commits-list-panel">
-            <div className="panel-header">
-              <div>
-                <p className="panel-eyebrow">Commit history</p>
-                <h4>{project?.name || 'Active project'}</h4>
-              </div>
-              <button
-                type="button"
-                className="commits-action ghost"
-                onClick={fetchCommits}
-                disabled={!projectId}
-                data-testid="commits-refresh"
-              >
-                Refresh
-              </button>
-            </div>
+          <CommitListPanel
+            projectName={project?.name}
+            projectId={projectId}
+            commits={commits}
+            branchReadyToCommit={branchReadyToCommit}
+            activeBranchName={activeBranchName}
+            isPendingSelected={isPendingSelected}
+            stagedFiles={stagedFiles}
+            isCssOnlyStaged={isCssOnlyStaged}
+            squashSelection={squashSelection}
+            squashInFlight={squashInFlight}
+            squashError={squashError}
+            selectedCommitSha={selectedCommitSha}
+            onRefresh={fetchCommits}
+            onSelectPending={handleSelectPending}
+            onSelectCommit={handleSelectCommit}
+            onToggleSquashSelection={toggleSquashSelection}
+            onRequestSquash={requestSquashSelectedCommits}
+            onClearSquash={clearSquashSelection}
+          />
 
-            {Boolean(squashSelection.length) && (
-              <div className="commits-status-message" role="status" data-testid="commit-squash-bar">
-                <span>{squashSelection.length} selected</span>
-                <span aria-hidden="true"> • </span>
-                <button
-                  type="button"
-                  className="commits-action"
-                  onClick={requestSquashSelectedCommits}
-                  disabled={!projectId || squashSelection.length !== 2 || squashInFlight}
-                  data-testid="commit-squash-action"
-                >
-                  {squashInFlight ? 'Squashing…' : 'Squash selected'}
-                </button>
-                <button
-                  type="button"
-                  className="commits-action ghost"
-                  onClick={clearSquashSelection}
-                  disabled={squashInFlight}
-                  data-testid="commit-squash-clear"
-                >
-                  Clear
-                </button>
-              </div>
-            )}
-
-            {squashError && (
-              <div className="error" role="alert" data-testid="commit-squash-error">
-                {squashError}
-              </div>
-            )}
-            <div className="commits-list" data-testid="commits-list">
-              {branchReadyToCommit && (
-                <button
-                  key={`pending:${activeBranchName}`}
-                  type="button"
-                  className={`commits-list-item pending${isPendingSelected ? ' selected' : ''}`}
-                  onClick={handleSelectPending}
-                  data-testid="commit-pending"
-                >
-                  <div className="commit-list-primary">
-                    <div className="commit-message" title={`Pending commit for ${activeBranchName}`}>Pending commit</div>
-                    <span className="commit-sha">{activeBranchName}</span>
-                  </div>
-                  <div className="commit-list-meta">
-                    <span>{stagedFiles.length} staged file{stagedFiles.length === 1 ? '' : 's'}</span>
-                    <span>•</span>
-                    <span>{isCssOnlyStaged ? 'CSS-only (tests optional)' : 'Tests passed'}</span>
-                  </div>
-                </button>
-              )}
-              {commits.map((commit) => (
-                <button
-                  key={commit.sha}
-                  type="button"
-                  className={`commits-list-item${commit.sha === selectedCommitSha ? ' selected' : ''}`}
-                  onClick={() => handleSelectCommit(commit.sha)}
-                  data-testid={`commit-${commit.shortSha}`}
-                >
-                  <div className="commit-list-primary">
-                    <input
-                      type="checkbox"
-                      checked={squashSelection.includes(commit.sha)}
-                      onChange={() => toggleSquashSelection(commit.sha)}
-                      onClick={(event) => event.stopPropagation()}
-                      aria-label={`Select ${commit.shortSha} for squash`}
-                      data-testid={`commit-squash-select-${commit.shortSha}`}
-                    />
-                    <div className="commit-message" title={commit.message}>{commit.message || 'No message'}</div>
-                    <span className="commit-sha">{commit.shortSha}</span>
-                  </div>
-                  <div className="commit-list-meta">
-                    <span>{commit.author?.name || 'Unknown author'}</span>
-                    <span>•</span>
-                    <span>{formatTimestamp(commit.authoredAt)}</span>
-                  </div>
-                </button>
-              ))}
-              {!commits.length && (
-                <div className="commits-empty" data-testid="commits-empty">
-                  No commits found in this project yet.
-                </div>
-              )}
-            </div>
-          </aside>
-
-          <section className="commits-details-panel" data-testid="commit-details-panel">
-            {statusMessage && (
-              <div className="commits-status-message" role="status">
-                {statusMessage}
-              </div>
-            )}
-
-            {gateStatus && (
-              <div className="commits-status-message" role="status" data-testid="commit-gate-status">
-                <span data-testid="commit-gate-tests">Tests: {formatGateValue(gateStatus.tests)}</span>
-                <span aria-hidden="true"> • </span>
-                <span data-testid="commit-gate-coverage">Coverage: {formatGateValue(gateStatus.coverage)}</span>
-                <span aria-hidden="true"> • </span>
-                <span data-testid="commit-gate-merge">Merge: {formatGateValue(gateStatus.merge)}</span>
-              </div>
-            )}
-
-            {mergeActionError && (
-              <div className="error" role="alert">
-                {mergeActionError}
-              </div>
-            )}
-
-            {!mergeActionError && mergeBlockedBannerMessage && (
-              <div className="commits-status-message" role="status" data-testid="commit-merge-blocked">
-                Merge blocked: {mergeBlockedBannerMessage}
-              </div>
-            )}
-
-            {branchReadyToMerge && !shouldShowCommitComposer && (
-              <div className="commit-pending-header" data-testid="commit-merge-header">
-                <div>
-                  <p className="panel-eyebrow">Ready to merge</p>
-                  <h3 data-testid="commit-merge-branch">{activeBranchName}</h3>
-                  <div className="commit-detail-meta">
-                    <span>No staged changes</span>
-                    <span>•</span>
-                    <span>{mergeIsCssOnly ? 'CSS-only (tests optional)' : 'Tests passed'}</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="commits-action success"
-                  onClick={handleMergeBranch}
-                  disabled={mergeInFlight || commitInFlight}
-                  data-testid="commit-merge"
-                >
-                  {mergeInFlight ? 'Merging…' : 'Merge into main'}
-                </button>
-              </div>
-            )}
-
-            {shouldShowCommitComposer && (
-              <div className="commit-pending-header" data-testid="commit-pending-header">
-                <div>
-                  <p className="panel-eyebrow">Ready to commit</p>
-                  <h3 data-testid="commit-pending-branch">{activeBranchName}</h3>
-                  <div className="commit-detail-meta">
-                    <span>{stagedFiles.length} staged file{stagedFiles.length === 1 ? '' : 's'}</span>
-                    <span>•</span>
-                    <span>{isCssOnlyStaged ? 'CSS-only (skip tests allowed)' : 'Tests passed'}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {shouldShowCommitComposer && (
-              <CommitComposer
-                hasSelectedFiles={hasStagedFiles}
-                commitSubject={commitSubject}
-                commitBody={commitBody}
-                onSubjectChange={(value) => {
-                  setCommitActionError(null);
-                  handleCommitMessageChange(activeBranchName, { subject: value });
-                }}
-                onBodyChange={(value) => {
-                  setCommitActionError(null);
-                  handleCommitMessageChange(activeBranchName, { body: value });
-                }}
-                onCommit={handleCommitStagedChanges}
-                onAutofill={handleManualAutofill}
-                canAutofill={Boolean(isLLMConfigured && activeBranchName && hasStagedFiles)}
-                canCommit={canCommit}
-                isCommitting={commitInFlight}
-                commitHint={commitHint}
-                isGenerating={isGeneratingCommit}
-                commitMessageError={mergedCommitError}
-              />
-            )}
-
-            {selectedCommit ? (
-              <>
-                <div className="commit-detail-header">
-                  <div>
-                    <p className="panel-eyebrow">Selected commit</p>
-                    <h3>{selectedCommit.message || 'No message provided'}</h3>
-                    <div className="commit-detail-meta">
-                      <span>{selectedCommit.shortSha}</span>
-                      <span>•</span>
-                      <span>{selectedCommit.author?.name || 'Unknown author'}</span>
-                      <span>•</span>
-                      <span>{formatTimestamp(selectedCommit.authoredAt)}</span>
-                    </div>
-                  </div>
-                  {canRevertSelectedCommit && (
-                    <button
-                      type="button"
-                      className="commits-action destructive"
-                      onClick={() => requestRevertCommit(selectedCommit.sha)}
-                      disabled={!projectId || revertingSha === selectedCommit.sha}
-                      data-testid="commit-revert"
-                    >
-                      {revertingSha === selectedCommit.sha ? 'Reverting…' : 'Revert commit'}
-                    </button>
-                  )}
-                </div>
-
-                {isDetailLoading && (
-                  <div className="loading" data-testid="commit-details-loading">Loading commit details…</div>
-                )}
-
-                {!isDetailLoading && selectedDetails && (
-                  <>
-                    <div className="commit-detail-body">
-                      <p>{selectedDetails.body || 'No extended description for this commit.'}</p>
-                    </div>
-                    <div className="commit-files-card">
-                      <div className="panel-header">
-                        <div>
-                          <p className="panel-eyebrow">Changed files</p>
-                          <h4>
-                            {selectedDetails.files?.length
-                              ? `${selectedDetails.files.length} file${selectedDetails.files.length === 1 ? '' : 's'}`
-                              : 'No file metadata available'}
-                          </h4>
-                        </div>
-                      </div>
-                      {selectedDetails.files?.length ? (
-                        <ul className="commit-files-list" data-testid="commit-files-list">
-                          {selectedDetails.files.map((file, index) => (
-                            <li key={`${selectedDetails.sha}-${file.path}`}>
-                              <button
-                                type="button"
-                                className="commit-file-entry"
-                                onClick={() => handleOpenFileFromCommit(file.path)}
-                                disabled={!canOpenFiles}
-                                data-testid={`commit-file-open-${index}`}
-                                title={canOpenFiles ? `Open ${file.path}` : undefined}
-                              >
-                                <span className={`commit-file-status status-${file.status?.toLowerCase() || 'm'}`}>
-                                  {file.status || 'M'}
-                                </span>
-                                <span className="commit-file-path">{file.path}</span>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <div className="commits-empty" data-testid="commit-no-files">
-                          File-level details unavailable for this commit.
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                {!isDetailLoading && !selectedDetails && (
-                  <div className="commits-empty" data-testid="commit-details-missing">
-                    Commit metadata is unavailable for this selection.
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="commits-empty" data-testid="commit-no-selection">
-                {branchReadyToCommit
-                  ? 'Select the pending commit to author a message, or select a commit to view details.'
-                  : 'Select a commit to view details.'}
-              </div>
-            )}
-          </section>
+          <CommitDetailsPanel
+            projectId={projectId}
+            statusMessage={statusMessage}
+            gateStatus={gateStatus}
+            mergeActionError={mergeActionError}
+            mergeBlockedBannerMessage={mergeBlockedBannerMessage}
+            branchReadyToMerge={branchReadyToMerge}
+            shouldShowCommitComposer={shouldShowCommitComposer}
+            activeBranchName={activeBranchName}
+            stagedFiles={stagedFiles}
+            isCssOnlyStaged={isCssOnlyStaged}
+            mergeIsCssOnly={mergeIsCssOnly}
+            handleMergeBranch={handleMergeBranch}
+            mergeInFlight={mergeInFlight}
+            commitInFlight={commitInFlight}
+            hasStagedFiles={hasStagedFiles}
+            commitSubject={commitSubject}
+            commitBody={commitBody}
+            onSubjectChange={(value) => {
+              setCommitActionError(null);
+              handleCommitMessageChange(activeBranchName, { subject: value });
+            }}
+            onBodyChange={(value) => {
+              setCommitActionError(null);
+              handleCommitMessageChange(activeBranchName, { body: value });
+            }}
+            onCommit={handleCommitStagedChanges}
+            onAutofill={handleManualAutofill}
+            canAutofill={Boolean(isLLMConfigured && activeBranchName && hasStagedFiles)}
+            canCommit={canCommit}
+            commitHint={commitHint}
+            isGeneratingCommit={isGeneratingCommit}
+            commitMessageError={mergedCommitError}
+            selectedCommit={selectedCommit}
+            isDetailLoading={isDetailLoading}
+            selectedDetails={selectedDetails}
+            canRevertSelectedCommit={canRevertSelectedCommit}
+            revertingSha={revertingSha}
+            requestRevertCommit={requestRevertCommit}
+            handleOpenFileFromCommit={handleOpenFileFromCommit}
+            canOpenFiles={canOpenFiles}
+            branchReadyToCommit={branchReadyToCommit}
+          />
         </div>
       )}
     </div>

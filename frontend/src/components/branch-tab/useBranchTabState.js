@@ -8,46 +8,17 @@ import {
   isPassingTestStatus,
   isCssStylesheetPath
 } from './utils';
+import {
+  buildBranchSelectionKey,
+  loadStoredBranchSelection,
+  persistBranchSelection,
+  getBranchFallbackName,
+  setBranchFallbackName,
+  resetBranchFallbackName
+} from './branchSelectionStorage';
+import { normalizeRepoPath } from './repoPathUtils';
 
 const TEST_JOB_TYPES = ['frontend:test', 'backend:test'];
-let branchFallbackName = 'main';
-
-const buildBranchSelectionKey = (projectId) => (projectId ? `branchTab:selected:${projectId}` : null);
-
-const loadStoredBranchSelection = (projectId) => {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-  const storageKey = buildBranchSelectionKey(projectId);
-  if (!storageKey) {
-    return '';
-  }
-  try {
-    return localStorage.getItem(storageKey) || '';
-  } catch (error) {
-    console.warn('Failed to load branch selection from storage', error);
-    return '';
-  }
-};
-
-const persistBranchSelection = (projectId, branchName) => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  const storageKey = buildBranchSelectionKey(projectId);
-  if (!storageKey) {
-    return;
-  }
-  try {
-    if (branchName) {
-      localStorage.setItem(storageKey, branchName);
-    } else {
-      localStorage.removeItem(storageKey);
-    }
-  } catch (error) {
-    console.warn('Failed to persist branch selection', error);
-  }
-};
 
 const useBranchTabState = ({
   project,
@@ -193,11 +164,6 @@ const useBranchTabState = ({
     };
   }, [projectId]);
 
-  const normalizeRepoPath = useCallback((value) => String(value ?? '')
-    .replace(/\\/g, '/')
-    .replace(/^\.\//, '')
-    .trim(), []);
-
   const applyOverview = useCallback((overview) => {
     if (!overview) {
       return;
@@ -290,7 +256,7 @@ const useBranchTabState = ({
     }
   }, [branchSummaries, selectedBranch, setSelectedBranch]);
 
-  const selectedBranchName = selectedBranch || sortedBranches[0]?.name || currentBranch || branchFallbackName;
+  const selectedBranchName = selectedBranch || sortedBranches[0]?.name || currentBranch || getBranchFallbackName();
   const selectedSummary = sortedBranches.find((branch) => branch.name === selectedBranchName) || null;
   const selectedWorkingBranch = workingBranchMap.get(selectedBranchName)
     || workingBranches.find((branch) => branch.name === selectedBranchName)
@@ -953,10 +919,10 @@ const useBranchTabState = ({
 useBranchTabState.__testHooks = useBranchTabState.__testHooks || {};
 Object.assign(useBranchTabState.__testHooks, {
   setBranchFallbackName: (value) => {
-    branchFallbackName = typeof value === 'string' ? value : 'main';
+    setBranchFallbackName(value);
   },
   resetBranchFallbackName: () => {
-    branchFallbackName = 'main';
+    resetBranchFallbackName();
   },
   buildBranchSelectionKey,
   loadStoredBranchSelection,

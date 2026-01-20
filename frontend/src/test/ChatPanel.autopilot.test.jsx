@@ -324,6 +324,22 @@ describe('ChatPanel - Autopilot Features', () => {
   });
 
   describe('Autopilot hydration and resume', () => {
+    it('does nothing when hydrateAutopilot runs without a project id', async () => {
+      goalsApi.readUiSessionId.mockReturnValue('ui-missing-project');
+
+      renderWithAppState({ currentProject: null });
+
+      const hydrate = ChatPanel.__testHooks?.hydrateAutopilot;
+      expect(typeof hydrate).toBe('function');
+
+      await act(async () => {
+        await hydrate?.();
+      });
+
+      expect(goalsApi.readUiSessionId).not.toHaveBeenCalled();
+      expect(goalsApi.agentAutopilotResume).not.toHaveBeenCalled();
+    });
+
     it('refreshes stored sessions before attempting resume', async () => {
       const projectId = 777;
       const storedSession = { sessionId: 'stored-session', projectId };

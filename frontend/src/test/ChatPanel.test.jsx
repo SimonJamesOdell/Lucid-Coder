@@ -146,6 +146,17 @@ describe('ChatPanel', () => {
   });
 
   describe('Basic Rendering', () => {
+    it('renders safely when test hooks are unavailable', () => {
+      const originalHooks = ChatPanel.__testHooks;
+      ChatPanel.__testHooks = null;
+
+      expect(() => {
+        render(<ChatPanel width={320} side="left" />);
+      }).not.toThrow();
+
+      ChatPanel.__testHooks = originalHooks;
+    });
+
     it('renders toggle button on left side with right arrow icon', () => {
       const mockToggle = vi.fn();
       render(<ChatPanel width={320} side="left" onToggleSide={mockToggle} />);
