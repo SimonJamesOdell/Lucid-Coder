@@ -176,6 +176,58 @@ describe('AgentGoalsPanel', () => {
     });
   });
 
+  it('skips goals without ids when building the tree', async () => {
+    useAppState.mockReturnValue({ currentProject: { id: 11, name: 'Demo' } });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { prompt: 'Missing id goal', status: 'planning', parentGoalId: null },
+      { id: 5, prompt: 'Valid goal', status: 'planning', parentGoalId: null }
+    ]);
+
+    render(<AgentGoalsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Valid goal')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Missing id goal')).not.toBeInTheDocument();
+  });
+
+  it('renders an empty list when every goal is missing an id', async () => {
+    useAppState.mockReturnValue({ currentProject: { id: 13, name: 'Demo' } });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { prompt: 'Missing id goal', status: 'planning', parentGoalId: null }
+    ]);
+
+    render(<AgentGoalsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-goal-list')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('agent-goal-parent')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-goal-child')).not.toBeInTheDocument();
+  });
+
+  it('skips child rendering when children is not an array', async () => {
+    useAppState.mockReturnValue({ currentProject: { id: 10, name: 'Demo' } });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 1, prompt: 'Parent goal', status: 'planning', parentGoalId: null },
+      { id: 2, prompt: 'Child goal', status: 'planning', parentGoalId: 1 }
+    ]);
+
+    const isArraySpy = vi.spyOn(Array, 'isArray').mockImplementation(() => false);
+
+    render(<AgentGoalsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Parent goal')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('agent-goal-child')).not.toBeInTheDocument();
+
+    isArraySpy.mockRestore();
+  });
+
   it('does not attempt to run tests when goals array becomes empty before clicking', async () => {
     useAppState.mockReturnValue({ currentProject: { id: 12, name: 'Demo' } });
     const goalsPayload = [{ id: 31, prompt: 'Transient goal', status: 'planning' }];

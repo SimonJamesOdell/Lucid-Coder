@@ -379,6 +379,28 @@ describe('agentOrchestrator', () => {
     expect(children[1].title).toBe('Refactor Navigation Component to Use CSS Variables');
   });
 
+  it('creates nested child goals when plan includes children', async () => {
+    const { parent, children } = await createMetaGoalWithChildren({
+      projectId: 12,
+      prompt: 'Nested goal tree',
+      childPrompts: [
+        {
+          title: 'Parent child',
+          prompt: 'Ship parent child',
+          children: [
+            { title: 'Nested leaf', prompt: 'Ship nested leaf' }
+          ]
+        }
+      ]
+    });
+
+    expect(parent.projectId).toBe(12);
+    expect(children).toHaveLength(1);
+    expect(children[0].prompt).toBe('Ship parent child');
+    expect(children[0].children).toHaveLength(1);
+    expect(children[0].children[0].prompt).toBe('Ship nested leaf');
+  });
+
   it('requires childPrompts to be an array when creating meta goals', async () => {
     await expect(
       createMetaGoalWithChildren({ projectId: 8, prompt: 'Invalid children', childPrompts: 'oops' })
@@ -1014,6 +1036,58 @@ describe('agentOrchestrator', () => {
         planGoalFromPrompt({ projectId: 44, prompt: 'Plan settings page' })
       ).rejects.toThrow('LLM planning produced no usable child prompts');
     });
+
+    it('creates nested goal trees when child goals include subgoals', async () => {
+      llmClient.generateResponse.mockResolvedValue(
+        JSON.stringify({
+          parentTitle: 'Starfield Background',
+          childGoals: [
+            {
+              title: 'Render starfield',
+              prompt: 'Add a canvas-backed starfield renderer to the UI.',
+              children: [
+                { title: 'Canvas setup', prompt: 'Add a canvas element and hook it into layout.' },
+                { title: 'Animation loop', prompt: 'Implement the starfield animation loop.' }
+              ]
+            }
+          ]
+        })
+      );
+
+      const result = await planGoalFromPrompt({ projectId: 501, prompt: 'Implement a 3D starfield animation' });
+
+      expect(result.children).toHaveLength(1);
+      expect(result.children[0].prompt).toBe('Add a canvas-backed starfield renderer to the UI.');
+      expect(result.children[0].children).toHaveLength(2);
+
+      const child = result.children[0];
+      const grandchildIds = child.children.map((node) => node.parentGoalId);
+      grandchildIds.forEach((parentId) => {
+        expect(parentId).toBe(child.id);
+      });
+    });
+
+    it('returns clarifying questions when the planner requests them', async () => {
+      llmClient.generateResponse.mockResolvedValue(
+        JSON.stringify({
+          parentTitle: 'Add dashboards',
+          questions: ['Which dashboard layout should we use?'],
+          childGoals: [
+            { title: 'Sketch layout', prompt: 'Create a dashboard layout draft.' }
+          ]
+        })
+      );
+
+      const result = await planGoalFromPrompt({ projectId: 502, prompt: 'Add dashboards' });
+
+      expect(result.questions).toEqual(['Which dashboard layout should we use?']);
+      const snapshot = await getGoalWithTasks(result.parent.id);
+      expect(snapshot.goal.metadata.clarifyingQuestions).toEqual([
+        'What should "done" look like? Please provide acceptance criteria.',
+        'Which dashboard layout should we use?'
+      ]);
+      expect(snapshot.tasks[0].type).toBe('clarification');
+    });
   });
 
   describe('normalizeJsonLikeText helper', () => {
@@ -1023,6 +1097,192 @@ describe('agentOrchestrator', () => {
 
       expect(normalizeJsonLikeText(null)).toBeNull();
       expect(normalizeJsonLikeText(sentinel)).toBe(sentinel);
+      expect(normalizeJsonLikeText(42)).toBe(42);
+    });
+  });
+
+  describe('internal helper edge cases', () => {
+    it('builds metadata with non-string prompts and normalizes clarifications', () => {
+      const { buildGoalMetadataFromPrompt } = __testExports__;
+
+      const result = buildGoalMetadataFromPrompt({
+        prompt: null,
+        extraClarifyingQuestions: ['  Needs detail ', '', 'Needs detail']
+      });
+
+      expect(result).toMatchObject({
+        metadata: {
+          clarifyingQuestions: [
+            'What should "done" look like? Please provide acceptance criteria.',
+            'Needs detail'
+          ]
+        },
+        clarifyingQuestions: [
+          'What should "done" look like? Please provide acceptance criteria.',
+          'Needs detail'
+        ],
+        styleOnly: false
+      });
+    });
+
+    it('normalizes clarifying questions when the input is not an array', () => {
+      const { normalizeClarifyingQuestions } = __testExports__;
+
+      expect(normalizeClarifyingQuestions('not-an-array')).toEqual([]);
+    });
+
+    it('returns false for empty verification prompts', () => {
+      const { isProgrammaticVerificationStep } = __testExports__;
+
+      expect(isProgrammaticVerificationStep('')).toBe(false);
+    });
+
+    it('normalizes child plan strings and skips empty entries', () => {
+      const { normalizeChildPlans } = __testExports__;
+
+      const plans = normalizeChildPlans(['  Write docs  ', '', 'Ship it']);
+      expect(plans.map((plan) => plan.prompt)).toEqual(['Write docs', 'Ship it']);
+    });
+
+    it('preserves provided child plan titles when objects are supplied', () => {
+      const { normalizeChildPlans } = __testExports__;
+
+      const plans = normalizeChildPlans([
+        { title: 'Custom title', prompt: 'Implement flow' }
+      ]);
+
+      expect(plans).toEqual([
+        { title: 'Custom title', prompt: 'Implement flow' }
+      ]);
+    });
+
+    it('derives titles for object entries without valid titles and skips non-string prompts', () => {
+      const { normalizeChildPlans, deriveGoalTitle } = __testExports__;
+
+      const plans = normalizeChildPlans([
+        { prompt: 'Draft spec', title: '   ' },
+        { prompt: 123, title: 'Ignored' },
+        '  Ship it  ',
+        42
+      ]);
+
+      expect(plans).toEqual([
+        {
+          prompt: 'Draft spec',
+          title: deriveGoalTitle('Draft spec', { fallback: 'Child Goal 1' })
+        },
+        {
+          prompt: 'Ship it',
+          title: deriveGoalTitle('Ship it', { fallback: 'Child Goal 3' })
+        }
+      ]);
+    });
+  });
+
+  describe('goal plan tree helpers', () => {
+    it('normalizes nested plans, childGoals, duplicates, and verification steps', () => {
+      const { normalizeGoalPlanTree } = __testExports__;
+
+      const plans = [
+        {
+          prompt: 'Run tests',
+          children: [{ prompt: 'Implement feature' }]
+        },
+        {
+          childGoals: [{ prompt: 'Child via childGoals' }]
+        },
+        {
+          prompt: 'Set up API',
+          children: [{ prompt: 'Child A' }]
+        },
+        {
+          prompt: 'Set up API',
+          children: [{ prompt: 'Child B' }]
+        }
+      ];
+
+      const result = normalizeGoalPlanTree(plans);
+      const prompts = result.map((node) => node.prompt);
+
+      expect(prompts).toEqual([
+        'Implement feature',
+        'Child via childGoals',
+        'Set up API',
+        'Child B'
+      ]);
+
+      const apiNode = result.find((node) => node.prompt === 'Set up API');
+      expect(apiNode.children.map((node) => node.prompt)).toEqual(['Child A']);
+    });
+
+    it('builds a nested goal tree from a flat list and includes orphans at root', () => {
+      const { buildGoalTreeFromList } = __testExports__;
+
+      const tree = buildGoalTreeFromList([
+        { id: 3, parentGoalId: 2, createdAt: '2026-01-02T00:00:00.000Z' },
+        { id: 1, parentGoalId: null, createdAt: '2026-01-01T00:00:00.000Z' },
+        { id: 2, parentGoalId: 1, createdAt: '2026-01-01T01:00:00.000Z' },
+        { id: 4, parentGoalId: 999, createdAt: '2026-01-03T00:00:00.000Z' }
+      ]);
+
+      expect(tree.map((node) => node.id)).toEqual([1, 4]);
+      expect(tree[0].children.map((node) => node.id)).toEqual([2]);
+      expect(tree[0].children[0].children.map((node) => node.id)).toEqual([3]);
+    });
+
+    it('returns a subtree when a parentId is provided and sorts by id fallback', () => {
+      const { buildGoalTreeFromList } = __testExports__;
+
+      const tree = buildGoalTreeFromList(
+        [
+          { id: 9, parentGoalId: 1 },
+          { id: 7, parentGoalId: 1 },
+          { id: 1, parentGoalId: null }
+        ],
+        1
+      );
+
+      expect(tree.map((node) => node.id)).toEqual([7, 9]);
+    });
+
+    it('returns an empty subtree when the parentId is missing', () => {
+      const { buildGoalTreeFromList } = __testExports__;
+
+      const tree = buildGoalTreeFromList([
+        { id: 1, parentGoalId: null },
+        { id: 2, parentGoalId: 1 }
+      ], 9999);
+
+      expect(tree).toEqual([]);
+    });
+
+    it('sorts roots by id when createdAt is not parseable', () => {
+      const { buildGoalTreeFromList } = __testExports__;
+
+      const tree = buildGoalTreeFromList([
+        { id: 4, parentGoalId: null, createdAt: 'invalid' },
+        { id: 2, parentGoalId: null, createdAt: 'invalid' }
+      ]);
+
+      expect(tree.map((node) => node.id)).toEqual([2, 4]);
+    });
+
+    it('falls back to zero when goal ids are missing in sort order', () => {
+      const { buildGoalTreeFromList } = __testExports__;
+
+      const tree = buildGoalTreeFromList([
+        { id: null, parentGoalId: null, createdAt: 'invalid' },
+        { id: 3, parentGoalId: null, createdAt: 'invalid' }
+      ]);
+
+      expect(tree.map((node) => node.id)).toEqual([null, 3]);
+    });
+
+    it('honors maxNodes when normalizing plans', () => {
+      const { normalizeGoalPlanTree } = __testExports__;
+
+      const result = normalizeGoalPlanTree(['First', 'Second'], { maxNodes: 0 });
+      expect(result).toEqual([]);
     });
   });
 

@@ -180,6 +180,9 @@ const extractAcceptanceCriteria = (prompt = '') => {
 const DONE_QUESTION = 'What should "done" look like? Please provide acceptance criteria.';
 const EXPECTED_ACTUAL_QUESTION = 'What is the expected behavior, and what is currently happening?';
 
+const MAX_PLAN_DEPTH = 4;
+const MAX_PLAN_NODES = 40;
+
 const looksUnderspecified = (prompt) => {
   const normalized = prompt.trim().toLowerCase();
   if (!normalized) return true;
@@ -212,6 +215,35 @@ const extractClarifyingQuestions = ({ prompt, acceptanceCriteria = [] }) => {
   }
 
   return Array.from(new Set(questions)).filter(Boolean);
+};
+
+const normalizeClarifyingQuestions = (questions = []) => {
+  if (!Array.isArray(questions)) return [];
+  const cleaned = questions
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+  return Array.from(new Set(cleaned));
+};
+
+const buildGoalMetadataFromPrompt = ({ prompt, extraClarifyingQuestions = [] } = {}) => {
+  const rawPrompt = typeof prompt === 'string' ? prompt : '';
+  const acceptanceCriteria = extractAcceptanceCriteria(rawPrompt);
+  const autoQuestions = extractClarifyingQuestions({ prompt: rawPrompt, acceptanceCriteria });
+  const clarifyingQuestions = normalizeClarifyingQuestions([...autoQuestions, ...extraClarifyingQuestions]);
+  const styleOnly = isStyleOnlyPrompt(rawPrompt);
+
+  const metadata = {
+    ...(acceptanceCriteria.length > 0 ? { acceptanceCriteria } : {}),
+    ...(clarifyingQuestions.length > 0 ? { clarifyingQuestions } : {}),
+    ...(styleOnly ? { styleOnly: true } : {})
+  };
+
+  return {
+    metadata: Object.keys(metadata).length > 0 ? metadata : null,
+    acceptanceCriteria,
+    clarifyingQuestions,
+    styleOnly
+  };
 };
 
 const TITLE_STOPWORDS = new Set([
@@ -283,7 +315,13 @@ const deriveGoalTitle = (value, { fallback = 'Goal' } = {}) => {
 
 const normalizePlannerPrompt = (value) => (typeof value === 'string' ? value.trim() : '');
 
-export const createGoalFromPrompt = async ({ projectId, prompt, title = null }) => {
+const createGoalWithTasks = async ({
+  projectId,
+  prompt,
+  title = null,
+  parentGoalId = null,
+  extraClarifyingQuestions = []
+}) => {
   if (!projectId) {
     throw new Error('projectId is required');
   }
@@ -294,26 +332,22 @@ export const createGoalFromPrompt = async ({ projectId, prompt, title = null }) 
   const rawPrompt = prompt;
   const normalizedPrompt = rawPrompt.trim();
 
-  const acceptanceCriteria = extractAcceptanceCriteria(rawPrompt);
-  const clarifyingQuestions = extractClarifyingQuestions({ prompt: rawPrompt, acceptanceCriteria });
+  const { metadata, acceptanceCriteria, clarifyingQuestions } = buildGoalMetadataFromPrompt({
+    prompt: rawPrompt,
+    extraClarifyingQuestions
+  });
 
-  const styleOnly = isStyleOnlyPrompt(rawPrompt);
-  const metadata = {
-    ...(acceptanceCriteria.length > 0 ? { acceptanceCriteria } : {}),
-    ...(clarifyingQuestions.length > 0 ? { clarifyingQuestions } : {}),
-    ...(styleOnly ? { styleOnly: true } : {})
-  };
-  const metadataOrNull = Object.keys(metadata).length > 0 ? metadata : null;
+  const goalTitle = typeof title === 'string' && title.trim()
+    ? title.trim()
+    : deriveGoalTitle(normalizedPrompt, { fallback: 'Goal' });
 
-  const goalTitle = typeof title === 'string' && title.trim() ? title.trim() : deriveGoalTitle(normalizedPrompt);
-
-  // Initial phase is planning for all new goals.
   const goal = await createStoredGoal({
     projectId,
     prompt: rawPrompt,
     title: goalTitle,
     status: 'planning',
-    metadata: metadataOrNull
+    parentGoalId,
+    metadata
   });
 
   if (clarifyingQuestions.length > 0) {
@@ -326,7 +360,6 @@ export const createGoalFromPrompt = async ({ projectId, prompt, title = null }) 
       }
     });
   } else {
-    // Seed an initial analysis task; later this will run real planning.
     await createGoalTask(goal.id, {
       type: 'analysis',
       title: 'Analyse goal and propose plan',
@@ -341,7 +374,17 @@ export const createGoalFromPrompt = async ({ projectId, prompt, title = null }) 
   return { goal, tasks };
 };
 
-export const createChildGoal = async ({ projectId, parentGoalId, prompt, title = null }) => {
+export const createGoalFromPrompt = async ({ projectId, prompt, title = null, extraClarifyingQuestions = [] }) => {
+  return createGoalWithTasks({ projectId, prompt, title, extraClarifyingQuestions });
+};
+
+export const createChildGoal = async ({
+  projectId,
+  parentGoalId,
+  prompt,
+  title = null,
+  extraClarifyingQuestions = []
+}) => {
   if (!parentGoalId) {
     throw new Error('parentGoalId is required');
   }
@@ -353,26 +396,33 @@ export const createChildGoal = async ({ projectId, parentGoalId, prompt, title =
     throw new Error('Child goal must use same projectId as parent');
   }
 
-  if (!prompt || typeof prompt !== 'string') {
-    throw new Error('prompt is required');
-  }
-
-  const normalizedPrompt = prompt.trim();
+  const normalizedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
   if (!normalizedPrompt) {
     throw new Error('prompt is required');
   }
 
-  const childTitle = typeof title === 'string' && title.trim() ? title.trim() : deriveGoalTitle(normalizedPrompt);
-
-  const goal = await createStoredGoal({
+  const { goal } = await createGoalWithTasks({
     projectId,
     prompt: normalizedPrompt,
-    title: childTitle,
-    status: 'planning',
-    parentGoalId
+    title,
+    parentGoalId,
+    extraClarifyingQuestions
   });
 
   return goal;
+};
+
+const isProgrammaticVerificationStep = (value) => {
+  const text = normalizePlannerPrompt(value);
+  if (!text) return false;
+
+  const looksLikeCommand = /(\bnpm\b|\byarn\b|\bpnpm\b)\s+run\s+\btest\b/i.test(text);
+  if (looksLikeCommand) return true;
+
+  const verb = /^(run|re-?run|execute|verify|check)\b/i;
+  if (!verb.test(text)) return false;
+
+  return /(\bunit\s+tests\b|\bintegration\s+tests\b|\btests\b|\bvitest\b|\bcoverage\b)/i.test(text);
 };
 
 const normalizeChildPlans = (entries = []) => {
@@ -404,36 +454,136 @@ const normalizeChildPlans = (entries = []) => {
   return plans;
 };
 
-export const createMetaGoalWithChildren = async ({
+const sortGoalsForTree = (items = []) => items.slice().sort((a, b) => {
+  const aTime = a?.createdAt ? Date.parse(a.createdAt) : NaN;
+  const bTime = b?.createdAt ? Date.parse(b.createdAt) : NaN;
+  if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) {
+    return aTime - bTime;
+  }
+  return Number(a?.id || 0) - Number(b?.id || 0);
+});
+
+const normalizeGoalPlanTree = (
+  entries = [],
+  { depth = 1, maxDepth = MAX_PLAN_DEPTH, maxNodes = MAX_PLAN_NODES, stats = { count: 0 } } = {}
+) => {
+  if (!Array.isArray(entries) || entries.length === 0 || depth > maxDepth) {
+    return [];
+  }
+
+  const nodes = [];
+  const seen = new Set();
+
+  for (const entry of entries) {
+    if (stats.count >= maxNodes) break;
+
+    let prompt = '';
+    let title = '';
+    let childEntries = [];
+
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      prompt = typeof entry.prompt === 'string' ? entry.prompt.trim() : '';
+      title = typeof entry.title === 'string' ? entry.title.trim() : '';
+      if (Array.isArray(entry.children)) {
+        childEntries = entry.children;
+      } else if (Array.isArray(entry.childGoals)) {
+        childEntries = entry.childGoals;
+      }
+    } else if (typeof entry === 'string') {
+      prompt = entry.trim();
+    }
+
+    const normalizedPrompt = normalizePlannerPrompt(prompt);
+    const normalizedChildren = normalizeGoalPlanTree(childEntries, {
+      depth: depth + 1,
+      maxDepth,
+      maxNodes,
+      stats
+    });
+
+    if (!normalizedPrompt && normalizedChildren.length === 0) {
+      continue;
+    }
+
+    if (normalizedPrompt && isProgrammaticVerificationStep(normalizedPrompt)) {
+      if (normalizedChildren.length > 0) {
+        nodes.push(...normalizedChildren);
+      }
+      continue;
+    }
+
+    if (!normalizedPrompt) {
+      nodes.push(...normalizedChildren);
+      continue;
+    }
+
+    if (seen.has(normalizedPrompt)) {
+      if (normalizedChildren.length > 0) {
+        nodes.push(...normalizedChildren);
+      }
+      continue;
+    }
+
+    seen.add(normalizedPrompt);
+    stats.count += 1;
+
+    const fallbackTitle = title || `Goal ${stats.count}`;
+    nodes.push({
+      prompt: normalizedPrompt,
+      title: title || deriveGoalTitle(normalizedPrompt, { fallback: fallbackTitle }),
+      children: normalizedChildren
+    });
+  }
+
+  return nodes;
+};
+
+const buildGoalTreeFromList = (goals = [], parentId = null) => {
+  const map = new Map();
+  goals.forEach((goal) => {
+    map.set(goal.id, { ...goal, children: [] });
+  });
+
+  map.forEach((node) => {
+    if (node.parentGoalId && map.has(node.parentGoalId)) {
+      map.get(node.parentGoalId).children.push(node);
+    }
+  });
+
+  const roots = parentId == null
+    ? Array.from(map.values()).filter((node) => !node.parentGoalId || !map.has(node.parentGoalId))
+    : (map.get(parentId)?.children || []);
+
+  const sortTree = (nodes) => {
+    const sorted = sortGoalsForTree(nodes);
+    sorted.forEach((node) => {
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        node.children = sortGoalsForTree(node.children);
+        sortTree(node.children);
+      }
+    });
+    return sorted;
+  };
+
+  return sortTree(roots);
+};
+
+const createGoalTreeWithChildren = async ({
   projectId,
   prompt,
   childPrompts = [],
   parentGoalId = null,
-  parentTitle = null
+  parentTitle = null,
+  parentExtraClarifyingQuestions = []
 }) => {
   if (!Array.isArray(childPrompts)) {
     throw new Error('childPrompts must be an array');
   }
 
-  const normalizedChildPlans = normalizeChildPlans(childPrompts);
+  const normalizedChildPlans = normalizeGoalPlanTree(childPrompts);
 
-  const resolveExistingChildren = async (parent) => {
-    const allGoals = await listStoredGoals(projectId);
-    const children = allGoals
-      .filter((goal) => goal.parentGoalId && String(goal.parentGoalId) === String(parent.id))
-      .sort((a, b) => {
-        const aTime = a.createdAt ? Date.parse(a.createdAt) : NaN;
-        const bTime = b.createdAt ? Date.parse(b.createdAt) : NaN;
-        if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) {
-          return aTime - bTime;
-        }
-        return Number(a.id) - Number(b.id);
-      });
-    return children;
-  };
-
-  const ensureParentGoal = async (parentGoalId) => {
-    const parent = await getStoredGoal(parentGoalId);
+  const ensureParentGoal = async (parentId) => {
+    const parent = await getStoredGoal(parentId);
     if (!parent) {
       throw new Error('Parent goal not found');
     }
@@ -445,25 +595,64 @@ export const createMetaGoalWithChildren = async ({
 
   const parent = parentGoalId
     ? await ensureParentGoal(parentGoalId)
-    : (await createGoalFromPrompt({ projectId, prompt, title: parentTitle })).goal;
+    : (await createGoalFromPrompt({
+      projectId,
+      prompt,
+      title: parentTitle,
+      extraClarifyingQuestions: parentExtraClarifyingQuestions
+    })).goal;
 
-  const existingChildren = await resolveExistingChildren(parent);
+  const allGoals = await listStoredGoals(projectId);
+  const existingChildren = allGoals.filter((goal) =>
+    goal.parentGoalId && String(goal.parentGoalId) === String(parent.id)
+  );
+
   if (existingChildren.length > 0) {
-    return { parent, children: existingChildren };
+    const tree = buildGoalTreeFromList(allGoals, parent.id);
+    return { parent, children: tree };
   }
 
-  const children = [];
-  for (const childPlan of normalizedChildPlans) {
-    const child = await createChildGoal({
+  const createNode = async (plan, parentId) => {
+    const childGoal = await createChildGoal({
       projectId,
-      parentGoalId: parent.id,
-      prompt: childPlan.prompt,
-      title: childPlan.title
+      parentGoalId: parentId,
+      prompt: plan.prompt,
+      title: plan.title
     });
-    children.push(child);
+
+    const nestedChildren = [];
+    const childPlans = plan.children;
+    for (const childPlan of childPlans) {
+      const nested = await createNode(childPlan, childGoal.id);
+      nestedChildren.push(nested);
+    }
+
+    return { ...childGoal, children: nestedChildren };
+  };
+
+  const children = [];
+  for (const plan of normalizedChildPlans) {
+    const node = await createNode(plan, parent.id);
+    children.push(node);
   }
 
   return { parent, children };
+};
+
+export const createMetaGoalWithChildren = async ({
+  projectId,
+  prompt,
+  childPrompts = [],
+  parentGoalId = null,
+  parentTitle = null
+}) => {
+  return createGoalTreeWithChildren({
+    projectId,
+    prompt,
+    childPrompts,
+    parentGoalId,
+    parentTitle
+  });
 };
 
 export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) => {
@@ -515,36 +704,19 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
     return createMetaGoalWithChildren({ projectId, prompt, childPrompts, parentGoalId: goalId });
   }
 
-  // The executor runs tests/coverage programmatically, so planning should not include
-  // "run tests"/"run coverage"/"rerun tests" steps (but it may include "add tests"/"update tests").
-  const isProgrammaticVerificationStep = (value) => {
-    const text = normalizePlannerPrompt(value);
-    if (!text) return false;
-
-    // Matches phrases like:
-    // - Run unit tests...
-    // - Re-run integration tests...
-    // - Run coverage / check coverage / ensure coverage thresholds...
-    // - npm run test / yarn test / pnpm test
-    const looksLikeCommand = /(\bnpm\b|\byarn\b|\bpnpm\b)\s+run\s+\btest\b/i.test(text);
-    if (looksLikeCommand) return true;
-
-    const verb = /^(run|re-?run|execute|verify|check)\b/i;
-    if (!verb.test(text)) return false;
-
-    return /(\bunit\s+tests\b|\bintegration\s+tests\b|\btests\b|\bvitest\b|\bcoverage\b)/i.test(text);
-  };
-
   const systemMessage = {
     role: 'system',
     content:
       'You are a software planning assistant. Given a high-level user request, ' +
       'decompose it into the smallest list of concrete development goals needed to satisfy the request. ' +
+      'If any goal can be broken into subgoals, nest them under a "children" array. ' +
       'Do NOT include steps about running tests, running coverage, or re-running tests/coverage (those happen automatically). ' +
       'You MAY include steps that add/update tests as part of the work. ' +
-      'Respond with JSON shaped exactly like ' +
+      'If key details are missing, include a "questions" array with short clarifying questions. ' +
+      'Respond with JSON shaped like ' +
       '{ "parentTitle": "Short summary (<=10 words)", ' +
-      '  "childGoals": [ { "title": "Short label (<=8 words)", "prompt": "Detailed implementation instructions" } ] }.'
+      '  "questions": ["Optional clarifying question"], ' +
+      '  "childGoals": [ { "title": "Short label (<=8 words)", "prompt": "Detailed implementation instructions", "children": [ ... ] } ] }.'
   };
 
   const userMessage = {
@@ -569,52 +741,40 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
   }
 
   const parentTitle = typeof parsed.parentTitle === 'string' ? parsed.parentTitle.trim() : '';
+  const clarifyingQuestions = normalizeClarifyingQuestions(
+    parsed?.questions || parsed?.clarifyingQuestions || []
+  );
 
-  let childEntries = [];
+  let rawChildEntries = [];
   if (Array.isArray(parsed.childGoals)) {
-    childEntries = parsed.childGoals
-      .map((entry) => ({
-        title: typeof entry?.title === 'string' ? entry.title.trim() : '',
-        prompt: typeof entry?.prompt === 'string' ? entry.prompt.trim() : ''
-      }));
+    rawChildEntries = parsed.childGoals;
   } else if (Array.isArray(parsed.childPrompts)) {
-    childEntries = parsed.childPrompts
-      .map((candidate) => ({
-        title: '',
-        prompt: typeof candidate === 'string' ? candidate.trim() : ''
-      }));
+    rawChildEntries = parsed.childPrompts;
   } else {
     console.error('[ERROR] LLM response missing child goals:', parsed);
     throw new Error('LLM planning response missing childGoals array');
   }
 
-  if (childEntries.length === 0) {
+  if (rawChildEntries.length === 0) {
     console.error('[ERROR] LLM response returned no child goals');
     throw new Error('LLM planning response has empty childGoals array');
   }
 
-  const unique = new Set();
-  const childPlans = [];
-  for (const entry of childEntries) {
-    if (isProgrammaticVerificationStep(entry.prompt)) continue;
-    const text = normalizePlannerPrompt(entry.prompt);
-    if (!text) continue;
-    if (unique.has(text)) continue;
-    unique.add(text);
-    childPlans.push({ prompt: text, title: entry.title });
-  }
-
-  if (childPlans.length === 0) {
+  const normalizedChildPlans = normalizeGoalPlanTree(rawChildEntries);
+  if (normalizedChildPlans.length === 0) {
     throw new Error('LLM planning produced no usable child prompts');
   }
 
-  return createMetaGoalWithChildren({
+  const result = await createGoalTreeWithChildren({
     projectId,
     prompt,
-    childPrompts: childPlans,
+    childPrompts: normalizedChildPlans,
     parentGoalId: goalId,
-    parentTitle: parentTitle || null
+    parentTitle: parentTitle || null,
+    parentExtraClarifyingQuestions: clarifyingQuestions
   });
+
+  return { ...result, questions: clarifyingQuestions };
 };
 
 export const getGoalWithTasks = async (goalId) => {
@@ -775,7 +935,12 @@ export const __testExports__ = {
   normalizeJsonLikeText,
   deriveGoalTitle,
   normalizeChildPlans,
-  normalizePlannerPrompt
+  normalizeClarifyingQuestions,
+  normalizePlannerPrompt,
+  normalizeGoalPlanTree,
+  buildGoalTreeFromList,
+  buildGoalMetadataFromPrompt,
+  isProgrammaticVerificationStep
 };
 
 export default {

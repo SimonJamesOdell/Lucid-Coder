@@ -171,7 +171,7 @@ describe('GoalsModal', () => {
 
     // total===0 branch where parent is ready => shows 1/1.
     expect(within(list).getByText('Solo done goal')).toBeInTheDocument();
-    expect(within(list).getByText('1/1')).toBeInTheDocument();
+    expect(within(list).getAllByText('1/1').length).toBeGreaterThan(0);
 
     // total===0 branch where parent is not done => no progress counter.
     expect(within(list).getByText('Solo not done goal')).toBeInTheDocument();

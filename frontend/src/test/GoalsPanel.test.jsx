@@ -26,7 +26,7 @@ describe('GoalsPanel', () => {
   it('shows empty state when no project selected', () => {
     useAppState.mockReturnValue({ currentProject: null, jobState: null });
 
-    render(<GoalsPanel mode="tab" />);
+    const { container } = render(<GoalsPanel mode="tab" />);
 
     expect(screen.getByTestId('goals-tab')).toBeInTheDocument();
     expect(screen.getByTestId('goals-modal-empty')).toHaveTextContent('Select a project');
@@ -35,7 +35,7 @@ describe('GoalsPanel', () => {
   it('ignores goals-updated events when no project is selected', () => {
     useAppState.mockReturnValue({ currentProject: null, jobState: null });
 
-    render(<GoalsPanel mode="tab" />);
+    const { container } = render(<GoalsPanel mode="tab" />);
 
     window.dispatchEvent(new CustomEvent('lucidcoder:goals-updated', { detail: { projectId: 1 } }));
 
@@ -46,7 +46,7 @@ describe('GoalsPanel', () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
     goalsApi.fetchGoals.mockResolvedValue([]);
 
-    render(<GoalsPanel mode="tab" />);
+    const { container } = render(<GoalsPanel mode="tab" />);
 
     await waitFor(() => {
       expect(goalsApi.fetchGoals).toHaveBeenCalledWith(1, { includeArchived: true });
@@ -66,7 +66,7 @@ describe('GoalsPanel', () => {
         { id: 100, prompt: 'Parent', status: 'planning', parentGoalId: null }
       ]);
 
-    render(<GoalsPanel mode="tab" />);
+    const { container } = render(<GoalsPanel mode="tab" />);
 
     // Initial render shows the verifying badge.
     const childButton = await screen.findByTestId('goals-modal-goal-101');
@@ -172,6 +172,64 @@ describe('GoalsPanel', () => {
     expect(within(goalButton).getByText('Failed')).toBeInTheDocument();
   });
 
+  it('computes progress ratio for parent goals with children', () => {
+    const { computeGoalProgress } = GoalsPanel.__testHooks;
+    const goal = {
+      status: 'planning',
+      children: [
+        { status: 'ready', children: [] },
+        { status: 'planning', children: [] }
+      ]
+    };
+
+    const result = computeGoalProgress(goal);
+
+    expect(result).toMatchObject({ done: 1, total: 2 });
+    expect(result.ratio).toBe(0.5);
+  });
+
+  it('treats non-array children as empty when rendering', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    const goalsPayload = [{ id: 41, prompt: 'Parent goal', status: 'planning', parentGoalId: null }];
+    goalsApi.fetchGoals.mockResolvedValue(goalsPayload);
+
+    const originalIsArray = Array.isArray;
+    const isArraySpy = vi.spyOn(Array, 'isArray').mockImplementation((value) => {
+      if (originalIsArray(value) && value.length === 0) {
+        return false;
+      }
+      return originalIsArray(value);
+    });
+
+    const { container } = render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Parent goal')).toBeInTheDocument();
+    });
+
+    expect(container.querySelector('.goals-modal-children')).toBeNull();
+
+    isArraySpy.mockRestore();
+  });
+
+  it('does not mark goals done when there is no progress and status is not ready', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 15, prompt: 'Still planning', status: 'planning', parentGoalId: null }
+    ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Still planning')).toBeInTheDocument();
+    });
+
+    const goalButton = screen.getByTestId('goals-modal-goal-15');
+    expect(goalButton.className).not.toMatch(/done/);
+    expect(within(goalButton).queryByText('0/0')).not.toBeInTheDocument();
+    expect(goalButton.querySelector('.goals-modal-progressbar')).toBeNull();
+  });
+
   it('loads details when selecting a goal and renders tasks (falls back to type when title missing)', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
     goalsApi.fetchGoals.mockResolvedValue([
@@ -219,6 +277,43 @@ describe('GoalsPanel', () => {
       .map((node) => node.textContent);
 
     expect(titles).toEqual(['First', 'Second', 'Third']);
+  });
+
+  it('skips goals that are missing ids when building the tree', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { prompt: 'Missing id', status: 'planning', parentGoalId: null },
+      { id: 21, prompt: 'Valid goal', status: 'planning', parentGoalId: null }
+    ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Valid goal')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Missing id')).not.toBeInTheDocument();
+  });
+
+  it('renders nested child goals with child styling', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 30, prompt: 'Root', status: 'planning', parentGoalId: null },
+      { id: 31, prompt: 'Child', status: 'ready', parentGoalId: 30 },
+      { id: 32, prompt: 'Grandchild', status: 'ready', parentGoalId: 31 }
+    ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Root')).toBeInTheDocument();
+    });
+
+    const childButton = screen.getByTestId('goals-modal-goal-31');
+    const grandchildButton = screen.getByTestId('goals-modal-goal-32');
+
+    expect(childButton.className).toMatch(/child/);
+    expect(grandchildButton.className).toMatch(/child/);
   });
 
   it('sorts child goals with createdAt ahead of those without', async () => {
@@ -692,13 +787,24 @@ describe('GoalsPanel helper hooks', () => {
   });
 
   it('computeGoalProgress reports parent-only completion and child ratios', () => {
-    const parent = { id: 1, status: 'done' };
-    expect(hooks.computeGoalProgress(parent, [])).toEqual({ done: 1, total: 1, ratio: 1 });
+    const parent = { id: 1, status: 'done', children: [] };
+    expect(hooks.computeGoalProgress(parent)).toEqual({ done: 1, total: 1, ratio: 1 });
 
-    const children = [{ id: 2, status: 'ready' }, { id: 3, status: 'failed' }];
-    const withChildren = hooks.computeGoalProgress({ id: 4, status: 'implementing' }, children);
+    const withChildren = hooks.computeGoalProgress({
+      id: 4,
+      status: 'implementing',
+      children: [
+        { id: 2, status: 'ready', children: [] },
+        { id: 3, status: 'failed', children: null }
+      ]
+    });
     expect(withChildren.done).toBe(1);
     expect(withChildren.total).toBe(2);
     expect(withChildren.ratio).toBe(0.5);
+  });
+
+  it('computeGoalProgress ignores non-array children and reports zero progress', () => {
+    const result = hooks.computeGoalProgress({ id: 9, status: 'planning', children: 'nope' });
+    expect(result).toEqual({ done: 0, total: 0, ratio: 0 });
   });
 });

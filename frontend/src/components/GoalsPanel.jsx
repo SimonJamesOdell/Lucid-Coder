@@ -42,16 +42,64 @@ const formatPhaseLabel = (phase) => {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 };
 
-const computeGoalProgress = (parent, children) => {
-  const total = children.length;
-  if (total === 0) {
-    if (isGoalDone(parent)) {
+const computeLeafProgress = (goal) => {
+  const children = Array.isArray(goal?.children) ? goal.children : [];
+  if (children.length === 0) {
+    return { done: isGoalDone(goal) ? 1 : 0, total: 1 };
+  }
+
+  return children.reduce(
+    (acc, child) => {
+      const next = computeLeafProgress(child);
+      return { done: acc.done + next.done, total: acc.total + next.total };
+    },
+    { done: 0, total: 0 }
+  );
+};
+
+const computeGoalProgress = (goal) => {
+  const children = Array.isArray(goal?.children) ? goal.children : [];
+  if (children.length === 0) {
+    if (isGoalDone(goal)) {
       return { done: 1, total: 1, ratio: 1 };
     }
     return { done: 0, total: 0, ratio: 0 };
   }
-  const done = children.filter((child) => isGoalDone(child)).length;
-  return { done, total, ratio: done / total };
+
+  const leafProgress = computeLeafProgress(goal);
+  const ratio = leafProgress.done / leafProgress.total;
+  return { ...leafProgress, ratio };
+};
+
+const buildGoalTree = (goals = []) => {
+  const map = new Map();
+  goals.forEach((goal) => {
+    if (!goal?.id) return;
+    map.set(goal.id, { ...goal, children: [] });
+  });
+
+  map.forEach((node) => {
+    if (node.parentGoalId && map.has(node.parentGoalId)) {
+      map.get(node.parentGoalId).children.push(node);
+    }
+  });
+
+  const roots = Array.from(map.values()).filter(
+    (node) => !node.parentGoalId || !map.has(node.parentGoalId)
+  );
+
+  const sortTree = (nodes) => {
+    const sorted = nodes.slice().sort(compareGoalsForDisplay);
+    sorted.forEach((node) => {
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        node.children = node.children.slice().sort(compareGoalsForDisplay);
+        sortTree(node.children);
+      }
+    });
+    return sorted;
+  };
+
+  return sortTree(roots);
 };
 
 export const compareGoalsForDisplay = (a, b) => {
@@ -93,25 +141,7 @@ const GoalsPanel = ({
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const parents = useMemo(() => goals.filter((goal) => !goal.parentGoalId), [goals]);
-
-  const childrenByParent = useMemo(() => {
-    const map = goals.reduce((next, goal) => {
-      if (goal.parentGoalId) {
-        if (!next[goal.parentGoalId]) {
-          next[goal.parentGoalId] = [];
-        }
-        next[goal.parentGoalId].push(goal);
-      }
-      return next;
-    }, {});
-
-    Object.values(map).forEach((children) => {
-      children.sort(compareGoalsForDisplay);
-    });
-
-    return map;
-  }, [goals]);
+  const goalTree = useMemo(() => buildGoalTree(goals), [goals]);
 
   const loadGoals = async (projectId, { silent = false } = {}) => {
     if (!projectId) {
@@ -410,76 +440,57 @@ const GoalsPanel = ({
               )}
 
               <div className="goals-modal-goal-list" data-testid="goals-modal-goal-list">
-                {parents.map((goal) => {
-                  const children = childrenByParent[goal.id] || [];
-                  const progress = computeGoalProgress(goal, children);
-                  const groupDone = progress.total > 0 ? progress.done === progress.total : isGoalDone(goal);
-                  const isSelected = goal.id === selectedGoalId;
-                  const goalPhase = normalizePhase(goal.status) || '';
+                {goalTree.map((goal) => {
+                  const renderGoalNode = (node, depth = 0) => {
+                    const children = Array.isArray(node.children) ? node.children : [];
+                    const progress = computeGoalProgress(node);
+                    const groupDone = progress.total > 0 ? progress.done === progress.total : isGoalDone(node);
+                    const isSelected = node.id === selectedGoalId;
+                    const goalPhase = normalizePhase(node.status) || '';
+                    const isChild = depth > 0;
 
-                  return (
-                    <div key={goal.id} className="goals-modal-goal-group">
-                      <button
-                        type="button"
-                        className={`goals-modal-goal${isSelected ? ' selected' : ''}${groupDone ? ' done' : ''}`}
-                        onClick={() => setSelectedGoalId(goal.id)}
-                        data-testid={`goals-modal-goal-${goal.id}`}
-                      >
-                        <div className="goals-modal-goal-title">{getGoalTitle(goal)}</div>
-                        <div className="goals-modal-goal-meta">
-                          <span
-                            className={`goals-modal-goal-status${goalPhase ? ` ${goalPhase}` : ''}`}
-                            aria-label={`Status: ${formatPhaseLabel(goalPhase)}`}
-                          >
-                            {formatPhaseLabel(goalPhase)}
-                          </span>
-                          {progress.total > 0 && (
-                            <span className="goals-modal-goal-progress">
-                              {progress.done}/{progress.total}
+                    return (
+                      <div key={node.id} className="goals-modal-goal-group">
+                        <button
+                          type="button"
+                          className={`goals-modal-goal${isChild ? ' child' : ''}${isSelected ? ' selected' : ''}${groupDone ? ' done' : ''}`}
+                          onClick={() => setSelectedGoalId(node.id)}
+                          data-testid={`goals-modal-goal-${node.id}`}
+                        >
+                          <div className="goals-modal-goal-title">{getGoalTitle(node)}</div>
+                          <div className="goals-modal-goal-meta">
+                            <span
+                              className={`goals-modal-goal-status${goalPhase ? ` ${goalPhase}` : ''}`}
+                              aria-label={`Status: ${formatPhaseLabel(goalPhase)}`}
+                            >
+                              {formatPhaseLabel(goalPhase)}
                             </span>
+                            {progress.total > 0 && (
+                              <span className="goals-modal-goal-progress">
+                                {progress.done}/{progress.total}
+                              </span>
+                            )}
+                          </div>
+                          {progress.total > 0 && (
+                            <div className="goals-modal-progressbar" aria-hidden="true">
+                              <div
+                                className="goals-modal-progressbar-fill"
+                                style={{ width: `${Math.round(progress.ratio * 100)}%` }}
+                              />
+                            </div>
                           )}
-                        </div>
-                        {progress.total > 0 && (
-                          <div className="goals-modal-progressbar" aria-hidden="true">
-                            <div
-                              className="goals-modal-progressbar-fill"
-                              style={{ width: `${Math.round(progress.ratio * 100)}%` }}
-                            />
+                        </button>
+
+                        {children.length > 0 && (
+                          <div className="goals-modal-children">
+                            {children.map((child) => renderGoalNode(child, depth + 1))}
                           </div>
                         )}
-                      </button>
+                      </div>
+                    );
+                  };
 
-                      {children.length > 0 && (
-                        <div className="goals-modal-children">
-                          {children.map((child) => (
-                            (() => {
-                              const childPhase = normalizePhase(child.status) || '';
-                              const childDone = isGoalDone(child);
-                              return (
-                            <button
-                              key={child.id}
-                              type="button"
-                              className={`goals-modal-goal child${child.id === selectedGoalId ? ' selected' : ''}${childDone ? ' done' : ''}`}
-                              onClick={() => setSelectedGoalId(child.id)}
-                              data-testid={`goals-modal-goal-${child.id}`}
-                            >
-                              <div className="goals-modal-goal-title">{getGoalTitle(child)}</div>
-                              <div className="goals-modal-goal-meta">
-                                <span
-                                  className={`goals-modal-goal-status${childPhase ? ` ${childPhase}` : ''}`}
-                                  aria-label={`Status: ${formatPhaseLabel(childPhase)}`}
-                                >
-                                  {formatPhaseLabel(childPhase)}
-                                </span>
-                              </div>
-                            </button>
-                              );
-                            })()
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
+                  return renderGoalNode(goal, 0);
                 })}
               </div>
             </div>
