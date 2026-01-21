@@ -1142,7 +1142,8 @@ export const buildEditsPrompt = ({
   const failureContextBlock = formatTestFailureContext(testFailureContext);
   const reflectionBlock = formatScopeReflectionContext(scopeReflection);
 
-  let userContent = `${projectInfo}${fileTreeContext}\n\nTask: ${goalPrompt}\n\nStage: ${stageLabel}. ${focusInstructions}`;
+  let userContent = `${projectInfo}${fileTreeContext}\n\nTask: ${goalPrompt}\n\nStage: ${stageLabel}. ${focusInstructions} ` +
+    'Honor layout/placement constraints in the task (e.g., top of page, full-width).';
   if (reflectionBlock) {
     userContent += reflectionBlock;
   }

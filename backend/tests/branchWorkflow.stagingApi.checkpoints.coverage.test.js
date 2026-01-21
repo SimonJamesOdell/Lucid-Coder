@@ -11,6 +11,7 @@ const buildCore = ({
   gitReady = true,
   branchType = 'feature',
   branchName = 'agent/branch',
+  branchStatus = 'active',
   runProjectGitImpl,
   checkoutBranchImpl,
   listGitStagedPathsImpl
@@ -26,7 +27,7 @@ const buildCore = ({
   const updatedRow = {
     id: 123,
     name: branchName,
-    status: 'active',
+    status: branchStatus,
     type: branchType,
     staged_files: '[]',
     ahead_commits: 0
@@ -43,7 +44,7 @@ const buildCore = ({
     id: 123,
     name: branchName,
     type: branchType,
-    status: 'active',
+    status: branchStatus,
     staged_files: '[]',
     ahead_commits: 0
   });
@@ -102,6 +103,41 @@ const buildCore = ({
 };
 
 describe('branchWorkflow stagingApi checkpoint helpers (coverage)', () => {
+  it('parseNumstatLine returns null for invalid input and parses valid entries', () => {
+    const staging = createBranchWorkflowStaging(buildCore());
+
+    expect(staging.parseNumstatLine('')).toBeNull();
+    expect(staging.parseNumstatLine('1 2')).toBeNull();
+
+    expect(staging.parseNumstatLine('3 4 src/app.js')).toEqual({
+      additions: 3,
+      deletions: 4,
+      path: 'src/app.js'
+    });
+
+    expect(staging.parseNumstatLine('- - src/app.js')).toEqual({
+      additions: null,
+      deletions: null,
+      path: 'src/app.js'
+    });
+  });
+
+  it('coerceReasonableSummary formats file summaries and handles empty input', () => {
+    const staging = createBranchWorkflowStaging(buildCore());
+
+    expect(staging.coerceReasonableSummary([])).toBe('');
+    expect(staging.coerceReasonableSummary(null)).toBe('');
+
+    const summary = staging.coerceReasonableSummary([
+      { path: 'src/app.js', additions: 3, deletions: 1 },
+      { path: '', additions: null, deletions: 2 }
+    ]);
+
+    expect(summary).toBe(
+      '1. src/app.js (+3 / -1)\n' +
+      '2. unknown file (-2)'
+    );
+  });
   it('getBranchStagedPatch throws 400 when branchName is missing', async () => {
     const staging = createBranchWorkflowStaging(buildCore());
 
@@ -220,6 +256,160 @@ describe('branchWorkflow stagingApi checkpoint helpers (coverage)', () => {
     const staging = createBranchWorkflowStaging(core);
 
     await expect(staging.applyBranchPatch(1, 'agent/branch', { patch: 'diff --git a/a b/a\n' })).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('commitBranchChanges skips auto-stage when status output is empty', async () => {
+    const core = buildCore({
+      runProjectGitImpl: async (_context, args) => {
+        if (args?.[0] === 'status' && args?.[1] === '--porcelain') {
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      }
+    });
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({ statusCode: 400 });
+    expect(core.runProjectGit).toHaveBeenCalledWith(expect.any(Object), ['status', '--porcelain']);
+    expect(core.listGitStagedPaths).not.toHaveBeenCalled();
+  });
+
+  it('commitBranchChanges skips auto-stage when status stdout is not a string', async () => {
+    const core = buildCore({
+      runProjectGitImpl: async (_context, args) => {
+        if (args?.[0] === 'status' && args?.[1] === '--porcelain') {
+          return { stdout: 123 };
+        }
+        return { stdout: '' };
+      }
+    });
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({ statusCode: 400 });
+    expect(core.listGitStagedPaths).not.toHaveBeenCalled();
+  });
+
+  it('commitBranchChanges tolerates status command failures', async () => {
+    const core = buildCore({
+      runProjectGitImpl: async (_context, args) => {
+        if (args?.[0] === 'status' && args?.[1] === '--porcelain') {
+          throw new Error('status failed');
+        }
+        return { stdout: '' };
+      }
+    });
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({ statusCode: 400 });
+    expect(core.runProjectGit).toHaveBeenCalledWith(expect.any(Object), ['status', '--porcelain']);
+  });
+
+  it('commitBranchChanges attempts auto-stage but still fails without staged paths', async () => {
+    const core = buildCore({
+      runProjectGitImpl: async (_context, args) => {
+        if (args?.[0] === 'status' && args?.[1] === '--porcelain') {
+          return { stdout: ' M src/app.js\n' };
+        }
+        if (args?.[0] === 'add') {
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      },
+      listGitStagedPathsImpl: async () => []
+    });
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({ statusCode: 400 });
+    expect(core.runProjectGit).toHaveBeenCalledWith(expect.any(Object), ['add', '-A']);
+    expect(core.listGitStagedPaths).toHaveBeenCalled();
+  });
+
+  it('commitBranchChanges tolerates staged-path listing failures', async () => {
+    const core = buildCore({
+      runProjectGitImpl: async (_context, args) => {
+        if (args?.[0] === 'status' && args?.[1] === '--porcelain') {
+          return { stdout: ' M src/app.js\n' };
+        }
+        if (args?.[0] === 'add') {
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      },
+      listGitStagedPathsImpl: async () => {
+        throw new Error('list failed');
+      }
+    });
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({ statusCode: 400 });
+    expect(core.listGitStagedPaths).toHaveBeenCalled();
+  });
+
+  it('commitBranchChanges logs auto-stage failures and continues', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const core = buildCore({
+      runProjectGitImpl: async (_context, args) => {
+        if (args?.[0] === 'status' && args?.[1] === '--porcelain') {
+          return { stdout: ' M src/app.js\n' };
+        }
+        if (args?.[0] === 'add') {
+          throw new Error('git add failed');
+        }
+        return { stdout: '' };
+      }
+    });
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({ statusCode: 400 });
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('commitBranchChanges logs auto-stage failures with non-error values', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const core = buildCore({
+      runProjectGitImpl: async (_context, args) => {
+        if (args?.[0] === 'status' && args?.[1] === '--porcelain') {
+          return { stdout: ' M src/app.js\n' };
+        }
+        if (args?.[0] === 'add') {
+          throw 'git add failed';
+        }
+        return { stdout: '' };
+      }
+    });
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({ statusCode: 400 });
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('commitBranchChanges auto-stages when git has changes and updates the branch', async () => {
+    const core = buildCore({
+      runProjectGitImpl: async (_context, args) => {
+        if (args?.[0] === 'status' && args?.[1] === '--porcelain') {
+          return { stdout: ' M styles/main.css\n' };
+        }
+        if (args?.[0] === 'add') {
+          return { stdout: '' };
+        }
+        if (args?.[0] === 'rev-parse' && args?.[1] === 'HEAD') {
+          return { stdout: 'abc1234567\n' };
+        }
+        return { stdout: '' };
+      },
+      listGitStagedPathsImpl: async () => ['styles/main.css']
+    });
+    const staging = createBranchWorkflowStaging(core);
+
+    const result = await staging.commitBranchChanges(1, 'agent/branch');
+
+    expect(core.run).toHaveBeenCalled();
+    expect(core.get).toHaveBeenCalledWith('SELECT * FROM branches WHERE id = ?', [123]);
+    expect(result.commit.files).toEqual([
+      expect.objectContaining({ path: 'styles/main.css', source: 'ai' })
+    ]);
   });
 
   it('applyBranchPatch throws 500 when git apply fails and cleans temp directory', async () => {

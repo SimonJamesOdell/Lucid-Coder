@@ -538,6 +538,61 @@ const normalizeGoalPlanTree = (
   return nodes;
 };
 
+const normalizePlanComparison = (value) => (
+  typeof value === 'string'
+    ? value.toLowerCase().replace(/[^a-z0-9\s]/gi, ' ').replace(/\s+/g, ' ').trim()
+    : ''
+);
+
+const isNearDuplicatePlan = (parentPrompt, childPrompt) => {
+  const parent = normalizePlanComparison(parentPrompt);
+  const child = normalizePlanComparison(childPrompt);
+  if (!parent || !child) return false;
+  if (parent.includes(child) || child.includes(parent)) {
+    const minLength = Math.min(parent.length, child.length);
+    const maxLength = Math.max(parent.length, child.length);
+    return maxLength > 0 && minLength / maxLength >= 0.6;
+  }
+  return false;
+};
+
+const isCompoundPrompt = (prompt) => {
+  const normalized = normalizePlanComparison(prompt);
+  if (!normalized) return false;
+  return /(\band\b|\bwith\b|\bplus\b|\balso\b|\bincluding\b|\binclude\b|,|;)/i.test(normalized);
+};
+
+const isLowInformationPlan = (prompt, plans = []) => {
+  if (!Array.isArray(plans) || plans.length === 0) return true;
+  if (plans.length > 1) return false;
+
+  const plan = plans[0] || {};
+  const childPrompt = plan.prompt || plan.title || '';
+  const hasChildren = Array.isArray(plan.children) && plan.children.length > 0;
+  if (hasChildren) return false;
+
+  return isNearDuplicatePlan(prompt, childPrompt) || isCompoundPrompt(prompt);
+};
+
+const buildHeuristicChildPlans = (prompt) => {
+  const trimmed = typeof prompt === 'string' ? prompt.trim() : '';
+  const subject = trimmed || 'the requested feature';
+  return [
+    {
+      title: 'Define structure',
+      prompt: `Identify the components, routes, and behaviors needed for ${subject}.`
+    },
+    {
+      title: 'Implement components',
+      prompt: `Build the UI components required for ${subject}, including any reusable pieces.`
+    },
+    {
+      title: 'Integrate in app',
+      prompt: `Wire the new components into the app and ensure the behavior matches the request for ${subject}.`
+    }
+  ];
+};
+
 const buildGoalTreeFromList = (goals = [], parentId = null) => {
   const map = new Map();
   goals.forEach((goal) => {
@@ -704,65 +759,95 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
     return createMetaGoalWithChildren({ projectId, prompt, childPrompts, parentGoalId: goalId });
   }
 
-  const systemMessage = {
-    role: 'system',
-    content:
-      'You are a software planning assistant. Given a high-level user request, ' +
-      'decompose it into the smallest list of concrete development goals needed to satisfy the request. ' +
-      'If any goal can be broken into subgoals, nest them under a "children" array. ' +
-      'Do NOT include steps about running tests, running coverage, or re-running tests/coverage (those happen automatically). ' +
-      'You MAY include steps that add/update tests as part of the work. ' +
-      'If key details are missing, include a "questions" array with short clarifying questions. ' +
-      'Respond with JSON shaped like ' +
-      '{ "parentTitle": "Short summary (<=10 words)", ' +
-      '  "questions": ["Optional clarifying question"], ' +
-      '  "childGoals": [ { "title": "Short label (<=8 words)", "prompt": "Detailed implementation instructions", "children": [ ... ] } ] }.'
+  const buildPlannerMessages = (strict = false) => {
+    const strictInstructions = strict
+      ? 'Return 3-7 child goals unless the request is truly trivial. ' +
+        'Each child goal must be actionable and include specific details pulled from the request. ' +
+        'Do NOT restate the user prompt verbatim. ' +
+        'Prefer component-level steps and integration steps when working on UI features.'
+      : '';
+
+    const systemMessage = {
+      role: 'system',
+      content:
+        'You are a software planning assistant. Given a high-level user request, ' +
+        'decompose it into the smallest list of concrete development goals needed to satisfy the request. ' +
+        'If any goal can be broken into subgoals, nest them under a "children" array. ' +
+        'Do NOT include steps about running tests, running coverage, or re-running tests/coverage (those happen automatically). ' +
+        'You MAY include steps that add/update tests as part of the work. ' +
+        'If key details are missing, include a "questions" array with short clarifying questions. ' +
+        strictInstructions +
+        ' Respond with JSON shaped like ' +
+        '{ "parentTitle": "Short summary (<=10 words)", ' +
+        '  "questions": ["Optional clarifying question"], ' +
+        '  "childGoals": [ { "title": "Short label (<=8 words)", "prompt": "Detailed implementation instructions", "children": [ ... ] } ] }.'
+    };
+
+    const userMessage = {
+      role: 'user',
+      content: `Plan work for this request: "${prompt}"`
+    };
+
+    return [systemMessage, userMessage];
   };
 
-  const userMessage = {
-    role: 'user',
-    content: `Plan work for this request: "${prompt}"`
+  const requestPlannerResult = async (strict = false) => {
+    const raw = await llmClient.generateResponse(buildPlannerMessages(strict), {
+      max_tokens: 900,
+      temperature: 0.3,
+      __lucidcoderPhase: 'meta_goal_planning',
+      __lucidcoderRequestType: 'plan_meta_goals'
+    });
+
+    console.log('[DEBUG] LLM raw response:', raw);
+    const parsed = extractJsonObject(raw);
+    console.log('[DEBUG] Parsed JSON:', parsed);
+
+    if (!parsed) {
+      console.error('[ERROR] Failed to parse JSON from LLM response');
+      throw new Error('LLM planning response was not valid JSON');
+    }
+
+    const parentTitle = typeof parsed.parentTitle === 'string' ? parsed.parentTitle.trim() : '';
+    const clarifyingQuestions = normalizeClarifyingQuestions(
+      parsed?.questions || parsed?.clarifyingQuestions || []
+    );
+
+    let rawChildEntries = [];
+    if (Array.isArray(parsed.childGoals)) {
+      rawChildEntries = parsed.childGoals;
+    } else if (Array.isArray(parsed.childPrompts)) {
+      rawChildEntries = parsed.childPrompts;
+    } else {
+      console.error('[ERROR] LLM response missing child goals:', parsed);
+      throw new Error('LLM planning response missing childGoals array');
+    }
+
+    if (rawChildEntries.length === 0) {
+      console.error('[ERROR] LLM response returned no child goals');
+      throw new Error('LLM planning response has empty childGoals array');
+    }
+
+    const normalizedChildPlans = normalizeGoalPlanTree(rawChildEntries);
+    if (normalizedChildPlans.length === 0) {
+      throw new Error('LLM planning produced no usable child prompts');
+    }
+
+    return { parentTitle, clarifyingQuestions, normalizedChildPlans };
   };
 
-  const raw = await llmClient.generateResponse([systemMessage, userMessage], {
-    max_tokens: 400,
-    temperature: 0.4,
-    __lucidcoderPhase: 'meta_goal_planning',
-    __lucidcoderRequestType: 'plan_meta_goals'
-  });
-
-  console.log('[DEBUG] LLM raw response:', raw);
-  const parsed = extractJsonObject(raw);
-  console.log('[DEBUG] Parsed JSON:', parsed);
-  
-  if (!parsed) {
-    console.error('[ERROR] Failed to parse JSON from LLM response');
-    throw new Error('LLM planning response was not valid JSON');
+  let plan = await requestPlannerResult(false);
+  if (isLowInformationPlan(prompt, plan.normalizedChildPlans)) {
+    try {
+      plan = await requestPlannerResult(true);
+    } catch (retryError) {
+      console.warn('[WARN] Strict planning retry failed:', retryError?.message || retryError);
+    }
   }
 
-  const parentTitle = typeof parsed.parentTitle === 'string' ? parsed.parentTitle.trim() : '';
-  const clarifyingQuestions = normalizeClarifyingQuestions(
-    parsed?.questions || parsed?.clarifyingQuestions || []
-  );
-
-  let rawChildEntries = [];
-  if (Array.isArray(parsed.childGoals)) {
-    rawChildEntries = parsed.childGoals;
-  } else if (Array.isArray(parsed.childPrompts)) {
-    rawChildEntries = parsed.childPrompts;
-  } else {
-    console.error('[ERROR] LLM response missing child goals:', parsed);
-    throw new Error('LLM planning response missing childGoals array');
-  }
-
-  if (rawChildEntries.length === 0) {
-    console.error('[ERROR] LLM response returned no child goals');
-    throw new Error('LLM planning response has empty childGoals array');
-  }
-
-  const normalizedChildPlans = normalizeGoalPlanTree(rawChildEntries);
-  if (normalizedChildPlans.length === 0) {
-    throw new Error('LLM planning produced no usable child prompts');
+  let normalizedChildPlans = plan.normalizedChildPlans;
+  if (isLowInformationPlan(prompt, normalizedChildPlans)) {
+    normalizedChildPlans = normalizeGoalPlanTree(buildHeuristicChildPlans(prompt));
   }
 
   const result = await createGoalTreeWithChildren({
@@ -770,11 +855,11 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
     prompt,
     childPrompts: normalizedChildPlans,
     parentGoalId: goalId,
-    parentTitle: parentTitle || null,
-    parentExtraClarifyingQuestions: clarifyingQuestions
+    parentTitle: plan.parentTitle || null,
+    parentExtraClarifyingQuestions: plan.clarifyingQuestions
   });
 
-  return { ...result, questions: clarifyingQuestions };
+  return { ...result, questions: plan.clarifyingQuestions };
 };
 
 export const getGoalWithTasks = async (goalId) => {
@@ -940,7 +1025,10 @@ export const __testExports__ = {
   normalizeGoalPlanTree,
   buildGoalTreeFromList,
   buildGoalMetadataFromPrompt,
-  isProgrammaticVerificationStep
+  isProgrammaticVerificationStep,
+  isCompoundPrompt,
+  isLowInformationPlan,
+  buildHeuristicChildPlans
 };
 
 export default {
