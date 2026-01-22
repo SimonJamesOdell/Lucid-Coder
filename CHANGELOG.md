@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 (2026-01-22)
+- Expanded ChatPanel behavior and styling, plus broader test coverage.
+- Added and refined goals API utilities with updated tests.
+- Updated goal automation handlers and processing flow.
+- Improved agent route handling and request flows, with additional backend tests.
+
 ## 0.2.0 (2026-01-21)
 - Added nested goal planning with bounded depth/size, plus persistence of multi-level goal trees.
 - Enhanced goal iteration to traverse nested goals, with clarification gating when requirements are underspecified.

@@ -1042,6 +1042,7 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
         'Avoid phrasing like "Implement the primary feature described in: <request>" or "Outline the main components needed for: <request>". ' +
         'If the request mentions placement (e.g., "top of the screen", "header", "sidebar"), include a goal to integrate into the app layout and apply minimal styling so the placement is honored. ' +
         'For navigation requests, avoid placing links inline in page content; prefer a dedicated navigation component mounted in the layout/header. ' +
+        'Assume UI code lives under frontend/ and server code under backend/ unless the project context says otherwise. ' +
         'Preferred structure: one top-level goal with 3-5 sub-goals (children) that describe concrete steps. ' +
         'Example of good goal structure (do not copy, follow the style): ' +
         'For a nav bar request, good goals would be: ' +

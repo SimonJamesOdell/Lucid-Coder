@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import axios from 'axios';
 import { useAppState } from '../context/AppStateContext';
 import './ChatPanel.css';
 import {
   agentRequest,
+  agentRequestStream,
   fetchGoals,
   createGoal,
   createMetaGoalWithChildren,
@@ -85,6 +88,8 @@ const ChatPanel = ({
   const inputRef = useRef(null);
   const autoFixInFlightRef = useRef(false);
   const autoFixCancelRef = useRef(false);
+  const lastProjectIdRef = useRef(null);
+  const messagesRef = useRef([]);
   const {
     autopilotSession,
     autopilotEvents,
@@ -108,6 +113,144 @@ const ChatPanel = ({
     handleAutopilotControl
   } = useAutopilotSession({ currentProjectId: currentProject?.id });
 
+  const createMessage = (sender, text, options = {}) => ({
+    id: `${sender}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    text,
+    sender,
+    timestamp: new Date(),
+    variant: options.variant || null
+  });
+
+  const extractClarificationOptions = useCallback((question) => {
+    if (typeof question !== 'string') {
+      return [];
+    }
+
+    const lines = question.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const bulletOptions = lines
+      .map((line) => line.replace(/^[-*•]\s+/, '').trim())
+      .filter((line) => line && !/^[-*•]/.test(line));
+
+    const bulletOnly = lines
+      .filter((line) => /^[-*•]\s+/.test(line))
+      .map((line) => line.replace(/^[-*•]\s+/, '').trim())
+      .filter(Boolean);
+
+    let options = bulletOnly.length > 0 ? bulletOnly : [];
+
+    if (options.length === 0) {
+      const inlineMatch = question.match(/\(([^)]+)\)/);
+      if (inlineMatch && inlineMatch[1]) {
+        options = inlineMatch[1].split(/\s*[|/]\s*/).map((item) => item.trim()).filter(Boolean);
+      }
+    }
+
+    if (options.length === 0) {
+      const optionLine = lines.find((line) => /^(options|choices|choose|pick)\b/i.test(line));
+      if (optionLine) {
+        const parts = optionLine.split(/[:,-]\s*/).slice(1).join(' ');
+        options = parts.split(/\s*(?:,|\/|\bor\b)\s*/i).map((item) => item.trim()).filter(Boolean);
+      }
+    }
+
+    const unique = Array.from(new Set(options.filter(Boolean)));
+    return unique.length >= 2 && unique.length <= 5 ? unique : [];
+  }, []);
+  const messagesContainerRef = useRef(null);
+  const autoScrollEnabledRef = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const streamingTimersRef = useRef(new Map());
+  const streamingMessageIdRef = useRef(null);
+  const streamingTextRef = useRef('');
+  /* c8 ignore next */
+  const isTestEnv = typeof import.meta !== 'undefined'
+    /* c8 ignore next */
+    ? import.meta.env?.MODE === 'test'
+    /* c8 ignore next */
+    : false;
+  const prefersReducedMotion = typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
+
+  const isMessagesScrolledToBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return true;
+    }
+    const threshold = 24;
+    return container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const atBottom = isMessagesScrolledToBottom();
+    autoScrollEnabledRef.current = atBottom;
+    setShowScrollToBottom(!atBottom);
+  }, [isMessagesScrolledToBottom]);
+
+  const scrollMessagesToBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+    autoScrollEnabledRef.current = true;
+    setShowScrollToBottom(false);
+  }, []);
+
+  const scrollMessagesToBottomIfEnabled = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container || !autoScrollEnabledRef.current) {
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+    setShowScrollToBottom(false);
+  }, []);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+    if (autoScrollEnabledRef.current) {
+      container.scrollTop = container.scrollHeight;
+      setShowScrollToBottom(false);
+    } else {
+      setShowScrollToBottom(true);
+    }
+  }, [messages.length]);
+
+  useEffect(() => () => {
+    streamingTimersRef.current.forEach((timerId) => clearInterval(timerId));
+    streamingTimersRef.current.clear();
+  }, []);
+
+  const resetStreamingMessage = useCallback(() => {
+    streamingMessageIdRef.current = null;
+    streamingTextRef.current = '';
+  }, []);
+
+  const appendStreamingChunk = useCallback((chunk) => {
+    if (typeof chunk !== 'string' || !chunk) {
+      return;
+    }
+
+    if (!streamingMessageIdRef.current) {
+      const message = createMessage('assistant', '');
+      streamingMessageIdRef.current = message.id;
+      streamingTextRef.current = '';
+      setMessages((prev) => [...prev, message]);
+    }
+
+    streamingTextRef.current += chunk;
+    const nextText = streamingTextRef.current;
+
+    setMessages((prev) => prev.map((item) => (
+      item.id === streamingMessageIdRef.current ? { ...item, text: nextText } : item
+    )));
+    scrollMessagesToBottomIfEnabled();
+  }, [createMessage, scrollMessagesToBottomIfEnabled, setMessages]);
+
   const shouldSkipAutomationTests = useCallback(() => {
     return shouldSkipAutomationTestsHelper({
       currentProject,
@@ -126,6 +269,72 @@ const ChatPanel = ({
       autoFixCancelRef.current = true;
     }
   }, []);
+
+  const readStoredChat = useCallback((projectId) => {
+    if (typeof window === 'undefined' || !projectId) {
+      return [];
+    }
+    try {
+      const raw = window.localStorage?.getItem?.(`lucidcoder.chat.${projectId}`);
+      if (!raw) {
+        return [];
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed.map((item) => ({
+        ...item,
+        timestamp: item?.timestamp ? new Date(item.timestamp) : new Date()
+      }));
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const persistChat = useCallback((projectId, nextMessages) => {
+    if (typeof window === 'undefined' || !projectId) {
+      return;
+    }
+    try {
+      const trimmed = Array.isArray(nextMessages) ? nextMessages.slice(-200) : [];
+      const payload = trimmed.map((item) => ({
+        id: item.id,
+        text: item.text,
+        sender: item.sender,
+        variant: item.variant || null,
+        timestamp: item.timestamp ? new Date(item.timestamp).toISOString() : new Date().toISOString()
+      }));
+      window.localStorage?.setItem?.(`lucidcoder.chat.${projectId}`, JSON.stringify(payload));
+    } catch {
+      // Ignore storage failures
+    }
+  }, []);
+
+  useEffect(() => {
+    const projectId = currentProject?.id || null;
+    if (projectId === lastProjectIdRef.current) {
+      return;
+    }
+    lastProjectIdRef.current = projectId;
+    if (!projectId) {
+      setMessages([]);
+      return;
+    }
+    setMessages(readStoredChat(projectId));
+  }, [currentProject?.id, readStoredChat]);
+
+  useEffect(() => {
+    const projectId = currentProject?.id;
+    if (!projectId) {
+      return;
+    }
+    persistChat(projectId, messages);
+  }, [currentProject?.id, messages, persistChat]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     const projectId = currentProject?.id;
@@ -182,7 +391,6 @@ const ChatPanel = ({
     };
   }, []);
 
-  const createMessage = (sender, text, options = {}) => ({ id: `${sender}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, sender, timestamp: new Date(), variant: options.variant || null });
 
   useEffect(() => {
     if (ChatPanel.__testHooks) {
@@ -266,6 +474,10 @@ const ChatPanel = ({
     };
     ChatPanel.__testHooks.latestInstance = {
       autopilotResumeAttemptedRef,
+      isMessagesScrolledToBottom,
+      messagesRef,
+      messagesContainerRef,
+      scrollMessagesToBottom,
       refreshAutopilotStatus,
       stopAutopilotPoller,
       setAutopilotSession,
@@ -277,6 +489,10 @@ const ChatPanel = ({
       loadStoredAutopilotSession,
       applyAutopilotSummary,
       stopAutopilotPoller
+    };
+    ChatPanel.__testHooks.chatStorage = {
+      persistChat,
+      readStoredChat
     };
   }
 
@@ -370,11 +586,194 @@ const ChatPanel = ({
     }
   };
 
+  const streamAssistantMessage = useCallback((text, options = {}) => {
+    if (typeof text !== 'string' || !text) {
+      return;
+    }
+
+    if (isTestEnv || prefersReducedMotion) {
+      setMessages((prev) => [...prev, createMessage('assistant', text, options)]);
+      return;
+    }
+
+    const message = createMessage('assistant', '', options);
+    const fullText = text;
+    setMessages((prev) => [...prev, { ...message, fullText }]);
+
+    const totalLength = fullText.length;
+    const chunkSize = Math.max(2, Math.ceil(totalLength / 120));
+    let offset = 0;
+
+    const tick = () => {
+      offset = Math.min(totalLength, offset + chunkSize);
+      const nextText = fullText.slice(0, offset);
+      setMessages((prev) => prev.map((item) => (item.id === message.id ? { ...item, text: nextText } : item)));
+      scrollMessagesToBottomIfEnabled();
+
+      if (offset >= totalLength) {
+        const timerId = streamingTimersRef.current.get(message.id);
+        if (timerId) {
+          clearInterval(timerId);
+          streamingTimersRef.current.delete(message.id);
+        }
+      }
+    };
+
+    tick();
+    const timerId = setInterval(tick, 16);
+    streamingTimersRef.current.set(message.id, timerId);
+  }, [createMessage, isTestEnv, prefersReducedMotion, scrollMessagesToBottomIfEnabled]);
+
+  const runAgentRequestStream = useCallback(async ({ projectId, prompt }) => {
+    let result = null;
+    let streamError = null;
+    await agentRequestStream({
+      projectId,
+      prompt,
+      onChunk: appendStreamingChunk,
+      onComplete: (payload) => {
+        result = payload;
+      },
+      onError: (message) => {
+        streamError = message || 'Agent request failed';
+      }
+    });
+
+    if (streamError) {
+      throw new Error(streamError);
+    }
+
+    return result;
+  }, [appendStreamingChunk]);
+
+  const handleAgentResult = useCallback(async (result, { streamedAnswer = false, prompt, resolvedPrompt } = {}) => {
+    if (!result) {
+      return;
+    }
+
+    if (Array.isArray(result.steps)) {
+      appendAgentSteps(result.steps);
+    }
+
+    if (result.kind === 'question' && result.answer) {
+      if (!streamedAnswer) {
+        streamAssistantMessage(result.answer);
+      }
+      return;
+    }
+
+    if (result.kind === 'feature') {
+      if (result.planOnly) {
+        await handlePlanOnlyFeature(
+          currentProject.id,
+          currentProject,
+          prompt,
+          setPreviewPanelTab,
+          setGoalCount,
+          createMessage,
+          setMessages,
+          { requestEditorFocus, syncBranchOverview }
+        );
+        return;
+      }
+
+      const execution = await handleRegularFeature(
+        currentProject.id,
+        currentProject,
+        resolvedPrompt,
+        result,
+        setPreviewPanelTab,
+        setGoalCount,
+        createMessage,
+        setMessages,
+        { requestEditorFocus, syncBranchOverview }
+      );
+
+      if (execution?.needsClarification) {
+        if (execution?.clarifyingQuestions?.length) {
+          setPendingClarification({
+            projectId: currentProject.id,
+            prompt: resolvedPrompt,
+            questions: execution.clarifyingQuestions
+          });
+        }
+        return;
+      }
+
+      if (execution?.success === true && typeof startAutomationJob === 'function') {
+        const skipCssTests = await shouldSkipAutomationTests();
+        if (skipCssTests) {
+          setPreviewPanelTab?.('commits', { source: 'automation' });
+          setMessages((prev) => [
+            ...prev,
+            createMessage('assistant', 'CSS-only update detected. Skipping automated test run and moving to commit stage.', { variant: 'status' })
+          ]);
+          return;
+        }
+
+        setPreviewPanelTab?.('tests', { source: 'automation' });
+        setMessages((prev) => [
+          ...prev,
+          createMessage('assistant', 'Starting frontend + backend test runs…', { variant: 'status' })
+        ]);
+
+        markTestRunIntent?.('automation');
+
+        const settled = await Promise.allSettled([
+          startAutomationJob('frontend:test', { projectId: currentProject.id }),
+          startAutomationJob('backend:test', { projectId: currentProject.id })
+        ]);
+
+        const firstFailure = settled.find((entry) => entry.status === 'rejected');
+        if (firstFailure && firstFailure.status === 'rejected') {
+          const message = firstFailure.reason?.message || 'Failed to start automated test run.';
+          setMessages((prev) => [
+            ...prev,
+            createMessage('assistant', message, { variant: 'error' })
+          ]);
+        }
+      }
+      return;
+    }
+
+    if (result.kind !== 'question' && result.kind !== 'feature' && stageAiChange) {
+      await stageAiChange(currentProject.id, prompt);
+    }
+  }, [
+    appendAgentSteps,
+    createMessage,
+    currentProject,
+    handlePlanOnlyFeature,
+    handleRegularFeature,
+    markTestRunIntent,
+    requestEditorFocus,
+    setMessages,
+    setPendingClarification,
+    setPreviewPanelTab,
+    setGoalCount,
+    stageAiChange,
+    startAutomationJob,
+    shouldSkipAutomationTests,
+    streamAssistantMessage,
+    syncBranchOverview
+  ]);
+
   const submitPrompt = useCallback(async (rawPrompt, { origin = 'user' } = {}) => {
     const trimmed = typeof rawPrompt === 'string' ? rawPrompt.trim() : '';
     if (!trimmed) {
       return;
     }
+
+    const buildConversationContext = () => {
+      const recent = (messagesRef.current || [])
+        .filter((msg) => msg?.sender && msg?.text && msg.variant !== 'status')
+        .slice(-4);
+      if (!recent.length) {
+        return '';
+      }
+      const lines = recent.map((msg) => `${msg.sender === 'assistant' ? 'Assistant' : 'User'}: ${msg.text}`);
+      return `Conversation context:\n${lines.join('\n')}`;
+    };
 
     const respondNoRun = () => {
       setMessages((prev) => [
@@ -458,99 +857,42 @@ const ChatPanel = ({
             ...pendingClarification.questions.map((question) => `- ${question}`),
             `User answer: ${trimmed}`
           ].join('\n')
-          : trimmed;
+          : [buildConversationContext(), `Current request: ${trimmed}`]
+            .filter(Boolean)
+            .join('\n\n');
 
         if (pendingClarification) {
           setPendingClarification(null);
         }
 
+        let streamedAnswer = false;
+        resetStreamingMessage();
+
+        if (!isTestEnv && typeof window !== 'undefined' && typeof window.fetch === 'function') {
+          try {
+            const streamedResult = await runAgentRequestStream({
+              projectId: currentProject.id,
+              prompt: resolvedPrompt
+            });
+            streamedAnswer = Boolean(streamingMessageIdRef.current);
+            await handleAgentResult(streamedResult, {
+              streamedAnswer,
+              prompt: trimmed,
+              resolvedPrompt
+            });
+            resetStreamingMessage();
+            return;
+          } catch (streamError) {
+            resetStreamingMessage();
+          }
+        }
+
         const result = await callAgentWithTimeout({ projectId: currentProject.id, prompt: resolvedPrompt });
-
-        if (Array.isArray(result.steps)) {
-          appendAgentSteps(result.steps);
-        }
-
-        if (result.kind === 'question' && result.answer) {
-          setMessages((prev) => [...prev, createMessage('assistant', result.answer)]);
-        }
-
-        if (result.kind === 'feature') {
-          if (result.planOnly) {
-            await handlePlanOnlyFeature(
-              currentProject.id,
-              currentProject,
-              trimmed,
-              setPreviewPanelTab,
-              setGoalCount,
-              createMessage,
-              setMessages,
-              { requestEditorFocus, syncBranchOverview }
-            );
-            return;
-          }
-
-          const execution = await handleRegularFeature(
-            currentProject.id,
-            currentProject,
-            resolvedPrompt,
-            result,
-            setPreviewPanelTab,
-            setGoalCount,
-            createMessage,
-            setMessages,
-            { requestEditorFocus, syncBranchOverview }
-          );
-
-          if (execution?.needsClarification) {
-            if (execution?.clarifyingQuestions?.length) {
-              setPendingClarification({
-                projectId: currentProject.id,
-                prompt: resolvedPrompt,
-                questions: execution.clarifyingQuestions
-              });
-            }
-            return;
-          }
-
-          if (execution?.success === true && typeof startAutomationJob === 'function') {
-            const skipCssTests = await shouldSkipAutomationTests();
-            if (skipCssTests) {
-              setPreviewPanelTab?.('commits', { source: 'automation' });
-              setMessages((prev) => [
-                ...prev,
-                createMessage('assistant', 'CSS-only update detected. Skipping automated test run and moving to commit stage.', { variant: 'status' })
-              ]);
-              return;
-            }
-
-            setPreviewPanelTab?.('tests', { source: 'automation' });
-            setMessages((prev) => [
-              ...prev,
-              createMessage('assistant', 'Starting frontend + backend test runs…', { variant: 'status' })
-            ]);
-
-            markTestRunIntent?.('automation');
-
-            const settled = await Promise.allSettled([
-              startAutomationJob('frontend:test', { projectId: currentProject.id }),
-              startAutomationJob('backend:test', { projectId: currentProject.id })
-            ]);
-
-            const firstFailure = settled.find((entry) => entry.status === 'rejected');
-            if (firstFailure && firstFailure.status === 'rejected') {
-              const message = firstFailure.reason?.message || 'Failed to start automated test run.';
-              setMessages((prev) => [
-                ...prev,
-                createMessage('assistant', message, { variant: 'error' })
-              ]);
-            }
-          }
-          return;
-        }
-
-        if (result.kind !== 'question' && result.kind !== 'feature' && stageAiChange) {
-          await stageAiChange(currentProject.id, trimmed);
-        }
+        await handleAgentResult(result, {
+          streamedAnswer,
+          prompt: trimmed,
+          resolvedPrompt
+        });
       } catch (error) {
         console.warn('Failed to stage AI request', error);
         if (error.message && /timed out/i.test(error.message)) {
@@ -574,12 +916,17 @@ const ChatPanel = ({
     currentProject,
     handleAutopilotControl,
     handleAutopilotMessage,
+    handleAgentResult,
     markTestRunIntent,
+    resetStreamingMessage,
+    runAgentRequestStream,
     setPreviewPanelTab,
     stageAiChange,
     shouldSkipAutomationTests,
-    startAutomationJob
+    startAutomationJob,
+    streamAssistantMessage
   ]);
+
 
   const runAutomatedTestFixGoal = useCallback(async (payload, { origin = 'automation' } = {}) => {
     const prompt = payload.prompt.trim();
@@ -864,9 +1211,24 @@ const ChatPanel = ({
             )}
           </button>
         )}
+        {isSending ? (
+          <div className="chat-typing" data-testid="chat-typing">
+            <span className="chat-typing__label">Assistant is thinking</span>
+            <span className="chat-typing__dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        ) : null}
       </div>
       
-      <div className="chat-messages" data-testid="chat-messages">
+      <div
+        className="chat-messages"
+        data-testid="chat-messages"
+        ref={messagesContainerRef}
+        onScroll={handleMessagesScroll}
+      >
         {messages.length === 0 ? (
           <div className="chat-welcome">
             <p>Welcome! Ask me anything about your project.</p>
@@ -878,16 +1240,31 @@ const ChatPanel = ({
               key={message.id}
               className={`chat-message ${message.sender} ${message.variant ? `chat-message--${message.variant}` : ''}`}
             >
-              <div className={`message-content ${message.variant === 'status' ? 'message-content--status' : ''}`}>
-                {message.text}
-              </div>
-              <div className="message-time">
-                {message.timestamp.toLocaleTimeString()}
+              <div className="chat-message-row">
+                <div className={`message-content ${message.variant === 'status' ? 'message-content--status' : ''}`}>
+                  {message.sender === 'assistant' ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {message.text}
+                    </ReactMarkdown>
+                  ) : (
+                    message.text
+                  )}
+                </div>
               </div>
             </div>
           ))
         )}
       </div>
+      {showScrollToBottom ? (
+        <button
+          type="button"
+          className="chat-scroll-bottom"
+          onClick={scrollMessagesToBottom}
+          aria-label="Scroll to latest message"
+        >
+          Scroll to bottom
+        </button>
+      ) : null}
 
       {autopilotSession ? (
         <div className="chat-inspector" data-testid="chat-inspector">
@@ -934,11 +1311,33 @@ const ChatPanel = ({
         </div>
       )}
 
-      {isSending && !errorMessage && (
-        <div className="chat-status" data-testid="chat-status">
-          Assistant is thinking about your request...
+      {pendingClarification ? (
+        <div className="chat-clarification" data-testid="chat-clarification">
+          <div className="chat-clarification__title">Clarification needed</div>
+          {pendingClarification.questions.map((question, index) => {
+            const options = extractClarificationOptions(question);
+            return (
+              <div key={`clarify-${index}`} className="chat-clarification__question">
+                <div className="chat-clarification__text">{question}</div>
+                {options.length > 0 ? (
+                  <div className="chat-clarification__options">
+                    {options.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className="chat-clarification__option"
+                        onClick={() => submitPrompt(option, { origin: 'clarification-option' })}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
-      )}
+      ) : null}
 
       {errorMessage && (
         <div className="chat-error" data-testid="chat-error">

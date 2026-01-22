@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import axios from 'axios';
 import {
   fetchGoals,
@@ -8,7 +8,8 @@ import {
   recordGoalTestRun,
   runGoalTests,
   planMetaGoal,
-  agentRequest
+  agentRequest,
+  agentRequestStream
 } from './goalsApi';
 
 vi.mock('axios', () => ({
@@ -19,10 +20,16 @@ vi.mock('axios', () => ({
 }));
 
 const mockedAxios = axios;
+const originalFetch = global.fetch;
 
 describe('goalsApi helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    global.fetch = originalFetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
   });
 
   test('fetchGoals requires projectId and returns goal list', async () => {
@@ -102,5 +109,132 @@ describe('goalsApi helpers', () => {
     mockedAxios.post.mockResolvedValue({ data: { ok: true } });
     await agentRequest({ projectId: 'proj-1', prompt: 'Assist' });
     expect(mockedAxios.post).toHaveBeenCalledWith('/api/agent/request', { projectId: 'proj-1', prompt: 'Assist' });
+  });
+
+  test('agentRequestStream validates inputs and handles response errors', async () => {
+    await expect(agentRequestStream()).rejects.toThrow('projectId is required');
+    await expect(agentRequestStream({ projectId: 'proj-1' })).rejects.toThrow('prompt is required');
+
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    await expect(agentRequestStream({ projectId: 'proj-1', prompt: 'Hello' })).rejects.toThrow(
+      'Streaming request failed (500)'
+    );
+
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: null });
+    await expect(agentRequestStream({ projectId: 'proj-1', prompt: 'Hello' })).rejects.toThrow(
+      'Streaming request failed (200)'
+    );
+  });
+
+  test('agentRequestStream emits chunk, done, and error events', async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      'event: chunk\n',
+      'data: {"text":"Hello"}\n\n',
+      'event: chunk\n\n',
+      'event: chunk\n',
+      'data: plain text\n\n',
+      'event: done\n',
+      'data: {"result":{"kind":"question"}}\n\n',
+      'event: error\n',
+      'data: {"message":"boom"}\n\n'
+    ];
+
+    const stream = new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+        controller.close();
+      }
+    });
+
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: stream });
+
+    const receivedChunks = [];
+    const completed = [];
+    const errors = [];
+
+    await agentRequestStream({
+      projectId: 'proj-1',
+      prompt: 'Hello',
+      onChunk: (text) => receivedChunks.push(text),
+      onComplete: (result) => completed.push(result),
+      onError: (message) => errors.push(message)
+    });
+
+    expect(receivedChunks).toEqual(['Hello', 'plain text']);
+    expect(completed).toEqual([{ kind: 'question' }]);
+    expect(errors).toEqual(['boom']);
+  });
+
+  test('agentRequestStream parses event names from reader chunks', async () => {
+    const encoder = new TextEncoder();
+    const payload = [
+      'event: chunk\n',
+      'data: {"text":"Hello"}\n\n',
+      'event: done\n',
+      'data: {"result":{"kind":"question"}}\n\n'
+    ].join('');
+
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({ value: encoder.encode(payload), done: false })
+        .mockResolvedValueOnce({ value: undefined, done: true })
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { getReader: () => reader }
+    });
+
+    const receivedChunks = [];
+    const completed = [];
+
+    await agentRequestStream({
+      projectId: 'proj-1',
+      prompt: 'Hello',
+      onChunk: (text) => receivedChunks.push(text),
+      onComplete: (result) => completed.push(result)
+    });
+
+    expect(receivedChunks).toEqual(['Hello']);
+    expect(completed).toEqual([{ kind: 'question' }]);
+  });
+
+  test('agentRequestStream invokes chunk and done handlers', async () => {
+    const encoder = new TextEncoder();
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({
+          value: encoder.encode('event: chunk\ndata: {"text":"Hi"}\n\n'),
+          done: false
+        })
+        .mockResolvedValueOnce({
+          value: encoder.encode('event: done\ndata: {"result":{"kind":"question"}}\n\n'),
+          done: false
+        })
+        .mockResolvedValueOnce({ value: undefined, done: true })
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { getReader: () => reader }
+    });
+
+    const onChunk = vi.fn();
+    const onComplete = vi.fn();
+
+    await agentRequestStream({
+      projectId: 'proj-1',
+      prompt: 'Hello',
+      onChunk,
+      onComplete
+    });
+
+    expect(onChunk).toHaveBeenCalledWith('Hi');
+    expect(onComplete).toHaveBeenCalledWith({ kind: 'question' });
   });
 });

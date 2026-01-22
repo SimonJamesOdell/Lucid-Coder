@@ -167,6 +167,135 @@ describe('Agent routes', () => {
     });
   });
 
+  describe('POST /api/agent/request/stream', () => {
+    const readStreamResponse = (req) =>
+      req.buffer(true).parse((res, callback) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk.toString();
+        });
+        res.on('end', () => callback(null, data));
+      });
+
+    test('rejects missing projectId', async () => {
+      const response = await request(app)
+        .post('/api/agent/request/stream')
+        .send({ prompt: 'Do something' });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'projectId is required' });
+    });
+
+    test('rejects when body is missing (req.body fallback)', async () => {
+      const response = await request(createApp(false))
+        .post('/api/agent/request/stream');
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'projectId is required' });
+    });
+
+    test('rejects missing prompt', async () => {
+      const response = await request(app)
+        .post('/api/agent/request/stream')
+        .send({ projectId: 123 });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'prompt is required' });
+    });
+
+    test('streams chunks for question answers and sends done event', async () => {
+      handleAgentRequest.mockResolvedValue({
+        kind: 'question',
+        answer: 'This is a longer answer that should be chunked across multiple events.'
+      });
+
+      const response = await readStreamResponse(
+        request(app)
+          .post('/api/agent/request/stream')
+          .send({ projectId: 123, prompt: 'Do something' })
+      );
+
+      const payload = String(response.text || response.body || '');
+
+      expect(response.status).toBe(200);
+      expect(payload).toContain('event: chunk');
+      expect(payload).toContain('event: done');
+      expect(handleAgentRequest).toHaveBeenCalledWith({ projectId: 123, prompt: 'Do something' });
+    });
+
+    test('streams error event when handler throws', async () => {
+      handleAgentRequest.mockRejectedValue(new Error('boom'));
+
+      const response = await readStreamResponse(
+        request(app)
+          .post('/api/agent/request/stream')
+          .send({ projectId: 123, prompt: 'Do something' })
+      );
+
+      const payload = String(response.text || response.body || '');
+
+      expect(response.status).toBe(200);
+      expect(payload).toContain('event: error');
+      expect(payload).toContain('"message":"boom"');
+    });
+
+    test('streams default error message when thrown value lacks message', async () => {
+      handleAgentRequest.mockRejectedValue({});
+
+      const response = await readStreamResponse(
+        request(app)
+          .post('/api/agent/request/stream')
+          .send({ projectId: 123, prompt: 'Do something' })
+      );
+
+      const payload = String(response.text || response.body || '');
+
+      expect(response.status).toBe(200);
+      expect(payload).toContain('event: error');
+      expect(payload).toContain('"message":"Agent request failed"');
+    });
+
+    test('flushes headers when available', async () => {
+      handleAgentRequest.mockResolvedValue({ kind: 'feature' });
+
+      const handler = findRouteHandler('/request/stream', 'post');
+      const write = vi.fn();
+      const end = vi.fn();
+      const res = {
+        setHeader: vi.fn(),
+        write,
+        end,
+        flushHeaders: vi.fn()
+      };
+      const req = { body: { projectId: 1, prompt: 'Ping' } };
+
+      await handler(req, res);
+
+      expect(res.flushHeaders).toHaveBeenCalled();
+      expect(write).toHaveBeenCalled();
+      expect(end).toHaveBeenCalled();
+    });
+
+    test('skips flushHeaders when unavailable', async () => {
+      handleAgentRequest.mockResolvedValue({ kind: 'feature' });
+
+      const handler = findRouteHandler('/request/stream', 'post');
+      const write = vi.fn();
+      const end = vi.fn();
+      const res = {
+        setHeader: vi.fn(),
+        write,
+        end
+      };
+      const req = { body: { projectId: 1, prompt: 'Ping' } };
+
+      await handler(req, res);
+
+      expect(write).toHaveBeenCalled();
+      expect(end).toHaveBeenCalled();
+    });
+  });
+
   describe('POST /api/agent/ui/snapshot', () => {
     test('rejects when body is missing (req.body fallback)', async () => {
       const response = await request(createApp(false))

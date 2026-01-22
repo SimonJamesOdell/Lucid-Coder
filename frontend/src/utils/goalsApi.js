@@ -94,6 +94,87 @@ export const agentRequest = async ({ projectId, prompt }) => {
   return res.data;
 };
 
+export const agentRequestStream = async ({ projectId, prompt, onChunk, onComplete, onError, signal } = {}) => {
+  if (!projectId) throw new Error('projectId is required');
+  if (!prompt) throw new Error('prompt is required');
+
+  const response = await fetch('/api/agent/request/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, prompt }),
+    signal
+  });
+
+  if (!response.ok || !response.body) {
+    const message = `Streaming request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  const emitEvent = (eventName, payload) => {
+    if (eventName === 'chunk' && typeof onChunk === 'function') {
+      /* c8 ignore next */
+      onChunk(payload?.text || '');
+      return;
+    }
+    if (eventName === 'done' && typeof onComplete === 'function') {
+      /* c8 ignore next */
+      onComplete(payload?.result || null);
+      return;
+    }
+    if (eventName === 'error' && typeof onError === 'function') {
+      onError(payload?.message || 'Agent request failed');
+    }
+  };
+
+  const parseEventBlock = (block) => {
+    const lines = block.split(/\r?\n/);
+    let eventName = 'message';
+    let data = '';
+
+    lines.forEach((line) => {
+      if (line.startsWith('event:')) {
+        /* c8 ignore next */
+        eventName = line.slice(6).trim() || 'message';
+        return;
+      }
+      if (line.startsWith('data:')) {
+        data += line.slice(5).trim();
+      }
+    });
+
+    if (!data) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(data);
+      emitEvent(eventName, payload);
+    } catch {
+      emitEvent(eventName, { text: data });
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+
+    let delimiterIndex = buffer.indexOf('\n\n');
+    while (delimiterIndex !== -1) {
+      const chunk = buffer.slice(0, delimiterIndex);
+      buffer = buffer.slice(delimiterIndex + 2);
+      parseEventBlock(chunk);
+      delimiterIndex = buffer.indexOf('\n\n');
+    }
+  }
+};
+
 export const agentAutopilot = async ({ projectId, prompt, options } = {}) => {
   if (!projectId) throw new Error('projectId is required');
   if (!prompt) throw new Error('prompt is required');
@@ -164,6 +245,7 @@ export default {
   runGoalTests,
   planMetaGoal,
   agentRequest,
+  agentRequestStream,
   agentAutopilot,
   agentAutopilotStatus,
   agentAutopilotMessage,

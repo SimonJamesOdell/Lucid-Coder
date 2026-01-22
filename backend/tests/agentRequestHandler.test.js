@@ -236,6 +236,17 @@ describe('agentRequestHandler', () => {
     expect(result).toEqual({ kind: 'feature', parent: { id: 6 }, children: [], message: 'Goals created successfully. Ready for execution.' });
   });
 
+  it('treats clarification wrapper prompts as features without LLM classification', async () => {
+    orchestrator.planGoalFromPrompt.mockResolvedValue({ parent: { id: 7 }, children: [] });
+
+    const prompt = 'Original request:Add a footer\nUser answer:Include links and social icons.';
+    const result = await handleAgentRequest({ projectId: 9, prompt });
+
+    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(orchestrator.planGoalFromPrompt).toHaveBeenCalledWith({ projectId: 9, prompt });
+    expect(result).toEqual({ kind: 'feature', parent: { id: 7 }, children: [], message: 'Goals created successfully. Ready for execution.' });
+  });
+
   it('treats "continue goals" as a question and bypasses LLM classification', async () => {
     questionAgent.answerProjectQuestion.mockResolvedValue({
       answer: 'Here are your goals.',

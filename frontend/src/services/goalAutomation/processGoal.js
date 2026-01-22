@@ -164,7 +164,7 @@ export async function processGoal(
     setGoalCount(Array.isArray(updatedGoals) ? updatedGoals.length : 0);
     notifyGoalsUpdated(projectId);
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     setPreviewPanelTab?.('files', { source: 'automation' });
 
@@ -530,7 +530,7 @@ export async function processGoal(
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await new Promise((resolve) => setTimeout(resolve, 80));
 
     setPreviewPanelTab?.('goals', { source: 'automation' });
 
@@ -545,7 +545,7 @@ export async function processGoal(
     setGoalCount(Array.isArray(finalGoals) ? finalGoals.length : 0);
     notifyGoalsUpdated(projectId);
 
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await new Promise((resolve) => setTimeout(resolve, 80));
 
     setMessages((prev) => [
       ...prev,

@@ -20,6 +20,15 @@ import {
 
 const router = express.Router();
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const STREAM_CHUNK_SIZE = 24;
+const STREAM_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 15;
+
+const writeSseEvent = (res, event, payload) => {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+};
+
 router.post('/request', async (req, res) => {
   try {
     const { projectId, prompt } = req.body || {};
@@ -39,6 +48,45 @@ router.post('/request', async (req, res) => {
       error: 'Agent request failed', 
       details: error.message || 'Unknown error' 
     });
+  }
+});
+
+router.post('/request/stream', async (req, res) => {
+  try {
+    const { projectId, prompt } = req.body || {};
+
+    if (!projectId) {
+      return res.status(400).json({ error: 'projectId is required' });
+    }
+    if (!prompt) {
+      return res.status(400).json({ error: 'prompt is required' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
+    res.write('retry: 1000\n\n');
+
+    const result = await handleAgentRequest({ projectId, prompt });
+
+    if (result?.kind === 'question' && typeof result.answer === 'string' && result.answer.length > 0) {
+      for (let index = 0; index < result.answer.length; index += STREAM_CHUNK_SIZE) {
+        const chunk = result.answer.slice(index, index + STREAM_CHUNK_SIZE);
+        writeSseEvent(res, 'chunk', { text: chunk });
+        if (STREAM_DELAY_MS) {
+          await sleep(STREAM_DELAY_MS);
+        }
+      }
+    }
+
+    writeSseEvent(res, 'done', { result });
+    res.end();
+  } catch (error) {
+    writeSseEvent(res, 'error', { message: error?.message || 'Agent request failed' });
+    res.end();
   }
 });
 
