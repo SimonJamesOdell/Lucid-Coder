@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 (2026-01-22)
+- Streamlined commit gating with a single testing CTA that launches tests and returns to commits with an auto-populated message.
+- Added queued test-run handling, return-to-commits flows, and related UI/state updates across Preview, Tests, and Commits.
+- Expanded frontend test coverage for the new commit/test automation paths.
 ## 0.2.1 (2026-01-22)
 - Expanded ChatPanel behavior and styling, plus broader test coverage.
 - Added and refined goals API utilities with updated tests.

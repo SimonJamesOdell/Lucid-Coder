@@ -8,6 +8,7 @@ import {
   loadFileExplorerState,
   loadWorkspaceChangesFromStorage,
   loadWorkingBranchesFromStorage,
+  loadPreviewPanelStateByProject,
   loadGitSettingsFromStorage
 } from './appState/persistence.js';
 import {
@@ -77,6 +78,7 @@ if (isTestEnv) {
     loadFileExplorerState,
     loadWorkspaceChangesFromStorage,
     loadWorkingBranchesFromStorage,
+    loadPreviewPanelStateByProject,
     sortJobsByCreatedAt,
     buildInitialShutdownState,
     loadGitSettingsFromStorage
@@ -119,6 +121,7 @@ export const AppStateProvider = ({ children }) => {
   const [projectProcesses, setProjectProcesses] = useState(null);
   const [fileExplorerStateByProject, setFileExplorerStateByProject] = useState(loadFileExplorerState);
   const [assistantPanelState, setAssistantPanelState] = useState(loadAssistantPanelState);
+  const [previewPanelStateByProject, setPreviewPanelStateByProject] = useState(loadPreviewPanelStateByProject);
   const [projectShutdownState, setProjectShutdownState] = useState(buildInitialShutdownState);
   const [editorFocusRequest, setEditorFocusRequest] = useState(null);
   const [previewPanelState, setPreviewPanelState] = useState({
@@ -127,7 +130,9 @@ export const AppStateProvider = ({ children }) => {
   });
   const [testRunIntent, setTestRunIntent] = useState({
     source: 'unknown',
-    updatedAt: null
+    updatedAt: null,
+    autoCommit: false,
+    returnToCommits: false
   });
   const [backendConnectivity, setBackendConnectivity] = useState({
     status: 'unknown',
@@ -145,11 +150,15 @@ export const AppStateProvider = ({ children }) => {
     };
   }
 
-  const markTestRunIntent = useCallback((source = 'unknown') => {
+  const markTestRunIntent = useCallback((source = 'unknown', options = {}) => {
     const normalized = typeof source === 'string' ? source.trim() : '';
+    const autoCommit = Boolean(options?.autoCommit);
+    const returnToCommits = Boolean(options?.returnToCommits);
     setTestRunIntent({
       source: normalized || 'unknown',
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      autoCommit,
+      returnToCommits
     });
   }, []);
 
@@ -195,6 +204,8 @@ export const AppStateProvider = ({ children }) => {
         return;
       }
 
+      const projectId = currentProject?.id || null;
+
       const source = typeof options.source === 'string' ? options.source : 'unknown';
 
       setPreviewPanelState((prev) => {
@@ -221,9 +232,42 @@ export const AppStateProvider = ({ children }) => {
           followAutomation: nextFollowAutomation
         };
       });
+
+      if (projectId) {
+        setPreviewPanelStateByProject((prev) => {
+          if (prev?.[projectId] === normalized) {
+            return prev;
+          }
+          return {
+            ...prev,
+            [projectId]: normalized
+          };
+        });
+      }
     },
-    [normalizePreviewTab]
+    [currentProject?.id, normalizePreviewTab]
   );
+
+  useEffect(() => {
+    if (!currentProject?.id) {
+      return;
+    }
+
+    const savedTab = normalizePreviewTab(previewPanelStateByProject?.[currentProject.id]);
+    if (!savedTab) {
+      return;
+    }
+
+    setPreviewPanelState((prev) => {
+      if (prev.activeTab === savedTab) {
+        return prev;
+      }
+      return {
+        ...prev,
+        activeTab: savedTab
+      };
+    });
+  }, [currentProject?.id, normalizePreviewTab, previewPanelStateByProject]);
 
   const pausePreviewAutomation = useCallback(() => {
     setPreviewPanelState((prev) => {
@@ -481,6 +525,12 @@ export const AppStateProvider = ({ children }) => {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      localStorage.setItem('previewPanelStateByProject', JSON.stringify(previewPanelStateByProject));
+    }
+  }, [previewPanelStateByProject]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
       localStorage.setItem('gitSettings', JSON.stringify(gitSettings));
     }
   }, [gitSettings]);
@@ -683,8 +733,8 @@ export const AppStateProvider = ({ children }) => {
     setCurrentProject
   });
 
-  // If the project was auto-hydrated from localStorage, close it when the LLM is
-  // not configured (boot into a safe state). User-selected projects remain open.
+  // If the project was auto-hydrated from localStorage, keep it open even when
+  // the LLM is not configured so the preview can load on boot.
   useEffect(() => {
     if (!llmStatusLoaded) {
       return;
@@ -699,25 +749,29 @@ export const AppStateProvider = ({ children }) => {
     if (!hydratedProjectFromStorageRef.current) {
       return;
     }
+  }, [currentProject?.id, isLLMConfigured, llmStatusLoaded]);
 
-    hydratedProjectFromStorageRef.current = false;
-    autoClosedProjectIdRef.current = currentProject.id;
-    void closeProject();
-  }, [closeProject, currentProject?.id, isLLMConfigured, llmStatusLoaded]);
-
-  // If a project was hydrated from storage and the LLM is ready, auto-start it
+  // If a project was hydrated from storage, auto-start it once the backend is online
   // so the preview loads after a hard refresh.
   useEffect(() => {
-    if (!llmStatusLoaded || !isLLMConfigured) {
-      return;
-    }
-
     const projectSnapshot = currentProject;
     if (!projectSnapshot?.id || !hydratedProjectFromStorageRef.current) {
       return;
     }
 
+    if (backendConnectivity?.status !== 'online') {
+      return;
+    }
+
     if (autoStartedProjectIdRef.current === projectSnapshot.id) {
+      return;
+    }
+
+    setPreviewPanelTab('preview', { source: 'system' });
+
+    if (projectProcesses?.projectId === projectSnapshot.id && projectProcesses.isRunning) {
+      autoStartedProjectIdRef.current = projectSnapshot.id;
+      hydratedProjectFromStorageRef.current = false;
       return;
     }
 
@@ -736,12 +790,14 @@ export const AppStateProvider = ({ children }) => {
     });
   }, [
     applyProcessSnapshot,
+    backendConnectivity?.status,
     closeProject,
     currentProject,
     fetchProjectGitSettings,
-    isLLMConfigured,
-    llmStatusLoaded,
+    projectProcesses?.isRunning,
+    projectProcesses?.projectId,
     refreshProcessStatus,
+    setPreviewPanelTab,
     trackedFetch
   ]);
 
@@ -860,7 +916,12 @@ export const AppStateProvider = ({ children }) => {
     resetProjectProcesses();
     resetJobsState();
     resetGitSettings();
-    setTestRunIntent({ source: 'unknown', updatedAt: null });
+    setTestRunIntent({
+      source: 'unknown',
+      updatedAt: null,
+      autoCommit: false,
+      returnToCommits: false
+    });
     localStorage.clear();
   };
 

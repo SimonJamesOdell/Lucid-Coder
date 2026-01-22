@@ -815,6 +815,145 @@ describe('TestTab', () => {
     });
   });
 
+  test('returns to commits after tests pass when commit flow is requested', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+    const onRequestCommitsTab = vi.fn();
+
+    enqueueProofSuccess();
+
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/return-to-commits',
+        status: 'active',
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    const workspaceChanges = {
+      [baseProject.id]: {
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        workingBranches,
+        workspaceChanges,
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-running',
+            type: 'frontend:test',
+            status: 'running',
+            logs: [],
+            createdAt
+          },
+          {
+            id: 'back-running',
+            type: 'backend:test',
+            status: 'running',
+            logs: [],
+            createdAt
+          }
+        ])
+      }))
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', returnToCommits: true, updatedAt: completedAt },
+        workingBranches,
+        workspaceChanges,
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-done',
+            type: 'frontend:test',
+            status: 'succeeded',
+            logs: [],
+            createdAt,
+            completedAt
+          },
+          {
+            id: 'back-done',
+            type: 'backend:test',
+            status: 'succeeded',
+            logs: [],
+            createdAt,
+            completedAt
+          }
+        ])
+      }));
+
+    const view = render(
+      <TestTab project={baseProject} onRequestCommitsTab={onRequestCommitsTab} />
+    );
+
+    view.rerender(
+      <TestTab project={baseProject} onRequestCommitsTab={onRequestCommitsTab} />
+    );
+
+    const proofUrl = `/api/projects/${baseProject.id}/branches/${encodeURIComponent('feature/return-to-commits')}/tests/proof`;
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(proofUrl, expect.any(Object));
+      expect(onRequestCommitsTab).toHaveBeenCalled();
+    });
+  });
+
+  test('return-to-commits flow runs immediately when tests already succeeded', async () => {
+    const createdAt = new Date(Date.now() + 10000).toISOString();
+    const completedAt = new Date(Date.now() + 20000).toISOString();
+    const onRequestCommitsTab = vi.fn();
+
+    enqueueProofSuccess();
+
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/return-to-commits',
+        status: 'active',
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    const workspaceChanges = {
+      [baseProject.id]: {
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    useAppState.mockReturnValue(buildContext({
+      testRunIntent: { source: 'automation', returnToCommits: true, updatedAt: completedAt },
+      workingBranches,
+      workspaceChanges,
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-done',
+          type: 'frontend:test',
+          status: 'succeeded',
+          logs: [],
+          createdAt,
+          completedAt
+        },
+        {
+          id: 'back-done',
+          type: 'backend:test',
+          status: 'succeeded',
+          logs: [],
+          createdAt,
+          completedAt
+        }
+      ])
+    }));
+
+    render(
+      <TestTab project={baseProject} onRequestCommitsTab={onRequestCommitsTab} />
+    );
+
+    const proofUrl = `/api/projects/${baseProject.id}/branches/${encodeURIComponent('feature/return-to-commits')}/tests/proof`;
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(proofUrl, expect.any(Object));
+      expect(onRequestCommitsTab).toHaveBeenCalled();
+    });
+  });
+
   test('surfaces proof submission errors before attempting a commit', async () => {
     const createdAt = new Date(Date.now() + 50).toISOString();
     const completedAt = new Date(Date.now() + 100).toISOString();
@@ -1508,6 +1647,214 @@ describe('TestTab', () => {
         })
       );
     });
+  });
+
+  test('runAllTests starts both suites with automation intent', async () => {
+    const registerTestActions = vi.fn();
+    const startAutomationJob = vi.fn().mockResolvedValue({});
+    const markTestRunIntent = vi.fn();
+
+    useAppState.mockReturnValue(buildContext({ startAutomationJob, markTestRunIntent }));
+
+    render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
+
+    let runAllTests;
+    await waitFor(() => {
+      const payload = registerTestActions.mock.calls
+        .map(([value]) => value)
+        .find((value) => value && typeof value.runAllTests === 'function');
+      expect(payload).toBeTruthy();
+      runAllTests = payload.runAllTests;
+    });
+
+    await act(async () => {
+      await runAllTests({ source: 'automation', returnToCommits: true });
+    });
+
+    expect(markTestRunIntent).toHaveBeenCalledWith('automation', {
+      autoCommit: false,
+      returnToCommits: true
+    });
+    expect(startAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: baseProject.id });
+    expect(startAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: baseProject.id });
+  });
+
+  test('runAllTests exits early when no project or active jobs exist', async () => {
+    const registerTestActions = vi.fn();
+    const startAutomationJob = vi.fn().mockResolvedValue({});
+    const markTestRunIntent = vi.fn();
+
+    useAppState.mockReturnValue(buildContext({
+      startAutomationJob,
+      markTestRunIntent,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-running', type: 'frontend:test', status: 'running' }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
+
+    let runAllTests;
+    await waitFor(() => {
+      const payload = registerTestActions.mock.calls
+        .map(([value]) => value)
+        .find((value) => value && typeof value.runAllTests === 'function');
+      runAllTests = payload?.runAllTests;
+      expect(runAllTests).toBeTruthy();
+    });
+
+    await act(async () => {
+      await runAllTests();
+    });
+
+    expect(startAutomationJob).not.toHaveBeenCalled();
+    expect(markTestRunIntent).not.toHaveBeenCalled();
+  });
+
+  test('runAllTests defaults to user intent when source is invalid', async () => {
+    const registerTestActions = vi.fn();
+    const startAutomationJob = vi.fn().mockResolvedValue({});
+    const markTestRunIntent = vi.fn();
+
+    useAppState.mockReturnValue(buildContext({ startAutomationJob, markTestRunIntent }));
+
+    render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
+
+    let runAllTests;
+    await waitFor(() => {
+      const payload = registerTestActions.mock.calls
+        .map(([value]) => value)
+        .find((value) => value && typeof value.runAllTests === 'function');
+      runAllTests = payload?.runAllTests;
+      expect(runAllTests).toBeTruthy();
+    });
+
+    await act(async () => {
+      await runAllTests({ source: 123, autoCommit: true });
+    });
+
+    expect(markTestRunIntent).toHaveBeenCalledWith('user', {
+      autoCommit: true,
+      returnToCommits: false
+    });
+  });
+
+  test('runAllTests surfaces automation errors in the banner', async () => {
+    const registerTestActions = vi.fn();
+    const startAutomationJob = vi.fn().mockRejectedValue(new Error('automation down'));
+
+    useAppState.mockReturnValue(buildContext({ startAutomationJob }));
+
+    render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
+
+    let runAllTests;
+    await waitFor(() => {
+      const payload = registerTestActions.mock.calls
+        .map(([value]) => value)
+        .find((value) => value && typeof value.runAllTests === 'function');
+      runAllTests = payload?.runAllTests;
+      expect(runAllTests).toBeTruthy();
+    });
+
+    await act(async () => {
+      await runAllTests();
+    });
+
+    expect(screen.getByTestId('test-error-banner')).toHaveTextContent('automation down');
+  });
+
+  test('return-to-commits flow shows a commit failed modal when proof submission fails', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    axios.post.mockRejectedValueOnce({ response: { data: { error: 'Proof unavailable' } } });
+
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/proof-fail',
+        status: 'active',
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    const workspaceChanges = {
+      [baseProject.id]: {
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        workingBranches,
+        workspaceChanges,
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-running', type: 'frontend:test', status: 'running', logs: [], createdAt },
+          { id: 'back-running', type: 'backend:test', status: 'running', logs: [], createdAt }
+        ])
+      }))
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', returnToCommits: true, updatedAt: completedAt },
+        workingBranches,
+        workspaceChanges,
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-done', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+          { id: 'back-done', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+        ])
+      }));
+
+    const view = render(<TestTab project={baseProject} />);
+
+    view.rerender(<TestTab project={baseProject} />);
+
+    expect(await screen.findByText('Commit failed')).toBeInTheDocument();
+    expect(screen.getAllByText('Proof unavailable').length).toBeGreaterThan(0);
+  });
+
+  test('return-to-commits flow falls back to default proof error copy', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    axios.post.mockRejectedValueOnce({});
+
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/proof-fallback',
+        status: 'active',
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    const workspaceChanges = {
+      [baseProject.id]: {
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        workingBranches,
+        workspaceChanges,
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-running', type: 'frontend:test', status: 'running', logs: [], createdAt },
+          { id: 'back-running', type: 'backend:test', status: 'running', logs: [], createdAt }
+        ])
+      }))
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', returnToCommits: true, updatedAt: completedAt },
+        workingBranches,
+        workspaceChanges,
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-done', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+          { id: 'back-done', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+        ])
+      }));
+
+    const view = render(<TestTab project={baseProject} />);
+
+    view.rerender(<TestTab project={baseProject} />);
+
+    expect(await screen.findByText('Commit failed')).toBeInTheDocument();
+    expect(screen.getAllByText('Failed to record branch test proof').length).toBeGreaterThan(0);
   });
 
   test('starts automation jobs when run buttons are clicked', async () => {

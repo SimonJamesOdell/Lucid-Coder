@@ -258,6 +258,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
 
     if (didTestsPass) {
       const lastRunSource = typeof testRunIntent?.source === 'string' ? testRunIntent.source : 'unknown';
+      const shouldReturnToCommits = Boolean(testRunIntent?.returnToCommits);
 
       // Only offer commit / prove-branch flows for automation-driven runs.
       // Manual test runs should never auto-suggest or attempt commits.
@@ -291,6 +292,37 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         setResultModalProcessing(false);
         setResultModalProcessingMessage('');
         setIsResultModalOpen(true);
+        return;
+      }
+
+      if (shouldReturnToCommits) {
+        setResultModalProcessing(false);
+        setResultModalProcessingMessage('');
+        setIsResultModalOpen(false);
+
+        (async () => {
+          try {
+            await submitProofIfNeeded({
+              onBeforeSubmit: () => setResultModalProcessingMessage('Recording test proof…')
+            });
+          } catch (proofError) {
+            /* c8 ignore next */
+            const proofMessage = proofError.response?.data?.error
+              || proofError.message
+              || 'Failed to record branch test proof';
+            setLocalError(proofMessage);
+            setResultModalVariant('danger');
+            setResultModalTitle('Commit failed');
+            setResultModalMessage(proofMessage);
+            setResultModalConfirmText(null);
+            setResultModalConfirmAction(null);
+            setIsResultModalOpen(true);
+            return;
+          }
+
+          onRequestCommitsTab?.();
+          resetCommitResumeState();
+        })();
         return;
       }
 
@@ -500,6 +532,29 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
   }, [markTestRunIntent, startAutomationJob, projectId]);
 
+  const runAllTests = useCallback(async (options = {}) => {
+    if (!projectId || activeJobs.length) {
+      return;
+    }
+
+    setLocalError(null);
+
+    const source = typeof options?.source === 'string' ? options.source : 'user';
+
+    try {
+      markTestRunIntent?.(source, {
+        autoCommit: Boolean(options?.autoCommit),
+        returnToCommits: Boolean(options?.returnToCommits)
+      });
+
+      await Promise.all(
+        TEST_JOB_TYPES.map((config) => startAutomationJob(config.type, { projectId }))
+      );
+    } catch (error) {
+      setLocalError(error.message);
+    }
+  }, [activeJobs.length, markTestRunIntent, projectId, startAutomationJob]);
+
   const handleCancel = useCallback(async (job) => {
     if (!job) {
       return;
@@ -564,12 +619,13 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     registerTestActions({
       onRefresh: handleRefresh,
       onCancelActiveRuns: handleCancelActiveRuns,
+      runAllTests,
       refreshDisabled: jobState.isLoading,
       cancelDisabled: activeJobs.length === 0,
       isRefreshing: jobState.isLoading,
       lastFetchedAt: jobsLastFetchedAt
     });
-  }, [registerTestActions, project, handleRefresh, handleCancelActiveRuns, jobState.isLoading, activeJobs.length, jobsLastFetchedAt]);
+  }, [registerTestActions, project, handleRefresh, handleCancelActiveRuns, runAllTests, jobState.isLoading, activeJobs.length, jobsLastFetchedAt]);
 
   useEffect(() => () => {
     if (typeof registerTestActions === 'function') {

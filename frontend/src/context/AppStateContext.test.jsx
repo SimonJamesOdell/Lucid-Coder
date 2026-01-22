@@ -1216,7 +1216,69 @@ describe('AppStateContext integrations', () => {
     expect(repeatedStarts).toHaveLength(1);
   });
 
-  test('initial load closes hydrated currentProject when LLM is not configured', async () => {
+  test('auto-start marks hydrated project as started when processes already running', async () => {
+    localStorage.setItem('currentProject', JSON.stringify({ id: 'proj-running', name: 'Running Project' }));
+
+    fetchMock.mockImplementation((url, options) => {
+      if (url === '/api/llm/status') {
+        return Promise.resolve(createResponse(true, {
+          success: true,
+          configured: true,
+          ready: true,
+          config: {
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            api_url: 'https://api.openai.com/v1',
+            requires_api_key: true,
+            has_api_key: true
+          }
+        }));
+      }
+      if (url === '/api/projects') {
+        return Promise.resolve(createResponse(true, { success: true, projects: [] }));
+      }
+      if (url === '/api/settings/git') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (url === '/api/settings/ports') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-running/git-settings')) {
+        return Promise.resolve(createResponse(true, { success: true, inheritsFromGlobal: true, projectSettings: null, settings: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-running/processes')) {
+        return Promise.resolve(createResponse(true, { success: true, projectId: 'proj-running', processes: { frontend: { status: 'running', port: 5173 } } }));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.currentProject?.id).toBe('proj-running');
+    });
+
+    act(() => {
+      __appStateTestHelpers.applyProcessSnapshot('proj-running', {
+        processes: { frontend: { status: 'running', port: 5173 } }
+      });
+    });
+
+    act(() => {
+      result.current.reportBackendConnectivity('online');
+    });
+
+    await waitFor(() => {
+      const starts = fetchMock.mock.calls.filter(([url, options]) =>
+        typeof url === 'string' &&
+        url.includes('/api/projects/proj-running/start') &&
+        options?.method === 'POST'
+      );
+      expect(starts).toHaveLength(0);
+    });
+  });
+
+  test('initial load keeps hydrated currentProject when LLM is not configured', async () => {
     localStorage.setItem('currentProject', JSON.stringify({ id: 'proj-boot', name: 'Boot Project' }));
 
     fetchMock.mockImplementation((url, options) => {
@@ -1240,8 +1302,12 @@ describe('AppStateContext integrations', () => {
         return Promise.resolve(createResponse(true, { success: true, settings: {} }));
       }
 
-      if (url === '/api/projects/proj-boot/stop' && options?.method === 'POST') {
-        return Promise.resolve(createResponse(true, { success: true, message: 'stopped' }));
+      if (typeof url === 'string' && url.includes('/api/projects/proj-boot/start')) {
+        return Promise.resolve(createResponse(true, { success: true, message: 'started', processes: { frontend: { status: 'starting' } } }));
+      }
+
+      if (typeof url === 'string' && url.includes('/api/projects/proj-boot/processes')) {
+        return Promise.resolve(createResponse(true, { success: true, projectId: 'proj-boot', processes: {} }));
       }
 
       return defaultFetchImpl(url, options);
@@ -1254,10 +1320,16 @@ describe('AppStateContext integrations', () => {
       expect(result.current.currentProject?.id).toBe('proj-boot');
     });
 
-    // Once LLM status loads as unconfigured, the project is closed.
     await waitFor(() => {
-      expect(result.current.currentProject).toBeNull();
+      const starts = fetchMock.mock.calls.filter(([url, options]) =>
+        typeof url === 'string' &&
+        url.includes('/api/projects/proj-boot/start') &&
+        options?.method === 'POST'
+      );
+      expect(starts).toHaveLength(1);
     });
+
+    expect(result.current.currentProject?.id).toBe('proj-boot');
   });
 
   test('does not auto-close when hydrated currentProject is missing an id', async () => {
@@ -3873,6 +3945,65 @@ describe('AppStateContext integrations', () => {
     });
   });
 
+  test('persists preview tab per project and restores on switch', async () => {
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      result.current.setCurrentProject({ id: 'proj-1', name: 'First Project' });
+    });
+
+    act(() => {
+      result.current.setPreviewPanelTab('files', { source: 'user' });
+    });
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('previewPanelStateByProject') || '{}');
+      expect(stored['proj-1']).toBe('files');
+    });
+
+    act(() => {
+      result.current.setCurrentProject({ id: 'proj-2', name: 'Second Project' });
+    });
+
+    act(() => {
+      result.current.setPreviewPanelTab('test', { source: 'user' });
+    });
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('previewPanelStateByProject') || '{}');
+      expect(stored['proj-2']).toBe('test');
+    });
+
+    act(() => {
+      result.current.setCurrentProject({ id: 'proj-1', name: 'First Project' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.previewPanelState?.activeTab).toBe('files');
+    });
+  });
+
+  test('setPreviewPanelTab skips duplicate per-project updates', async () => {
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      result.current.setCurrentProject({ id: 'proj-dup', name: 'Dup Project' });
+    });
+
+    act(() => {
+      result.current.setPreviewPanelTab('files', { source: 'user' });
+    });
+
+    act(() => {
+      result.current.setPreviewPanelTab('files', { source: 'user' });
+    });
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('previewPanelStateByProject') || '{}');
+      expect(stored['proj-dup']).toBe('files');
+    });
+  });
+
   test('theme effect syncs preference to document and storage', async () => {
     const { result } = renderHook(() => useAppState(), { wrapper });
 
@@ -4940,6 +5071,25 @@ describe('AppStateContext helper utilities', () => {
     localStorage.setItem('workingBranches', '{');
     expect(__appStateTestHelpers.loadWorkingBranchesFromStorage()).toEqual({});
     expect(warnSpy).toHaveBeenCalledWith('Failed to parse workingBranches from storage', expect.any(Error));
+    warnSpy.mockRestore();
+  });
+
+  test('loadPreviewPanelStateByProject returns stored tabs and tolerates invalid JSON', () => {
+    localStorage.removeItem('previewPanelStateByProject');
+    expect(__appStateTestHelpers.loadPreviewPanelStateByProject()).toEqual({});
+
+    localStorage.setItem('previewPanelStateByProject', JSON.stringify({ '123': 'files' }));
+    expect(__appStateTestHelpers.loadPreviewPanelStateByProject()).toEqual({ '123': 'files' });
+
+    const originalWindow = global.window;
+    vi.stubGlobal('window', undefined);
+    expect(__appStateTestHelpers.loadPreviewPanelStateByProject()).toEqual({});
+    vi.stubGlobal('window', originalWindow);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    localStorage.setItem('previewPanelStateByProject', '{');
+    expect(__appStateTestHelpers.loadPreviewPanelStateByProject()).toEqual({});
+    expect(warnSpy).toHaveBeenCalledWith('Failed to parse previewPanelStateByProject from storage', expect.any(Error));
     warnSpy.mockRestore();
   });
 

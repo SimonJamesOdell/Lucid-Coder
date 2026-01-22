@@ -17,6 +17,9 @@ const CommitDetailsPanel = ({
   handleMergeBranch,
   mergeInFlight,
   commitInFlight,
+  shouldShowTestingCta,
+  onStartTesting,
+  hideCommitDetails,
   hasStagedFiles,
   commitSubject,
   commitBody,
@@ -43,6 +46,23 @@ const CommitDetailsPanel = ({
     {statusMessage && (
       <div className="commits-status-message" role="status">
         {statusMessage}
+      </div>
+    )}
+
+    {shouldShowTestingCta && (
+      <div className="commits-status-message with-action" role="status" data-testid="commit-tests-required">
+        <div>
+          Testing is not complete. Run the test suites to continue to commit.
+        </div>
+        <button
+          type="button"
+          className="commits-action"
+          onClick={onStartTesting}
+          disabled={!onStartTesting}
+          data-testid="commit-start-tests"
+        >
+          Start testing
+        </button>
       </div>
     )}
 
@@ -154,7 +174,7 @@ const CommitDetailsPanel = ({
           <div className="loading" data-testid="commit-details-loading">Loading commit details…</div>
         )}
 
-        {!isDetailLoading && selectedDetails && (
+        {!isDetailLoading && selectedDetails && !hideCommitDetails && (
           <>
             <div className="commit-detail-body">
               <p>{selectedDetails.body || 'No extended description for this commit.'}</p>
@@ -199,7 +219,7 @@ const CommitDetailsPanel = ({
           </>
         )}
 
-        {!isDetailLoading && !selectedDetails && (
+        {!isDetailLoading && !selectedDetails && !hideCommitDetails && (
           <div className="commits-empty" data-testid="commit-details-missing">
             Commit metadata is unavailable for this selection.
           </div>

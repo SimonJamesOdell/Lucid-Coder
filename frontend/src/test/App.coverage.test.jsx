@@ -55,7 +55,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: true,
       llmStatusLoaded: true,
       llmStatus: { configured: true, ready: true, reason: null },
-      refreshLLMStatus: vi.fn()
+      refreshLLMStatus: vi.fn(),
+      reportBackendConnectivity: vi.fn()
     })
   })
 
@@ -69,7 +70,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: false,
       llmStatusLoaded: true,
       llmStatus: { configured: false, ready: false, reason: null },
-      refreshLLMStatus
+      refreshLLMStatus,
+      reportBackendConnectivity: vi.fn()
     })
 
     render(<App />)
@@ -160,7 +162,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: false,
       llmStatusLoaded: false,
       llmStatus: { configured: false, ready: false, reason: null },
-      refreshLLMStatus: vi.fn()
+      refreshLLMStatus: vi.fn(),
+      reportBackendConnectivity: vi.fn()
     })
 
     render(<App />)
@@ -178,7 +181,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: false,
       llmStatusLoaded: true,
       llmStatus: { configured: false, ready: false, reason: 'LLM unavailable' },
-      refreshLLMStatus: vi.fn()
+      refreshLLMStatus: vi.fn(),
+      reportBackendConnectivity: vi.fn()
     })
 
     render(<App />)
@@ -195,7 +199,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: true,
       llmStatusLoaded: true,
       llmStatus: { configured: true, ready: true, reason: null },
-      refreshLLMStatus: vi.fn()
+      refreshLLMStatus: vi.fn(),
+      reportBackendConnectivity: vi.fn()
     })
 
     const view = render(<App />)
@@ -210,7 +215,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: true,
       llmStatusLoaded: true,
       llmStatus: { configured: true, ready: true, reason: null },
-      refreshLLMStatus: vi.fn()
+      refreshLLMStatus: vi.fn(),
+      reportBackendConnectivity: vi.fn()
     })
 
     view.rerender(<App />)
@@ -223,7 +229,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: true,
       llmStatusLoaded: true,
       llmStatus: { configured: true, ready: true, reason: null },
-      refreshLLMStatus: vi.fn()
+      refreshLLMStatus: vi.fn(),
+      reportBackendConnectivity: vi.fn()
     })
 
     view.rerender(<App />)
@@ -237,7 +244,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: true,
       llmStatusLoaded: true,
       llmStatus: { configured: true, ready: true, reason: null },
-      refreshLLMStatus: vi.fn()
+      refreshLLMStatus: vi.fn(),
+      reportBackendConnectivity: vi.fn()
     })
 
     view.rerender(<App />)
@@ -334,7 +342,8 @@ describe('App coverage branches', () => {
       isLLMConfigured: true,
       llmStatusLoaded: true,
       llmStatus: { configured: true, ready: true, reason: null },
-      refreshLLMStatus: vi.fn()
+      refreshLLMStatus: vi.fn(),
+      reportBackendConnectivity: vi.fn()
     })
 
     render(<App />)
@@ -342,5 +351,76 @@ describe('App coverage branches', () => {
     expect(await screen.findByTestId('nav')).toBeInTheDocument()
     expect(screen.getByTestId('backend-offline-overlay')).toBeInTheDocument()
     expect(screen.getByText('Backend unreachable')).toBeInTheDocument()
+  })
+
+  test('polls for backend recovery while offline', async () => {
+    vi.useFakeTimers()
+
+    const healthResponses = [
+      Promise.reject(new Error('Backend unreachable')),
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    ]
+
+    global.fetch = vi.fn((url) => {
+      if (url === '/api/health') {
+        return healthResponses.shift()
+      }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    })
+
+    render(<App />)
+
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+
+    expect(screen.getByTestId('backend-offline-overlay')).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(5000)
+    await Promise.resolve()
+
+    const healthCalls = global.fetch.mock.calls.filter(([url]) => url === '/api/health')
+    expect(healthCalls.length).toBe(2)
+
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+
+    expect(screen.queryByTestId('backend-offline-overlay')).not.toBeInTheDocument()
+
+    vi.useRealTimers()
+  })
+
+  test('skips polling when a backend check is already in flight', async () => {
+    vi.useFakeTimers()
+
+    let resolveHealth
+    const pendingHealth = new Promise((resolve) => {
+      resolveHealth = resolve
+    })
+
+    global.fetch = vi.fn((url) => {
+      if (url === '/api/health') {
+        return pendingHealth
+      }
+      if (url === '/api/version') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    })
+
+    render(<App />)
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    const healthCalls = global.fetch.mock.calls.filter(([url]) => url === '/api/health')
+    expect(healthCalls.length).toBe(1)
+
+    resolveHealth({ ok: false, status: 503, json: async () => ({ ok: false }) })
+
+    await vi.runOnlyPendingTimersAsync()
+
+    vi.useRealTimers()
   })
 })

@@ -18,6 +18,7 @@ const CommitsTab = ({
   project,
   autofillRequestId = null,
   onConsumeAutofillRequest = null,
+  onRequestTestsTab = null,
   testApiRef = null,
   testInitialState = null
 }) => {
@@ -79,6 +80,7 @@ const CommitsTab = ({
 
   const testsPassed = isPassingTestStatus(activeWorkingBranch?.lastTestStatus);
   const testsRequired = activeWorkingBranch?.testsRequired;
+  const testsStatus = activeWorkingBranch?.lastTestStatus;
   const branchIsProven = activeWorkingBranch?.status === 'ready-for-merge';
   const branchReadyToCommit = Boolean(
     activeBranchName
@@ -151,6 +153,27 @@ const CommitsTab = ({
     testsRequired,
     isCssOnlyStaged
   ]);
+
+  const shouldShowTestingCta = Boolean(
+    activeBranchName
+    && activeBranchName !== 'main'
+    && hasStagedFiles
+    && testsRequired !== false
+    && !isCssOnlyStaged
+    && (!testsStatus || testsStatus === 'pending')
+  );
+
+  const handleStartTesting = useCallback(() => {
+    if (typeof onRequestTestsTab !== 'function') {
+      return;
+    }
+
+    onRequestTestsTab({
+      autoRun: true,
+      source: 'automation',
+      returnToCommits: true
+    });
+  }, [onRequestTestsTab]);
 
   const commitSubject = getCommitSubjectForBranch(activeBranchName);
   const commitBody = getCommitBodyForBranch(activeBranchName);
@@ -698,9 +721,9 @@ const CommitsTab = ({
           <CommitDetailsPanel
             projectId={projectId}
             statusMessage={statusMessage}
-            gateStatus={gateStatus}
+            gateStatus={shouldShowTestingCta ? null : gateStatus}
             mergeActionError={mergeActionError}
-            mergeBlockedBannerMessage={mergeBlockedBannerMessage}
+            mergeBlockedBannerMessage={shouldShowTestingCta ? null : mergeBlockedBannerMessage}
             branchReadyToMerge={branchReadyToMerge}
             shouldShowCommitComposer={shouldShowCommitComposer}
             activeBranchName={activeBranchName}
@@ -710,6 +733,9 @@ const CommitsTab = ({
             handleMergeBranch={handleMergeBranch}
             mergeInFlight={mergeInFlight}
             commitInFlight={commitInFlight}
+            shouldShowTestingCta={shouldShowTestingCta}
+            onStartTesting={handleStartTesting}
+            hideCommitDetails={shouldShowTestingCta}
             hasStagedFiles={hasStagedFiles}
             commitSubject={commitSubject}
             commitBody={commitBody}

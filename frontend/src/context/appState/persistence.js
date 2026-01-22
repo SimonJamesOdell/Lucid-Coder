@@ -104,6 +104,19 @@ const loadWorkingBranchesFromStorage = () => {
   }
 };
 
+const loadPreviewPanelStateByProject = () => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    return JSON.parse(localStorage.getItem('previewPanelStateByProject') || '{}');
+  } catch (error) {
+    console.warn('Failed to parse previewPanelStateByProject from storage', error);
+    return {};
+  }
+};
+
 const loadGitSettingsFromStorage = () => {
   if (typeof window === 'undefined') {
     return defaultGitSettings;
@@ -134,5 +147,6 @@ export {
   loadFileExplorerState,
   loadWorkspaceChangesFromStorage,
   loadWorkingBranchesFromStorage,
+  loadPreviewPanelStateByProject,
   loadGitSettingsFromStorage
 };

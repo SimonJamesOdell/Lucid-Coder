@@ -36,6 +36,7 @@ const PreviewPanel = () => {
   const [filesSaveControl, setFilesSaveControl] = useState({ handleSave: null, isDisabled: true });
   const [testActions, setTestActions] = useState(null);
   const [branchActions, setBranchActions] = useState(null);
+  const pendingTestRunRef = useRef(null);
   const activeTab = previewPanelState?.activeTab || localActiveTab;
   const followAutomation =
     typeof previewPanelState?.followAutomation === 'boolean'
@@ -388,9 +389,49 @@ const PreviewPanel = () => {
     setActiveTab('test', { source: 'user' });
   }, [setActiveTab]);
 
+  const runPendingTests = useCallback(() => {
+    if (!pendingTestRunRef.current || activeTabRef.current !== 'test') {
+      return;
+    }
+
+    const runAllTests = testActionsRef.current?.runAllTests;
+    if (typeof runAllTests !== 'function') {
+      return;
+    }
+
+    const options = pendingTestRunRef.current;
+    pendingTestRunRef.current = null;
+    runAllTests(options);
+  }, []);
+
+  const handleShowTestsTabAndRun = useCallback((options = {}) => {
+    const shouldAutoRun = Boolean(options?.autoRun);
+    if (shouldAutoRun) {
+      pendingTestRunRef.current = {
+        source: typeof options?.source === 'string' ? options.source : 'automation',
+        autoCommit: Boolean(options?.autoCommit),
+        returnToCommits: Boolean(options?.returnToCommits)
+      };
+    }
+
+    setActiveTab('test', { source: 'user' });
+    runPendingTests();
+  }, [runPendingTests, setActiveTab]);
+
   const handleShowCommitsTab = useCallback(() => {
     setActiveTab('commits', { source: 'user' });
   }, [setActiveTab]);
+
+  useEffect(() => {
+    runPendingTests();
+  }, [testActions, runPendingTests]);
+
+  useEffect(() => {
+    if (activeTab !== 'test') {
+      return;
+    }
+    runPendingTests();
+  }, [activeTab, runPendingTests]);
 
   useEffect(() => {
     if (!PreviewPanel.__testHooks) {
@@ -462,6 +503,7 @@ const PreviewPanel = () => {
             project={currentProject}
             autofillRequestId={commitsAutofillRequestId}
             onConsumeAutofillRequest={() => setCommitsAutofillRequestId(null)}
+            onRequestTestsTab={handleShowTestsTabAndRun}
           />
         );
       case 'git':

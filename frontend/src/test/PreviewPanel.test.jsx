@@ -1419,6 +1419,116 @@ describe('PreviewPanel', () => {
     expect(onCancel).toHaveBeenCalled();
   });
 
+  test('commits tab requests tests and auto-runs after test actions register', async () => {
+    useAppState.mockReturnValue(createAppState({ currentProject: { id: 111, name: 'Commit Tests' } }));
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('commits-tab'));
+    expect(screen.getByTestId('mock-commits-tab')).toBeInTheDocument();
+
+    const runAllTests = vi.fn();
+
+    act(() => {
+      commitsTabPropsRef.current?.onRequestTestsTab?.({
+        autoRun: true,
+        source: 'automation',
+        returnToCommits: true
+      });
+    });
+
+    expect(await screen.findByTestId('mock-test-tab')).toBeInTheDocument();
+    expect(runAllTests).not.toHaveBeenCalled();
+
+    act(() => {
+      testTabControls.register?.({
+        runAllTests,
+        onRefresh: vi.fn(),
+        onCancelActiveRuns: vi.fn(),
+        refreshDisabled: false,
+        cancelDisabled: false,
+        isRefreshing: false
+      });
+    });
+
+    expect(runAllTests).toHaveBeenCalledWith({
+      source: 'automation',
+      autoCommit: false,
+      returnToCommits: true
+    });
+  });
+
+  test('commits tab auto-run defaults to automation source when source is invalid', async () => {
+    useAppState.mockReturnValue(createAppState({ currentProject: { id: 113, name: 'Commit Tests' } }));
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('commits-tab'));
+    expect(screen.getByTestId('mock-commits-tab')).toBeInTheDocument();
+
+    const runAllTests = vi.fn();
+
+    act(() => {
+      commitsTabPropsRef.current?.onRequestTestsTab?.({
+        autoRun: true,
+        source: 123,
+        returnToCommits: true
+      });
+    });
+
+    expect(await screen.findByTestId('mock-test-tab')).toBeInTheDocument();
+
+    act(() => {
+      testTabControls.register?.({
+        runAllTests,
+        onRefresh: vi.fn(),
+        onCancelActiveRuns: vi.fn(),
+        refreshDisabled: false,
+        cancelDisabled: false,
+        isRefreshing: false
+      });
+    });
+
+    expect(runAllTests).toHaveBeenCalledWith({
+      source: 'automation',
+      autoCommit: false,
+      returnToCommits: true
+    });
+  });
+
+  test('commits tab test navigation does not auto-run when autoRun is false', async () => {
+    useAppState.mockReturnValue(createAppState({ currentProject: { id: 112, name: 'Commit Tests' } }));
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('commits-tab'));
+    expect(screen.getByTestId('mock-commits-tab')).toBeInTheDocument();
+
+    const runAllTests = vi.fn();
+
+    act(() => {
+      commitsTabPropsRef.current?.onRequestTestsTab?.({ autoRun: false });
+    });
+
+    expect(await screen.findByTestId('mock-test-tab')).toBeInTheDocument();
+
+    act(() => {
+      testTabControls.register?.({
+        runAllTests,
+        onRefresh: vi.fn(),
+        onCancelActiveRuns: vi.fn(),
+        refreshDisabled: false,
+        cancelDisabled: false,
+        isRefreshing: false
+      });
+    });
+
+    expect(runAllTests).not.toHaveBeenCalled();
+  });
+
   test('test tab actions clear out when registration passes null', async () => {
     useAppState.mockReturnValue(createAppState({ currentProject: { id: 102, name: 'Test Reset' } }));
 

@@ -58,7 +58,8 @@ describe('App (configured) backend offline overlay', () => {
         configured: true,
         ready: true,
         reason: null
-      }
+      },
+      reportBackendConnectivity: vi.fn()
     });
   });
 

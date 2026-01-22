@@ -112,6 +112,17 @@
   color: var(--success-color, #4caf50);
 }
 
+.commits-status-message.with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.commits-status-message.with-action .commits-action {
+  white-space: nowrap;
+}
+
 .commit-detail-header {
   border: 1px solid var(--border-color, #2e2e2e);
   border-radius: 0.75rem;

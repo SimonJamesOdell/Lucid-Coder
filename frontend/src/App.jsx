@@ -8,6 +8,8 @@ import ImportProject from './components/ImportProject'
 import ProjectInspector from './components/ProjectInspector'
 import './App.css'
 
+const OFFLINE_BACKEND_POLL_INTERVAL_MS = 5000;
+
 function AppContent() {
   const {
     currentView,
@@ -16,7 +18,8 @@ function AppContent() {
     isLLMConfigured,
     llmStatusLoaded,
     llmStatus,
-    refreshLLMStatus
+    refreshLLMStatus,
+    reportBackendConnectivity
   } = useAppState();
 
   const isLLMConfiguredRef = useRef(isLLMConfigured);
@@ -33,6 +36,12 @@ function AppContent() {
     status: 'checking',
     error: null
   });
+
+  const backendCheckRef = useRef(backendCheck);
+
+  useEffect(() => {
+    backendCheckRef.current = backendCheck;
+  }, [backendCheck]);
 
   const [backendVersionLabel, setBackendVersionLabel] = useState(null);
 
@@ -63,11 +72,13 @@ function AppContent() {
       }
 
       setBackendCheck({ status: 'online', error: null });
+      reportBackendConnectivity?.('online');
     } catch (error) {
       const message = error?.name === 'AbortError'
         ? 'Backend check timed out'
         : (error?.message || 'Backend unreachable');
       setBackendCheck({ status: 'offline', error: message });
+      reportBackendConnectivity?.('offline', message);
     } finally {
       clearTimeout(timeout);
     }
@@ -76,6 +87,21 @@ function AppContent() {
   useEffect(() => {
     checkBackendNow();
   }, [checkBackendNow]);
+
+  useEffect(() => {
+    if (backendCheck.status === 'online') {
+      return undefined;
+    }
+
+    const intervalId = setInterval(() => {
+      if (backendCheckRef.current.status === 'checking') {
+        return;
+      }
+      checkBackendNow();
+    }, OFFLINE_BACKEND_POLL_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
+  }, [backendCheck.status, checkBackendNow]);
 
   useEffect(() => {
     if (backendCheck.status !== 'online') {

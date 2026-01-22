@@ -1859,7 +1859,7 @@ describe('CommitsTab', () => {
     expect(await screen.findByTestId('commit-gate-tests')).toHaveTextContent('Tests: Failed');
   });
 
-  test('gate status tests label shows Not run when no results are available', async () => {
+  test('shows a single testing CTA when no test results are available', async () => {
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-tests-pending',
@@ -1880,9 +1880,49 @@ describe('CommitsTab', () => {
       return Promise.resolve({ data: { success: true } });
     });
 
+    const onRequestTestsTab = vi.fn();
+    const user = userEvent.setup();
+    await renderCommitsTab({ onRequestTestsTab });
+
+    expect(await screen.findByTestId('commit-tests-required')).toBeInTheDocument();
+    expect(screen.queryByTestId('commit-gate-status')).toBeNull();
+    expect(screen.queryByTestId('commit-merge-blocked')).toBeNull();
+
+    await user.click(screen.getByTestId('commit-start-tests'));
+    expect(onRequestTestsTab).toHaveBeenCalledWith({
+      autoRun: true,
+      source: 'automation',
+      returnToCommits: true
+    });
+  });
+
+  test('testing CTA no-ops when no handler is provided', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-tests-pending',
+        status: 'needs-fix',
+        lastTestStatus: null,
+        testsRequired: true,
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
+      }
+    };
+
+    axios.get.mockImplementation((url) => {
+      if (url === `/api/projects/${mockProject.id}/commits`) {
+        return Promise.resolve({ data: { success: true, commits: baseCommits } });
+      }
+      if (url.startsWith(`/api/projects/${mockProject.id}/commits/`)) {
+        return Promise.resolve({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+
+    const user = userEvent.setup();
     await renderCommitsTab();
 
-    expect(await screen.findByTestId('commit-gate-tests')).toHaveTextContent('Tests: Not run');
+    const startButton = await screen.findByTestId('commit-start-tests');
+    expect(startButton).toBeEnabled();
+    await user.click(startButton);
   });
 
   test('gate status shows Tests optional when requirements are disabled without CSS-only changes', async () => {
@@ -1949,7 +1989,7 @@ describe('CommitsTab', () => {
         [mockProject.id]: {
           name: 'feature-missing-blocker',
           status: 'needs-fix',
-          lastTestStatus: null,
+          lastTestStatus: 'failed',
           testsRequired: true,
           mergeBlockedReason: null,
           stagedFiles: [{ path: 'src/components/Nav.jsx', source: 'editor', timestamp: '2025-01-02T12:00:00.000Z' }]

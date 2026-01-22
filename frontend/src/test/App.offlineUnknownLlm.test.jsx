@@ -60,7 +60,8 @@ describe('App (unknown LLM status) backend offline startup', () => {
         reason: 'Backend unreachable',
         requiresApiKey: null,
         hasApiKey: null
-      }
+      },
+      reportBackendConnectivity: vi.fn()
     });
   });
 
@@ -102,7 +103,8 @@ describe('App (unknown backend connectivity) startup', () => {
         reason: null,
         requiresApiKey: null,
         hasApiKey: null
-      }
+      },
+      reportBackendConnectivity: vi.fn()
     });
   });
 
