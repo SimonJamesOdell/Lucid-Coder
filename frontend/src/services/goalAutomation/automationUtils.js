@@ -889,6 +889,7 @@ const SCOPE_REFLECTION_DEFAULT = Object.freeze({
   reasoning: '',
   mustChange: [],
   mustAvoid: [],
+  mustHave: [],
   testsNeeded: true
 });
 
@@ -913,7 +914,8 @@ export const buildScopeReflectionPrompt = ({ projectInfo, goalPrompt }) => {
         content:
           'You are a careful planning assistant. Think step-by-step about what the user actually requested. ' +
           'Return ONLY valid JSON with keys: reasoning (string), mustChange (array of repo paths or areas that must change), ' +
-          'mustAvoid (array of paths/areas that should remain untouched), and testsNeeded (boolean). ' +
+          'mustAvoid (array of paths/areas that should remain untouched), mustHave (array of required behaviors or UI outcomes), ' +
+          'and testsNeeded (boolean). ' +
           'Mention only work that is strictly required to satisfy the request. Leave arrays empty when uncertain.'
       },
       {
@@ -944,7 +946,7 @@ export const parseScopeReflectionResponse = (llmResponse) => {
       parsed = tryParseLooseJson(jsonText);
     }
 
-    if (!parsed || typeof parsed !== 'object') {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return SCOPE_REFLECTION_DEFAULT;
     }
 
@@ -952,6 +954,7 @@ export const parseScopeReflectionResponse = (llmResponse) => {
       reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning.trim() : '',
       mustChange: normalizeReflectionList(parsed.mustChange),
       mustAvoid: normalizeReflectionList(parsed.mustAvoid),
+      mustHave: normalizeReflectionList(parsed.mustHave),
       testsNeeded: typeof parsed.testsNeeded === 'boolean' ? parsed.testsNeeded : true
     };
   } catch (error) {
@@ -972,10 +975,19 @@ const formatScopeReflectionContext = (reflection) => {
   const mustAvoid = Array.isArray(reflection.mustAvoid) && reflection.mustAvoid.length
     ? reflection.mustAvoid.join(', ')
     : 'None noted';
+  const mustHave = Array.isArray(reflection.mustHave) && reflection.mustHave.length
+    ? reflection.mustHave.join(', ')
+    : 'None noted';
   const testsNote = reflection.testsNeeded === false ? 'No' : 'Yes';
 
   const summaryLine = reasoning ? `Summary: ${reasoning}` : null;
-  const parts = [summaryLine, `Must change: ${mustChange}`, `Avoid changing: ${mustAvoid}`, `Tests required: ${testsNote}`]
+  const parts = [
+    summaryLine,
+    `Must change: ${mustChange}`,
+    `Avoid changing: ${mustAvoid}`,
+    `Must have: ${mustHave}`,
+    `Tests required: ${testsNote}`
+  ]
     .filter(Boolean)
     .join('\n');
 
@@ -1113,8 +1125,8 @@ export const buildEditsPrompt = ({
   const stageLabel = stage === 'tests' ? 'tests' : 'implementation';
   const focusInstructions =
     stage === 'tests'
-      ? 'Focus only on adding/updating tests first (TDD). Do not implement the feature beyond minimal scaffolding needed for tests to compile.'
-      : 'Now implement the feature so the tests pass. Keep edits minimal and localized.';
+      ? 'Focus only on adding/updating tests first (TDD). Do not implement the feature beyond minimal scaffolding needed for tests to compile. Do not stub or remove required functionality just to satisfy tests.'
+      : 'Now implement the feature so the tests pass. Keep edits minimal and localized. Do not weaken or remove required functionality to make tests pass.';
 
   const retryNotices = [];
   if (retryContext?.message || retryContext?.path || retryContext?.searchSnippet) {
@@ -1142,7 +1154,8 @@ export const buildEditsPrompt = ({
   const failureContextBlock = formatTestFailureContext(testFailureContext);
   const reflectionBlock = formatScopeReflectionContext(scopeReflection);
 
-  let userContent = `${projectInfo}${fileTreeContext}\n\nTask: ${goalPrompt}\n\nStage: ${stageLabel}. ${focusInstructions}`;
+  let userContent = `${projectInfo}${fileTreeContext}\n\nTask: ${goalPrompt}\n\nStage: ${stageLabel}. ${focusInstructions} ` +
+    'Honor layout/placement constraints in the task (e.g., top of page, full-width).';
   if (reflectionBlock) {
     userContent += reflectionBlock;
   }

@@ -1,8 +1,19 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 const getRunningProcessEntryMock = vi.hoisted(() => vi.fn());
+const getStoredProjectPortsMock = vi.hoisted(() => vi.fn());
+const getProjectPortHintsMock = vi.hoisted(() => vi.fn());
+const storeRunningProcessesMock = vi.hoisted(() => vi.fn());
 vi.mock('../routes/projects/processManager.js', () => ({
-  getRunningProcessEntry: getRunningProcessEntryMock
+  getRunningProcessEntry: getRunningProcessEntryMock,
+  getStoredProjectPorts: getStoredProjectPortsMock,
+  getProjectPortHints: getProjectPortHintsMock,
+  storeRunningProcesses: storeRunningProcessesMock
+}));
+
+const getProjectMock = vi.hoisted(() => vi.fn());
+vi.mock('../database.js', () => ({
+  getProject: getProjectMock
 }));
 
 const proxyStub = vi.hoisted(() => ({
@@ -70,6 +81,10 @@ describe('previewProxy', () => {
     vi.resetModules();
     vi.clearAllMocks();
     getRunningProcessEntryMock.mockReset();
+    getStoredProjectPortsMock.mockReset();
+    getProjectPortHintsMock.mockReset();
+    storeRunningProcessesMock.mockReset();
+    getProjectMock.mockReset();
     proxyStub.on.mockReset();
     proxyStub.web.mockReset();
     proxyStub.ws.mockReset();
@@ -81,6 +96,19 @@ describe('previewProxy', () => {
 
     const parsed = __testOnly.parsePreviewPath('/preview/12/about?x=1');
     expect(parsed).toEqual({ projectId: '12', forwardPath: '/about?x=1' });
+  });
+
+  test('getProjectIdFromRequest resolves preview path context', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const req = createReq('/preview/55/app?x=1');
+    const info = __testOnly.getProjectIdFromRequest(req);
+
+    expect(info).toEqual({
+      source: 'path',
+      projectId: '55',
+      forwardPath: '/app?x=1'
+    });
   });
 
   test('buildSetCookieHeader encodes project IDs', async () => {
@@ -170,7 +198,7 @@ describe('previewProxy', () => {
     const res = createRes();
     const next = vi.fn();
 
-    instance.middleware(req, res, next);
+    await instance.middleware(req, res, next);
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(proxyStub.web).not.toHaveBeenCalled();
@@ -184,7 +212,7 @@ describe('previewProxy', () => {
     const res = createRes();
     const next = vi.fn();
 
-    instance.middleware(req, res, next);
+    await instance.middleware(req, res, next);
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(proxyStub.web).not.toHaveBeenCalled();
@@ -210,7 +238,7 @@ describe('previewProxy', () => {
     const res = createRes();
     const next = vi.fn();
 
-    instance.middleware(req, res, next);
+    await instance.middleware(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(proxyStub.web).toHaveBeenCalledTimes(1);
@@ -227,6 +255,26 @@ describe('previewProxy', () => {
 
     // Ensure the incoming URL is restored after proxying.
     expect(req.url).toBe('/preview/12/');
+  });
+
+  test('middleware forwards errors to next when proxy resolution fails', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: null,
+      state: 'idle'
+    });
+    const error = new Error('db down');
+    getProjectMock.mockRejectedValue(error);
+
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    const req = createReq('/preview/12/');
+    const res = createRes();
+    const next = vi.fn();
+
+    await instance.middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(error);
   });
 
   test('middleware proxies requests when cookie is present', async () => {
@@ -249,7 +297,7 @@ describe('previewProxy', () => {
     const res = createRes();
     const next = vi.fn();
 
-    instance.middleware(req, res, next);
+    await instance.middleware(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(proxyStub.web).toHaveBeenCalledTimes(1);
@@ -262,6 +310,7 @@ describe('previewProxy', () => {
       processes: null,
       state: 'idle'
     });
+    getProjectMock.mockResolvedValue(null);
 
     const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
     const instance = createPreviewProxy({ logger: null });
@@ -272,11 +321,52 @@ describe('previewProxy', () => {
     const res = createRes();
     const next = vi.fn();
 
-    instance.middleware(req, res, next);
+    await instance.middleware(req, res, next);
 
     expect(proxyStub.web).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.send).toHaveBeenCalledWith(expect.stringContaining('Preview unavailable'));
+  });
+
+  test('resolveFrontendPort returns stored frontend port when available', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: null,
+      state: 'idle'
+    });
+    getProjectMock.mockResolvedValue({ id: 1, name: 'Project' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 4100 });
+
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    await expect(__testOnly.resolveFrontendPort(1)).resolves.toBe(4100);
+  });
+
+  test('resolveFrontendPort returns port hints when stored ports are missing', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: null,
+      state: 'idle'
+    });
+    getProjectMock.mockResolvedValue({ id: 1, name: 'Project' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 0 });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 4200 });
+
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    await expect(__testOnly.resolveFrontendPort(1)).resolves.toBe(4200);
+  });
+
+  test('resolveFrontendPort returns null when no stored or hinted ports exist', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: null,
+      state: 'idle'
+    });
+    getProjectMock.mockResolvedValue({ id: 1, name: 'Project' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 0 });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 0 });
+
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    await expect(__testOnly.resolveFrontendPort(1)).resolves.toBeNull();
   });
 
   test('proxyRes handler no-ops when request context is missing', async () => {
@@ -472,6 +562,82 @@ describe('previewProxy', () => {
     expect(res.end).toHaveBeenCalledWith('Preview proxy error');
   });
 
+  test('proxy error handler clears frontend process on ECONNREFUSED', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } },
+      state: 'running'
+    });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/');
+    req.__lucidcoderPreviewProxy = { projectId: 12 };
+    const res = createRes();
+
+    errorHandler(new Error('ECONNREFUSED'), req, res);
+
+    expect(storeRunningProcessesMock).toHaveBeenCalledWith(
+      12,
+      { frontend: null, backend: { port: 3000 } },
+      'running',
+      { exposeSnapshot: true }
+    );
+  });
+
+  test('proxy error handler marks preview stopped when backend is absent', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 }, backend: null },
+      state: 'running'
+    });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/99/');
+    req.__lucidcoderPreviewProxy = { projectId: 99 };
+    const res = createRes();
+
+    errorHandler(new Error('ECONNREFUSED'), req, res);
+
+    expect(storeRunningProcessesMock).toHaveBeenCalledWith(
+      99,
+      { frontend: null, backend: null },
+      'stopped',
+      { exposeSnapshot: true }
+    );
+  });
+
+  test('proxy error handler does not update processes when frontend is already missing', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: null, backend: { port: 3000 } },
+      state: 'running'
+    });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/');
+    req.__lucidcoderPreviewProxy = { projectId: 12 };
+    const res = createRes();
+
+    errorHandler(new Error('ECONNREFUSED'), req, res);
+
+    expect(storeRunningProcessesMock).not.toHaveBeenCalled();
+  });
+
   test('proxy error handler sends auto-retrying HTML when the client accepts text/html', async () => {
     const warn = vi.fn();
     const { createPreviewProxy } = await import('../routes/previewProxy.js');
@@ -598,6 +764,7 @@ describe('previewProxy', () => {
     const head = Buffer.from('');
 
     upgradeHandler(req, socket, head);
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(proxyStub.ws).toHaveBeenCalledTimes(1);
     expect(proxyStub.ws.mock.calls[0][3]).toEqual({ target: 'http://127.0.0.1:5173' });
@@ -619,6 +786,7 @@ describe('previewProxy', () => {
     expect(typeof upgradeHandler).toBe('function');
 
     upgradeHandler(createReq('/api/health'), { destroy: vi.fn() }, Buffer.from(''));
+    await new Promise((resolve) => setImmediate(resolve));
     expect(proxyStub.ws).not.toHaveBeenCalled();
   });
 
@@ -638,6 +806,7 @@ describe('previewProxy', () => {
     expect(typeof upgradeHandler).toBe('function');
 
     upgradeHandler(createReq('/not-preview'), { destroy: vi.fn() }, Buffer.from(''));
+    await new Promise((resolve) => setImmediate(resolve));
     expect(proxyStub.ws).not.toHaveBeenCalled();
   });
 
@@ -658,8 +827,34 @@ describe('previewProxy', () => {
 
     const req = createReq('/ws', { cookie: `${__testOnly.COOKIE_NAME}=12` });
     upgradeHandler(req, { destroy: vi.fn() }, Buffer.from(''));
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(proxyStub.ws).not.toHaveBeenCalled();
+  });
+
+  test('upgrade handler destroys socket when resolving the preview port fails', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: null,
+      state: 'idle'
+    });
+    getProjectMock.mockRejectedValue(new Error('db down'));
+
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    const server = { on: vi.fn() };
+    instance.registerUpgradeHandler(server);
+
+    const upgradeHandler = server.on.mock.calls.find(([event]) => event === 'upgrade')?.[1];
+    expect(typeof upgradeHandler).toBe('function');
+
+    const req = createReq('/ws', { cookie: `${__testOnly.COOKIE_NAME}=12` });
+    const socket = { destroy: vi.fn() };
+
+    upgradeHandler(req, socket, Buffer.from(''));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
   });
 
   test('upgrade handler swallows proxy websocket errors and socket destroy errors', async () => {
@@ -689,6 +884,7 @@ describe('previewProxy', () => {
     };
 
     expect(() => upgradeHandler(req, socket, Buffer.from(''))).not.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
     expect(proxyStub.ws).toHaveBeenCalledTimes(1);
     expect(socket.destroy).toHaveBeenCalledTimes(1);
   });

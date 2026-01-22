@@ -6,9 +6,10 @@ export async function ensureBranch(projectId, prompt, setPreviewPanelTab, create
     automationLog('ensureBranch:start', { projectId, prompt: String(prompt || '').slice(0, 200) });
     const branchesResponse = await axios.get(`/api/projects/${projectId}/branches`);
     const overview = branchesResponse.data;
-    const hasWorkingBranch = overview.workingBranches?.some((b) => b.stagedFiles?.length > 0);
+    const workingBranches = Array.isArray(overview.workingBranches) ? overview.workingBranches : [];
+    const existingBranch = workingBranches[0] || null;
 
-    if (!hasWorkingBranch) {
+    if (!existingBranch) {
       const fallbackName = `feature-${Date.now()}`;
       const generatedName = await requestBranchNameFromLLM({ prompt, fallbackName });
 
@@ -43,7 +44,7 @@ export async function ensureBranch(projectId, prompt, setPreviewPanelTab, create
       return { name: branchName };
     }
 
-    return null;
+    return { name: existingBranch.name };
   } catch (error) {
     console.error('Failed to create branch:', error);
     automationLog('ensureBranch:error', { message: error?.message, status: error?.response?.status });

@@ -13,15 +13,27 @@ describe('planningFallback', () => {
   });
 
   describe('buildFallbackChildPrompts', () => {
-    it('returns a default child prompt when the input is empty after trimming', () => {
-      expect(buildFallbackChildPrompts('   ')).toEqual(['Implement the requested change.']);
-      expect(buildFallbackChildPrompts(null)).toEqual(['Implement the requested change.']);
+    it('returns multi-step prompts when the input is empty after trimming', () => {
+      expect(buildFallbackChildPrompts('   ')).toEqual([
+        'Identify the core change needed and update the most relevant files.',
+        'Implement the requested feature end-to-end, including any reusable pieces.',
+        'Wire the feature into the app entry point and verify the behavior.'
+      ]);
+      expect(buildFallbackChildPrompts(null)).toEqual([
+        'Identify the core change needed and update the most relevant files.',
+        'Implement the requested feature end-to-end, including any reusable pieces.',
+        'Wire the feature into the app entry point and verify the behavior.'
+      ]);
     });
 
     it('truncates long prompts and appends an ellipsis', () => {
       const longPrompt = 'a'.repeat(450);
       const result = buildFallbackChildPrompts(longPrompt);
-      expect(result).toEqual([`Implement the request: ${'a'.repeat(400)}…`]);
+      expect(result).toEqual([
+        `Outline the main components/areas needed for: ${'a'.repeat(400)}…`,
+        `Implement the primary feature described in: ${'a'.repeat(400)}… (include any reusable subcomponents).`,
+        `Integrate the change into the app shell/layout and honor any placement constraints in: ${'a'.repeat(400)}…`
+      ]);
     });
   });
 
@@ -34,7 +46,11 @@ describe('planningFallback', () => {
       expect(createMetaGoalWithChildren).toHaveBeenCalledWith({
         projectId: 9,
         prompt: 'Add logs',
-        childPrompts: ['Implement the request: Add logs']
+        childPrompts: [
+          'Outline the main components/areas needed for: Add logs',
+          'Implement the primary feature described in: Add logs (include any reusable subcomponents).',
+          'Integrate the change into the app shell/layout and honor any placement constraints in: Add logs'
+        ]
       });
       expect(result).toEqual({ parent: { id: 1 } });
     });

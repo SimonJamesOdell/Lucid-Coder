@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ChatPanel, { formatAgentStepMessage } from '../components/ChatPanel';
 import { useAppState } from '../context/AppStateContext';
@@ -1073,6 +1073,298 @@ describe('ChatPanel', () => {
       });
     });
 
+    it('builds a clarified prompt and clears stale goals after clarification', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Got it', steps: [] })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Third ok', steps: [] });
+
+      goalsApi.fetchGoals
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: 1, status: 'planning' },
+          { id: 2, lifecycleState: 'draft' },
+          { id: 3, status: 'ready' }
+        ]);
+      goalsApi.deleteGoal.mockResolvedValue({ success: true });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
+      });
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Need details?']
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('chat-status')).not.toBeInTheDocument();
+      });
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Answer');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.fetchGoals).toHaveBeenCalledWith(123, { includeArchived: false });
+        expect(goalsApi.deleteGoal).toHaveBeenCalledWith(1);
+        expect(goalsApi.deleteGoal).toHaveBeenCalledWith(2);
+      });
+
+      const clarifiedPrompt = goalsApi.agentRequest.mock.calls[1][0].prompt;
+      expect(clarifiedPrompt).toContain('Original request: First request');
+      expect(clarifiedPrompt).toContain('Clarification questions:');
+      expect(clarifiedPrompt).toContain('- Need details?');
+      expect(clarifiedPrompt).toContain('User answer: Answer');
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Third');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(3);
+      });
+
+      expect(goalsApi.agentRequest.mock.calls[2][0].prompt).toBe('Third');
+    });
+
+    it('logs a warning when stale goal cleanup fails after clarification', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      goalsApi.fetchGoals
+        .mockResolvedValueOnce([])
+        .mockRejectedValueOnce(new Error('fetch failed'));
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
+        });
+
+        await waitFor(() => {
+          expect(goalsApi.agentRequest).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+          resolveFeature({
+            needsClarification: true,
+            clarifyingQuestions: ['Need details?']
+          });
+        });
+
+        await waitFor(() => {
+          expect(screen.queryByTestId('chat-status')).not.toBeInTheDocument();
+        });
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Answer');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(warnSpy).toHaveBeenCalledWith(
+            'Failed to clear stale goals after clarification:',
+            'fetch failed'
+          );
+        });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('continues when stale goal deletion fails after clarification', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      goalsApi.fetchGoals
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: 55, status: 'planning' },
+          { id: 56, lifecycleState: 'draft' }
+        ]);
+      goalsApi.deleteGoal.mockRejectedValueOnce(new Error('delete failed'));
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+          resolveFeature({
+            needsClarification: true,
+            clarifyingQuestions: ['Need details?']
+          });
+        });
+
+        await waitFor(() => {
+          expect(screen.queryByTestId('chat-status')).not.toBeInTheDocument();
+        });
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Answer');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalsApi.deleteGoal).toHaveBeenCalledWith(55);
+          expect(goalsApi.deleteGoal).toHaveBeenCalledWith(56);
+        });
+
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('logs a warning when clarification cleanup fetch fails', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      goalsApi.fetchGoals.mockImplementation((_, options) => {
+        if (options?.includeArchived === false) {
+          return Promise.reject(new Error('cleanup fetch failed'));
+        }
+        return Promise.resolve([]);
+      });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+          resolveFeature({
+            needsClarification: true,
+            clarifyingQuestions: ['Need details?']
+          });
+        });
+
+        await waitFor(() => {
+          expect(screen.queryByTestId('chat-status')).not.toBeInTheDocument();
+        });
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Answer');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(warnSpy).toHaveBeenCalledWith(
+            'Failed to clear stale goals after clarification:',
+            'cleanup fetch failed'
+          );
+        });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('logs a warning when clarification cleanup rejects with a non-error value', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      goalsApi.fetchGoals.mockImplementation((_, options) => {
+        if (options?.includeArchived === false) {
+          return Promise.reject('cleanup failed');
+        }
+        return Promise.resolve([]);
+      });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+          resolveFeature({
+            needsClarification: true,
+            clarifyingQuestions: ['Need details?']
+          });
+        });
+
+        await waitFor(() => {
+          expect(screen.queryByTestId('chat-status')).not.toBeInTheDocument();
+        });
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Answer');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(warnSpy).toHaveBeenCalledWith(
+            'Failed to clear stale goals after clarification:',
+            'cleanup failed'
+          );
+        });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it('skips automated tests when the change is css-only', async () => {
       axios.get.mockResolvedValueOnce({ data: { isCssOnly: true } });
       goalsApi.agentRequest.mockResolvedValue({ kind: 'feature', planOnly: false });
@@ -1749,6 +2041,51 @@ describe('ChatPanel', () => {
         window.addEventListener = originalAdd;
         window.removeEventListener = originalRemove;
       }
+    });
+
+    it('skips stale goal deletion when fetchGoals returns a non-array', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      goalsApi.fetchGoals
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce({ nope: true });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Need details?']
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('chat-status')).not.toBeInTheDocument();
+      });
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Answer');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.fetchGoals).toHaveBeenCalledWith(123, { includeArchived: false });
+      });
+
+      expect(goalsApi.deleteGoal).not.toHaveBeenCalled();
     });
   });
 

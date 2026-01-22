@@ -415,12 +415,42 @@ export const createBranchWorkflowStaging = (core) => {
       throw withStatusCode(new Error('Branch name is required to commit changes'), 400);
     }
 
-    const branch = await getBranchByName(projectId, branchName);
+    let branch = await getBranchByName(projectId, branchName);
     if (branch.type === 'main') {
       throw withStatusCode(new Error('Cannot commit directly to the main branch'), 400);
     }
 
-    const stagedFiles = parseStagedFiles(branch.staged_files);
+    let stagedFiles = parseStagedFiles(branch.staged_files);
+    if (!stagedFiles.length && context.gitReady) {
+      const statusResult = await runProjectGit(context, ['status', '--porcelain']).catch(() => null);
+      const statusOutput = typeof statusResult?.stdout === 'string' ? statusResult.stdout.trim() : '';
+      if (statusOutput) {
+        try {
+          await runProjectGit(context, ['add', '-A']);
+          const stagedPaths = await listGitStagedPaths(context).catch(() => []);
+          if (stagedPaths.length) {
+            const timestamp = new Date().toISOString();
+            stagedFiles = stagedPaths.map((filePath) => ({
+              path: filePath,
+              source: 'ai',
+              timestamp
+            }));
+            await run(
+              `UPDATE branches
+     SET staged_files = ?,
+         ahead_commits = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+              [JSON.stringify(stagedFiles), Math.max(stagedFiles.length, 1), branch.id]
+            );
+            branch = await get('SELECT * FROM branches WHERE id = ?', [branch.id]);
+          }
+        } catch (error) {
+          console.warn(`[BranchWorkflow] Auto-stage failed for ${branch.name}: ${error?.message || error}`);
+        }
+      }
+    }
+
     if (!stagedFiles.length) {
       throw withStatusCode(new Error('No staged changes to commit'), 400);
     }

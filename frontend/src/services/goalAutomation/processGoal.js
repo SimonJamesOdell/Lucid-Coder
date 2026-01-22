@@ -140,6 +140,11 @@ export async function processGoal(
           buildScopeReflectionPrompt({ projectInfo, goalPrompt: goal?.prompt })
         );
         scopeReflection = parseScopeReflectionResponse(reflectionResponse);
+        const normalizedPrompt = typeof goal?.prompt === 'string' ? goal.prompt.toLowerCase() : '';
+        const isTestFixGoal = /fix\s+failing\s+test|failing\s+test|test\s+failure/.test(normalizedPrompt);
+        if (scopeReflection && (testFailureContext || isTestFixGoal)) {
+          scopeReflection.testsNeeded = true;
+        }
         automationLog('processGoal:scopeReflection', {
           goalId: goal?.id,
           testsNeeded: scopeReflection?.testsNeeded !== false,
@@ -415,9 +420,14 @@ export async function processGoal(
             responseType: typeof raw,
             preview: typeof raw === 'string' ? raw.slice(0, 500) : ''
           });
-          if (allowEmptyStageEdits) {
+          const mustChange = Array.isArray(scopeReflection?.mustChange) ? scopeReflection.mustChange : [];
+          if (allowEmptyStageEdits || (attempt === lastImplAttempt && mustChange.length === 0)) {
             implAttemptSucceeded = true;
             implRetryContext = null;
+            setMessages((prev) => [
+              ...prev,
+              createMessage('assistant', `No code changes required for: ${goal?.prompt}`, { variant: 'status' })
+            ]);
             break;
           }
           throw buildEmptyEditsError('implementation');

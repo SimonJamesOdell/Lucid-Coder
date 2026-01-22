@@ -68,6 +68,7 @@ describe('parseScopeReflectionResponse', () => {
       reasoning: 'tighten scope',
       mustChange: ['src/api', 'frontend/components'],
       mustAvoid: ['backend', 'tests'],
+      mustHave: [],
       testsNeeded: false
     });
   });
@@ -85,6 +86,7 @@ describe('parseScopeReflectionResponse', () => {
       reasoning: '',
       mustChange: [],
       mustAvoid: [],
+      mustHave: [],
       testsNeeded: true
     });
   });
@@ -102,6 +104,7 @@ describe('parseScopeReflectionResponse', () => {
       reasoning: '',
       mustChange: [],
       mustAvoid: [],
+      mustHave: [],
       testsNeeded: true
     });
   });
@@ -119,6 +122,7 @@ describe('parseScopeReflectionResponse', () => {
       reasoning: '',
       mustChange: [],
       mustAvoid: [],
+      mustHave: [],
       testsNeeded: true
     });
   });
@@ -136,6 +140,7 @@ describe('parseScopeReflectionResponse', () => {
       reasoning: '',
       mustChange: [],
       mustAvoid: [],
+      mustHave: [],
       testsNeeded: true
     });
   });
@@ -154,8 +159,63 @@ describe('parseScopeReflectionResponse', () => {
       reasoning: '',
       mustChange: [],
       mustAvoid: [],
+      mustHave: [],
       testsNeeded: true
     });
+  });
+
+  it('normalizes mustHave entries and defaults testsNeeded when non-boolean', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 123,
+          mustHave: ['  A ', '', 'B'],
+          testsNeeded: 'maybe'
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection).toEqual({
+      reasoning: '',
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: ['A', 'B'],
+      testsNeeded: true
+    });
+  });
+});
+
+describe('formatScopeReflectionContext', () => {
+  it('formats must-have lists and tests-needed flag', () => {
+    const { formatScopeReflectionContext } = __automationUtilsTestHooks;
+
+    const context = formatScopeReflectionContext({
+      reasoning: '  Keep it tight ',
+      mustChange: ['src/app.js'],
+      mustAvoid: [],
+      mustHave: ['A', 'B'],
+      testsNeeded: false
+    });
+
+    expect(context).toContain('Summary: Keep it tight');
+    expect(context).toContain('Must have: A, B');
+    expect(context).toContain('Tests required: No');
+  });
+
+  it('uses defaults when mustHave is empty', () => {
+    const { formatScopeReflectionContext } = __automationUtilsTestHooks;
+
+    const context = formatScopeReflectionContext({
+      reasoning: '',
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: [],
+      testsNeeded: true
+    });
+
+    expect(context).toContain('Must have: None noted');
   });
 });
 

@@ -88,7 +88,7 @@ describe('goalAutomationService', () => {
         mockSetMessages
       );
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ name: 'existing' });
       expect(axios.post).not.toHaveBeenCalled();
     });
 
@@ -270,7 +270,7 @@ describe('goalAutomationService', () => {
       // eslint-disable-next-line no-console
       console.log = originalConsoleLog;
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ name: 'existing' });
     });
 
     test('handles undefined prompt in automationLog context', async () => {
@@ -281,7 +281,7 @@ describe('goalAutomationService', () => {
       });
 
       const result = await ensureBranch(42, undefined, undefined, mockCreateMessage, mockSetMessages);
-      expect(result).toBeNull();
+      expect(result).toEqual({ name: 'existing' });
     });
 
     test('handles undefined thrown errors in catch optional chaining', async () => {
@@ -8003,6 +8003,89 @@ line2"}]}`;
       expect(advanceGoalPhase).toHaveBeenCalledWith(2, 'testing');
     });
 
+    test('processes nested goals depth-first and skips parents by default', async () => {
+      fetchGoals.mockResolvedValue([]);
+      advanceGoalPhase.mockResolvedValue({});
+      axios.post.mockImplementation((url) => {
+        if (url === '/api/llm/generate') {
+          return Promise.resolve({ data: { content: JSON.stringify({ edits: [] }) } });
+        }
+        if (url === '/api/projects/42/branches/stage') {
+          return Promise.resolve({ data: { success: true } });
+        }
+      });
+
+      const goals = [
+        {
+          id: 1,
+          prompt: 'Parent goal',
+          children: [
+            {
+              id: 2,
+              prompt: 'Child goal',
+              children: [{ id: 3, prompt: 'Leaf goal', children: [] }]
+            }
+          ]
+        }
+      ];
+
+      const promise = processGoals(
+        goals,
+        42,
+        mockProject,
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      await vi.advanceTimersByTimeAsync(10000);
+      await promise;
+
+      expect(advanceGoalPhase).toHaveBeenCalledWith(3, 'testing');
+      expect(advanceGoalPhase).not.toHaveBeenCalledWith(1, 'testing');
+      expect(advanceGoalPhase).not.toHaveBeenCalledWith(2, 'testing');
+    });
+
+    test('processes parent goals when processParentGoals is enabled', async () => {
+      fetchGoals.mockResolvedValue([]);
+      advanceGoalPhase.mockResolvedValue({});
+      axios.post.mockImplementation((url) => {
+        if (url === '/api/llm/generate') {
+          return Promise.resolve({ data: { content: JSON.stringify({ edits: [] }) } });
+        }
+        if (url === '/api/projects/42/branches/stage') {
+          return Promise.resolve({ data: { success: true } });
+        }
+      });
+
+      const goals = [
+        {
+          id: 1,
+          prompt: 'Parent goal',
+          children: [
+            { id: 2, prompt: 'Child goal', children: [] }
+          ]
+        }
+      ];
+
+      const promise = processGoals(
+        goals,
+        42,
+        mockProject,
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages,
+        { processParentGoals: true }
+      );
+
+      await vi.advanceTimersByTimeAsync(10000);
+      await promise;
+
+      expect(advanceGoalPhase).toHaveBeenCalledWith(2, 'testing');
+    });
+
     test('stops processing on first error', async () => {
       advanceGoalPhase
         .mockRejectedValueOnce(new Error('Failed'))
@@ -8119,6 +8202,39 @@ line2"}]}`;
       expect(mockSetMessages).toHaveBeenCalled();
       expect(mockSetPreviewPanelTab).toHaveBeenCalledWith('goals', { source: 'automation' });
       expect(mockCreateMessage).toHaveBeenCalledWith('assistant', 'Goals created.', { variant: 'status' });
+    });
+
+    test('surfaces clarifying questions and skips processing when needed', async () => {
+      planMetaGoal.mockResolvedValue({
+        questions: ['Which layout should we use?'],
+        children: [{ id: 1, prompt: 'Goal 1' }]
+      });
+      fetchGoals.mockResolvedValue([{ id: 1 }]);
+      axios.get.mockResolvedValue({ data: { workingBranches: [{ stagedFiles: ['file.js'] }] } });
+      axios.post.mockResolvedValue({ data: { content: JSON.stringify({ edits: [] }) } });
+
+      await handlePlanOnlyFeature(
+        42,
+        mockProject,
+        'Need clarification',
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      for (const [updater] of mockSetMessages.mock.calls) {
+        if (typeof updater === 'function') {
+          updater([]);
+        }
+      }
+
+      expect(advanceGoalPhase).not.toHaveBeenCalled();
+      const messages = mockCreateMessage.mock.calls.map((call) => call[1]);
+      expect(messages).toContain('I need clarification before proceeding:');
+      expect(messages).toContain('Which layout should we use?');
     });
 
     test('handles goal fetch error', async () => {
@@ -8257,6 +8373,37 @@ line2"}]}`;
       expect(mockSetPreviewPanelTab).toHaveBeenCalledWith('goals', { source: 'automation' });
       expect(mockSetMessages).toHaveBeenCalled();
       expect(mockCreateMessage).toHaveBeenCalledWith('assistant', 'Goals created.', { variant: 'status' });
+    });
+
+    test('surfaces clarifying questions and skips processing when needed', async () => {
+      fetchGoals.mockResolvedValue([{ id: 1 }]);
+      axios.get.mockResolvedValue({ data: { workingBranches: [{ stagedFiles: ['file.js'] }] } });
+      axios.post.mockResolvedValue({ data: { content: JSON.stringify({ edits: [] }) } });
+
+      const promise = handleRegularFeature(
+        42,
+        mockProject,
+        'Need clarification',
+        { questions: ['Confirm the desired behavior'], children: [{ id: 1, prompt: 'Goal 1' }] },
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await promise;
+
+      for (const [updater] of mockSetMessages.mock.calls) {
+        if (typeof updater === 'function') {
+          updater([]);
+        }
+      }
+
+      expect(advanceGoalPhase).not.toHaveBeenCalled();
+      const messages = mockCreateMessage.mock.calls.map((call) => call[1]);
+      expect(messages).toContain('I need clarification before proceeding:');
+      expect(messages).toContain('Confirm the desired behavior');
     });
 
     test('handles goal count fetch error', async () => {

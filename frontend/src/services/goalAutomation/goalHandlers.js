@@ -16,6 +16,9 @@ export async function processGoals(
     return { success: true, processed: 0 };
   }
 
+  const resolveChildren = (goal) => (Array.isArray(goal?.children) ? goal.children : []);
+  const shouldProcessParent = Boolean(options.processParentGoals);
+
   const projectPath = project.path;
   const projectInfo = `Project: ${project.name}\nFramework: ${project.framework || 'unknown'}\nLanguage: ${
     project.language || 'javascript'
@@ -25,28 +28,44 @@ export async function processGoals(
 
   await new Promise((resolve) => setTimeout(resolve, 400));
 
-  let processed = 0;
-  for (const childGoal of childGoals) {
-    const result = await processGoal(
-      childGoal,
-      projectId,
-      projectPath,
-      projectInfo,
-      setPreviewPanelTab,
-      setGoalCount,
-      createMessage,
-      setMessages,
-      options
-    );
+  const processTree = async (goals, count = 0) => {
+    let processed = count;
+    for (const goal of goals) {
+      const children = resolveChildren(goal);
+      if (children.length > 0) {
+        const childResult = await processTree(children, processed);
+        if (!childResult.success) {
+          return childResult;
+        }
+        processed = childResult.processed;
+        if (!shouldProcessParent) {
+          continue;
+        }
+      }
 
-    if (!result.success) {
-      return { success: false, processed };
+      const result = await processGoal(
+        goal,
+        projectId,
+        projectPath,
+        projectInfo,
+        setPreviewPanelTab,
+        setGoalCount,
+        createMessage,
+        setMessages,
+        options
+      );
+
+      if (!result.success) {
+        return { success: false, processed };
+      }
+
+      processed += 1;
     }
 
-    processed += 1;
-  }
+    return { success: true, processed };
+  };
 
-  return { success: true, processed };
+  return processTree(childGoals);
 }
 
 export async function handlePlanOnlyFeature(
@@ -83,8 +102,21 @@ export async function handlePlanOnlyFeature(
   setTimeout(async () => {
     await ensureBranch(projectId, prompt, setPreviewPanelTab, createMessage, setMessages, options);
 
+    const clarifyingQuestions =
+      planned?.questions || planned?.clarifyingQuestions || planned?.parent?.metadata?.clarifyingQuestions || [];
+    if (Array.isArray(clarifyingQuestions) && clarifyingQuestions.length > 0) {
+      setMessages((prev) => [
+        ...prev,
+        createMessage('assistant', 'I need clarification before proceeding:', { variant: 'status' }),
+        ...clarifyingQuestions.map((question) =>
+          createMessage('assistant', question, { variant: 'status' })
+        )
+      ]);
+      return { success: true, processed: 0, needsClarification: true, clarifyingQuestions };
+    }
+
     const childGoals = planned?.children || [];
-    await processGoals(
+    return processGoals(
       childGoals,
       projectId,
       project,
@@ -125,6 +157,19 @@ export async function handleRegularFeature(
   await new Promise((resolve) => setTimeout(resolve, 400));
 
   await ensureBranch(projectId, prompt, setPreviewPanelTab, createMessage, setMessages, options);
+
+  const clarifyingQuestions =
+    result?.questions || result?.clarifyingQuestions || result?.parent?.metadata?.clarifyingQuestions || [];
+  if (Array.isArray(clarifyingQuestions) && clarifyingQuestions.length > 0) {
+    setMessages((prev) => [
+      ...prev,
+      createMessage('assistant', 'I need clarification before proceeding:', { variant: 'status' }),
+      ...clarifyingQuestions.map((question) =>
+        createMessage('assistant', question, { variant: 'status' })
+      )
+    ]);
+    return { success: true, processed: 0, needsClarification: true, clarifyingQuestions };
+  }
 
   const childGoals = result?.children || [];
   return processGoals(

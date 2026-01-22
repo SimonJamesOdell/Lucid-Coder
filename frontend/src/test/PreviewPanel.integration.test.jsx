@@ -25,6 +25,11 @@ vi.mock('../components/PreviewTab', () => ({
   default: React.forwardRef(() => <div data-testid="mock-preview-tab" />)
 }));
 
+vi.mock('../components/GoalsTab', () => ({
+  __esModule: true,
+  default: () => <div data-testid="mock-goals-tab" />
+}));
+
 vi.mock('../components/FilesTab', () => ({
   __esModule: true,
   default: () => <div data-testid="mock-files-tab" />
@@ -138,6 +143,9 @@ describe('PreviewPanel commit-to-files integration', () => {
     const view = render(<PreviewPanel />);
 
     await user.click(screen.getByTestId('commits-tab'));
+
+    const commitButton = await screen.findByTestId('commit-def9876');
+    await user.click(commitButton);
 
     const fileButton = await screen.findByTestId('commit-file-open-0');
     await user.click(fileButton);

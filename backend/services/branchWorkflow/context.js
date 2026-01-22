@@ -1,5 +1,6 @@
 import db, { getGitSettings, getProjectGitSettings } from '../../database.js';
 import * as git from '../../utils/git.js';
+import { isWithinManagedProjectsRoot } from '../../routes/projects/cleanup.js';
 import { parseStagedFiles, withStatusCode } from './formatting.js';
 
 const gitReadyTestOverrides = new Map();
@@ -88,6 +89,12 @@ export const getProjectContext = async (projectId) => {
 
   if ((isTestMode() && !forcedPath) || !context.projectPath) {
     return context;
+  }
+
+  if (!isWithinManagedProjectsRoot(context.projectPath)) {
+    console.warn(
+      `[BranchWorkflow] Project ${projectId} path is outside managed root: ${context.projectPath}`
+    );
   }
 
   try {

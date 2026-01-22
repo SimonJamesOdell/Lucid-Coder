@@ -1,5 +1,11 @@
 import httpProxy from 'http-proxy';
-import { getRunningProcessEntry } from './projects/processManager.js';
+import { getProject } from '../database.js';
+import {
+  getProjectPortHints,
+  getRunningProcessEntry,
+  getStoredProjectPorts,
+  storeRunningProcesses
+} from './projects/processManager.js';
 
 const COOKIE_NAME = 'lucidcoder_preview_project';
 const PREVIEW_ROUTE_PREFIX = '/preview/';
@@ -136,13 +142,29 @@ const shouldBypassPreviewProxy = (url = '') => {
   );
 };
 
-const resolveFrontendPort = (projectId) => {
+const resolveFrontendPort = async (projectId) => {
   const { processes, state } = getRunningProcessEntry(projectId);
   const portCandidate = processes?.frontend?.port;
   const numericPort = Number(portCandidate);
   if (state === 'running' && Number.isInteger(numericPort) && numericPort > 0) {
     return numericPort;
   }
+
+  const project = await getProject(projectId);
+  if (!project) {
+    return null;
+  }
+
+  const storedPorts = getStoredProjectPorts(project);
+  if (Number.isInteger(storedPorts?.frontend) && storedPorts.frontend > 0) {
+    return storedPorts.frontend;
+  }
+
+  const portHints = getProjectPortHints(project);
+  if (Number.isInteger(portHints?.frontend) && portHints.frontend > 0) {
+    return portHints.frontend;
+  }
+
   return null;
 };
 
@@ -157,6 +179,17 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
     const message = error?.message || 'Proxy error';
     if (logger?.warn) {
       logger.warn('[preview-proxy] error', message, { url: req?.url });
+    }
+
+    const context = req?.__lucidcoderPreviewProxy;
+    const contextProjectId = context?.projectId;
+    if (contextProjectId && /ECONNREFUSED/i.test(message)) {
+      const { processes } = getRunningProcessEntry(contextProjectId);
+      if (processes?.frontend) {
+        const nextProcesses = { ...processes, frontend: null };
+        const nextState = processes?.backend ? 'running' : 'stopped';
+        storeRunningProcesses(contextProjectId, nextProcesses, nextState, { exposeSnapshot: true });
+      }
     }
 
     const acceptHeader = typeof req?.headers?.accept === 'string' ? req.headers.accept : '';
@@ -251,8 +284,8 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
     });
   });
 
-  const proxyWebRequest = (req, res, { projectId, forwardPath, setCookie }) => {
-    const port = resolveFrontendPort(projectId);
+  const proxyWebRequest = async (req, res, { projectId, forwardPath, setCookie }) => {
+    const port = await resolveFrontendPort(projectId);
     if (!port) {
       res.status(409).send(
         '<!doctype html><html><head><meta charset="utf-8"/><title>Preview unavailable</title></head>' +
@@ -269,7 +302,8 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
 
     const originalUrl = req.url;
     req.__lucidcoderPreviewProxy = {
-      previewPrefix: `${PREVIEW_ROUTE_PREFIX}${projectId}`.replace(/\/+$/, '')
+      previewPrefix: `${PREVIEW_ROUTE_PREFIX}${projectId}`.replace(/\/+$/, ''),
+      projectId
     };
 
     try {
@@ -280,23 +314,27 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
     }
   };
 
-  const middleware = (req, res, next) => {
-    if (shouldBypassPreviewProxy(req.url)) {
-      next();
-      return;
-    }
+  const middleware = async (req, res, next) => {
+    try {
+      if (shouldBypassPreviewProxy(req.url)) {
+        next();
+        return;
+      }
 
-    const info = getProjectIdFromRequest(req);
-    if (!info?.projectId) {
-      next();
-      return;
-    }
+      const info = getProjectIdFromRequest(req);
+      if (!info?.projectId) {
+        next();
+        return;
+      }
 
-    proxyWebRequest(req, res, {
-      projectId: info.projectId,
-      forwardPath: info.forwardPath,
-      setCookie: info.source === 'path'
-    });
+      await proxyWebRequest(req, res, {
+        projectId: info.projectId,
+        forwardPath: info.forwardPath,
+        setCookie: info.source === 'path'
+      });
+    } catch (error) {
+      next(error);
+    }
   };
 
   const registerUpgradeHandler = (server) => {
@@ -315,25 +353,34 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
         return;
       }
 
-      const port = resolveFrontendPort(info.projectId);
-      if (!port) {
-        return;
-      }
+      Promise.resolve(resolveFrontendPort(info.projectId))
+        .then((port) => {
+          if (!port) {
+            return;
+          }
 
-      const target = `http://127.0.0.1:${port}`;
-      const originalUrl = req.url;
-      try {
-        req.url = info.forwardPath;
-        proxy.ws(req, socket, head, { target });
-      } catch {
-        try {
-          socket.destroy();
-        } catch {
-          // ignore
-        }
-      } finally {
-        req.url = originalUrl;
-      }
+          const target = `http://127.0.0.1:${port}`;
+          const originalUrl = req.url;
+          try {
+            req.url = info.forwardPath;
+            proxy.ws(req, socket, head, { target });
+          } catch {
+            try {
+              socket.destroy();
+            } catch {
+              // ignore
+            }
+          } finally {
+            req.url = originalUrl;
+          }
+        })
+        .catch(() => {
+          try {
+            socket.destroy();
+          } catch {
+            // ignore
+          }
+        });
     });
   };
 

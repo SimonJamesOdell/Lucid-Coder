@@ -29,6 +29,36 @@ const getGoalTitle = (goal) => {
   return prompt || 'Goal';
 };
 
+const buildGoalTree = (goals = []) => {
+  const map = new Map();
+  goals.forEach((goal) => {
+    if (!goal?.id) return;
+    map.set(goal.id, { ...goal, children: [] });
+  });
+
+  map.forEach((node) => {
+    if (node.parentGoalId && map.has(node.parentGoalId)) {
+      map.get(node.parentGoalId).children.push(node);
+    }
+  });
+
+  const roots = Array.from(map.values()).filter(
+    (node) => !node.parentGoalId || !map.has(node.parentGoalId)
+  );
+
+  const sortTree = (nodes) => {
+    nodes.sort((a, b) => Number(a.id) - Number(b.id));
+    nodes.forEach((node) => {
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        sortTree(node.children);
+      }
+    });
+  };
+
+  sortTree(roots);
+  return roots;
+};
+
 const AgentGoalsPanel = ({ onGoalsLoaded }) => {
   const { currentProject } = useAppState();
   const [goals, setGoals] = useState([]);
@@ -90,16 +120,7 @@ const AgentGoalsPanel = ({ onGoalsLoaded }) => {
     );
   }
 
-  const parents = goals.filter((g) => !g.parentGoalId);
-  const childrenByParent = goals.reduce((map, goal) => {
-    if (goal.parentGoalId) {
-      if (!map[goal.parentGoalId]) {
-        map[goal.parentGoalId] = [];
-      }
-      map[goal.parentGoalId].push(goal);
-    }
-    return map;
-  }, {});
+  const goalTree = buildGoalTree(goals);
 
   return (
     <div data-testid="agent-goals-panel">
@@ -117,24 +138,21 @@ const AgentGoalsPanel = ({ onGoalsLoaded }) => {
       {isLoading && <p>Loading...</p>}
       {error && <p role="alert">{error}</p>}
       <ul data-testid="agent-goal-list">
-        {parents.map((goal) => (
-          <React.Fragment key={goal.id}>
-            <li data-testid="agent-goal-parent">
-              <span>{getGoalTitle(goal)}</span>
-              <span> — {formatPhaseLabel(goal.status)}</span>
-            </li>
-            {(childrenByParent[goal.id] || []).map((child) => (
-              <li
-                key={child.id}
-                data-testid="agent-goal-child"
-                className="agent-goal-child"
-              >
-                <span>{getGoalTitle(child)}</span>
-                <span> — {formatPhaseLabel(child.status)}</span>
+        {goalTree.map((goal) => {
+          const renderNode = (node, depth = 0) => (
+            <React.Fragment key={node.id}>
+              <li data-testid={depth === 0 ? 'agent-goal-parent' : 'agent-goal-child'}>
+                <span>{getGoalTitle(node)}</span>
+                <span> — {formatPhaseLabel(node.status)}</span>
               </li>
-            ))}
-          </React.Fragment>
-        ))}
+              {Array.isArray(node.children)
+                ? node.children.map((child) => renderNode(child, depth + 1))
+                : null}
+            </React.Fragment>
+          );
+
+          return renderNode(goal, 0);
+        })}
       </ul>
     </div>
   );
