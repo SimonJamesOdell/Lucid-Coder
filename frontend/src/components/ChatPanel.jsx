@@ -7,7 +7,8 @@ import {
   fetchGoals,
   createGoal,
   createMetaGoalWithChildren,
-  agentAutopilot
+  agentAutopilot,
+  deleteGoal
 } from '../utils/goalsApi';
 import AutopilotTimeline from './AutopilotTimeline.jsx';
 import { handlePlanOnlyFeature, handleRegularFeature, processGoals } from '../services/goalAutomationService';
@@ -62,6 +63,7 @@ const ChatPanel = ({
   const [goalCount, setGoalCount] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [pendingClarification, setPendingClarification] = useState(null);
   const [autoFixHalted, setAutoFixHalted] = useState(() => {
     /* c8 ignore next 3 */
     if (typeof window === 'undefined') {
@@ -434,7 +436,35 @@ const ChatPanel = ({
 
     if (currentProject?.id) {
       try {
-        const result = await callAgentWithTimeout({ projectId: currentProject.id, prompt: trimmed });
+        if (pendingClarification) {
+          try {
+            const existingGoals = await fetchGoals(currentProject.id, { includeArchived: false });
+            const staleGoals = Array.isArray(existingGoals)
+              ? existingGoals.filter((goal) =>
+                goal?.status === 'planning' || goal?.lifecycleState === 'draft'
+              )
+              : [];
+
+            await Promise.allSettled(staleGoals.map((goal) => deleteGoal(goal.id)));
+          } catch (error) {
+            console.warn('Failed to clear stale goals after clarification:', error?.message || error);
+          }
+        }
+
+        const resolvedPrompt = pendingClarification
+          ? [
+            `Original request: ${pendingClarification.prompt}`,
+            'Clarification questions:',
+            ...pendingClarification.questions.map((question) => `- ${question}`),
+            `User answer: ${trimmed}`
+          ].join('\n')
+          : trimmed;
+
+        if (pendingClarification) {
+          setPendingClarification(null);
+        }
+
+        const result = await callAgentWithTimeout({ projectId: currentProject.id, prompt: resolvedPrompt });
 
         if (Array.isArray(result.steps)) {
           appendAgentSteps(result.steps);
@@ -462,7 +492,7 @@ const ChatPanel = ({
           const execution = await handleRegularFeature(
             currentProject.id,
             currentProject,
-            trimmed,
+            resolvedPrompt,
             result,
             setPreviewPanelTab,
             setGoalCount,
@@ -470,6 +500,17 @@ const ChatPanel = ({
             setMessages,
             { requestEditorFocus, syncBranchOverview }
           );
+
+          if (execution?.needsClarification) {
+            if (execution?.clarifyingQuestions?.length) {
+              setPendingClarification({
+                projectId: currentProject.id,
+                prompt: resolvedPrompt,
+                questions: execution.clarifyingQuestions
+              });
+            }
+            return;
+          }
 
           if (execution?.success === true && typeof startAutomationJob === 'function') {
             const skipCssTests = await shouldSkipAutomationTests();

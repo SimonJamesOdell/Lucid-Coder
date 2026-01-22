@@ -88,7 +88,7 @@ describe('goalAutomationService', () => {
         mockSetMessages
       );
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ name: 'existing' });
       expect(axios.post).not.toHaveBeenCalled();
     });
 
@@ -270,7 +270,7 @@ describe('goalAutomationService', () => {
       // eslint-disable-next-line no-console
       console.log = originalConsoleLog;
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ name: 'existing' });
     });
 
     test('handles undefined prompt in automationLog context', async () => {
@@ -281,7 +281,7 @@ describe('goalAutomationService', () => {
       });
 
       const result = await ensureBranch(42, undefined, undefined, mockCreateMessage, mockSetMessages);
-      expect(result).toBeNull();
+      expect(result).toEqual({ name: 'existing' });
     });
 
     test('handles undefined thrown errors in catch optional chaining', async () => {

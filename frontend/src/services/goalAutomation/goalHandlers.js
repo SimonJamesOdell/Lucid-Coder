@@ -112,7 +112,7 @@ export async function handlePlanOnlyFeature(
           createMessage('assistant', question, { variant: 'status' })
         )
       ]);
-      return { success: true, processed: 0, needsClarification: true };
+      return { success: true, processed: 0, needsClarification: true, clarifyingQuestions };
     }
 
     const childGoals = planned?.children || [];
@@ -168,7 +168,7 @@ export async function handleRegularFeature(
         createMessage('assistant', question, { variant: 'status' })
       )
     ]);
-    return { success: true, processed: 0, needsClarification: true };
+    return { success: true, processed: 0, needsClarification: true, clarifyingQuestions };
   }
 
   const childGoals = result?.children || [];

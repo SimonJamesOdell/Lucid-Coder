@@ -194,6 +194,60 @@ describe('processGoal scope reflection handling', () => {
       expect.objectContaining({ message: reflectionError.message })
     );
   });
+
+  test('forces testsNeeded true when test failure context exists', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        testFailureContext: { jobs: [] }
+      }
+    );
+
+    expect(result).toEqual({ success: true });
+
+    const scopeLog = automationModuleMock.automationLog.mock.calls.find(
+      ([key]) => key === 'processGoal:scopeReflection'
+    );
+    expect(scopeLog?.[1]?.testsNeeded).toBe(true);
+  });
+
+  test('handles non-string prompts when evaluating test-fix heuristics', async () => {
+    const args = defaultArgs();
+    const numericGoal = { ...args.goal, prompt: 123 };
+
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+
+    const result = await processGoal(
+      numericGoal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      baseOptions
+    );
+
+    expect(result).toEqual({ success: true });
+
+    const scopeLog = automationModuleMock.automationLog.mock.calls.find(
+      ([key]) => key === 'processGoal:scopeReflection'
+    );
+    expect(scopeLog?.[1]?.testsNeeded).toBe(false);
+  });
 });
 
 describe('processGoal implementation retries', () => {
@@ -885,7 +939,62 @@ describe('processGoal final-attempt failures', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/LLM returned no edits for the implementation stage/i);
+    expect(result.error).toContain('No repo edits were applied');
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test('propagates implementation empty edits thrown during apply on the last attempt', async () => {
+    const { buildEmptyEditsError } = __processGoalTestHooks;
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+    automationModuleMock.applyEdits.mockRejectedValueOnce(buildEmptyEditsError('implementation'));
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/implementation stage/i);
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('propagates implementation empty edits when required files must change on the last attempt', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: ['frontend/src/App.jsx']
+    });
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/implementation stage/i);
     expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
   });
 });

@@ -17,6 +17,7 @@
     "start": "cd backend && npm start"
   },
   "devDependencies": {
+    "baseline-browser-mapping": "^2.9.17",
     "concurrently": "^8.2.2"
   },
   "keywords": [

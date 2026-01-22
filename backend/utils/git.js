@@ -8,6 +8,23 @@ const DEFAULT_AUTHOR = {
   email: 'dev@lucidcoder.local'
 };
 
+const normalizePath = (value) => {
+  if (!value) {
+    return '';
+  }
+  const normalized = path.resolve(value).replace(/\\/g, '/');
+  return isWindows ? normalized.toLowerCase() : normalized;
+};
+
+const normalizeStdout = (value) => (typeof value === 'string' ? value.trim() : '');
+
+const isRepoRoot = (repoRoot, projectPath) => {
+  if (!repoRoot) {
+    return false;
+  }
+  return normalizePath(repoRoot) === normalizePath(projectPath);
+};
+
 const execGit = (cwd, args, { allowFailure = false } = {}) => new Promise((resolve, reject) => {
   const child = spawn('git', args, {
     cwd,
@@ -64,6 +81,13 @@ export const ensureGitRepository = async (projectPath, { defaultBranch = 'main' 
 
   try {
     await runGitCommand(projectPath, ['rev-parse', '--is-inside-work-tree']);
+    const topLevel = await runGitCommand(projectPath, ['rev-parse', '--show-toplevel']);
+    const repoRoot = normalizeStdout(topLevel?.stdout);
+    if (isRepoRoot(repoRoot, projectPath)) {
+      return;
+    }
+    // If we're inside another repo (e.g., the system repo), initialize an isolated repo here.
+    await runGitCommand(projectPath, ['init', '-b', defaultBranch]);
     return;
   } catch (error) {
     // Continue to initialization if repo missing
@@ -206,4 +230,10 @@ export const fileExistsInProject = async (projectPath, relativePath) => {
     }
     throw error;
   }
+};
+
+export const __testOnly = {
+  normalizePath
+  ,
+  normalizeStdout
 };

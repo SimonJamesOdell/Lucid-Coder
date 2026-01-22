@@ -429,15 +429,6 @@ const PreviewPanel = () => {
 
   const renderNonGoalsTab = () => {
     switch (activeTab) {
-      case 'preview':
-        return (
-          <PreviewTab
-            ref={previewRef}
-            project={currentProject}
-            processInfo={projectProcesses}
-            onRestartProject={restartProject}
-          />
-        );
       case 'files':
         return (
           <FilesTab
@@ -490,14 +481,7 @@ const PreviewPanel = () => {
       case 'llm-usage':
         return <LLMUsageTab />;
       default:
-        return (
-          <PreviewTab
-            ref={previewRef}
-            project={currentProject}
-            processInfo={projectProcesses}
-            onRestartProject={restartProject}
-          />
-        );
+        return null;
     }
   };
 
@@ -669,7 +653,22 @@ const PreviewPanel = () => {
       </div>
       
       <div className="tab-content">
-        {isGoalsActive ? <GoalsTab /> : renderNonGoalsTab()}
+        <div className={`tab-pane ${isPreviewActive ? 'is-active' : 'is-hidden'}`}>
+          <PreviewTab
+            ref={previewRef}
+            project={currentProject}
+            processInfo={projectProcesses}
+            onRestartProject={restartProject}
+          />
+        </div>
+        <div className={`tab-pane ${isGoalsActive ? 'is-active' : 'is-hidden'}`}>
+          <GoalsTab />
+        </div>
+        {!isPreviewActive && !isGoalsActive && (
+          <div className="tab-pane is-active">
+            {renderNonGoalsTab()}
+          </div>
+        )}
       </div>
     </div>
   );

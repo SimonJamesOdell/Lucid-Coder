@@ -107,15 +107,72 @@ describe('runGitCommand', () => {
 describe('git helpers', () => {
   const expectSpawnArgs = (index) => spawnMock.mock.calls[index]?.[1];
 
+  test('normalizePath returns empty string for falsy values', () => {
+    expect(git.__testOnly.normalizePath(null)).toBe('');
+    expect(git.__testOnly.normalizePath(undefined)).toBe('');
+  });
+
+  test('normalizeStdout trims strings and returns empty for non-strings', () => {
+    expect(git.__testOnly.normalizeStdout('  main\n')).toBe('main');
+    expect(git.__testOnly.normalizeStdout(null)).toBe('');
+    expect(git.__testOnly.normalizeStdout(42)).toBe('');
+  });
+
+  test('normalizePath preserves casing on non-windows platforms', async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+    try {
+      Object.defineProperty(process, 'platform', {
+        value: 'linux'
+      });
+      vi.resetModules();
+      const fresh = await import('../utils/git.js');
+      const expected = path.resolve('C:\\Repo\\Path').replace(/\\/g, '/');
+
+      expect(fresh.__testOnly.normalizePath('C:\\Repo\\Path')).toBe(expected);
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(process, 'platform', originalDescriptor);
+      }
+    }
+  });
+
   test('ensureGitRepository requires project path', async () => {
     await expect(git.ensureGitRepository()).rejects.toThrow('Project path is required to ensure git repository');
   });
 
   test('ensureGitRepository returns early when repo already exists', async () => {
     queueSpawnResult({ stdout: 'true\n', code: 0 });
+    queueSpawnResult({ stdout: '/repo\n', code: 0 });
     await git.ensureGitRepository('/repo');
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(expectSpawnArgs(0)).toEqual(['rev-parse', '--is-inside-work-tree']);
+    expect(expectSpawnArgs(1)).toEqual(['rev-parse', '--show-toplevel']);
+  });
+
+  test('ensureGitRepository initializes when top-level is empty', async () => {
+    queueSpawnResult({ stdout: 'true\n', code: 0 });
+    queueSpawnResult({ stdout: '', code: 0 });
+    queueSpawnResult({ code: 0 });
+
+    await git.ensureGitRepository('/repo', { defaultBranch: 'main' });
+
+    expect(expectSpawnArgs(0)).toEqual(['rev-parse', '--is-inside-work-tree']);
+    expect(expectSpawnArgs(1)).toEqual(['rev-parse', '--show-toplevel']);
+    expect(expectSpawnArgs(2)).toEqual(['init', '-b', 'main']);
+  });
+
+
+  test('ensureGitRepository initializes when top-level is empty', async () => {
+    queueSpawnResult({ stdout: 'true\n', code: 0 });
+    queueSpawnResult({ stdout: '', code: 0 });
+    queueSpawnResult({ code: 0 });
+
+    await git.ensureGitRepository('/repo', { defaultBranch: 'main' });
+
+    expect(expectSpawnArgs(0)).toEqual(['rev-parse', '--is-inside-work-tree']);
+    expect(expectSpawnArgs(1)).toEqual(['rev-parse', '--show-toplevel']);
+    expect(expectSpawnArgs(2)).toEqual(['init', '-b', 'main']);
   });
 
   test('ensureGitRepository rethrows unexpected rev-parse errors', async () => {

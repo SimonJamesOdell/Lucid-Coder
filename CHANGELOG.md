@@ -1,10 +1,13 @@
 # Changelog
 
-## 0.2.0 (2026-01-20)
+## 0.2.0 (2026-01-21)
 - Added nested goal planning with bounded depth/size, plus persistence of multi-level goal trees.
 - Enhanced goal iteration to traverse nested goals, with clarification gating when requirements are underspecified.
 - Updated Goals and Agent Goals panels to render nested goal trees and rolled progress across leaf goals.
 - Extended tests to cover nested planning, clarification handling, and recursive processing.
+- Kept PreviewTab mounted to prevent iframe reloads when switching tabs.
+- Preview proxy now falls back to stored project ports for manually started frontends.
+- Updated baseline-browser-mapping dev dependency.
 
 ## 0.1.3 (2026-01-20)
 - Refactored backend autopilot and scaffolding modules into smaller helpers, plus modularized key frontend panels and hooks.

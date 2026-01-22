@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { initializeDatabase } from '../database.js';
 import {
   createMetaGoalWithChildren,
+  planGoalFromPrompt,
   __testExports__
 } from '../services/agentOrchestrator.js';
+
+vi.mock('../llm-client.js', () => ({
+  llmClient: {
+    generateResponse: vi.fn()
+  }
+}));
 
 const resetAgentTables = async () => {
   const { default: db } = await import('../database.js');
@@ -24,6 +31,11 @@ describe('agentOrchestrator coverage helpers (unit)', () => {
   beforeEach(async () => {
     await initializeDatabase();
     await resetAgentTables();
+  });
+
+  afterEach(async () => {
+    const { llmClient } = await import('../llm-client.js');
+    llmClient.generateResponse.mockReset();
   });
 
   it('covers normalizeChildPlans object + string branches', () => {
@@ -142,5 +154,54 @@ describe('agentOrchestrator coverage helpers (unit)', () => {
 
     expect(children).toHaveLength(1);
     expect(children[0].children).toEqual([]);
+  });
+
+  it('parses clarification questions from the LLM when requested', async () => {
+    const { llmClient } = await import('../llm-client.js');
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    llmClient.generateResponse
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          childPrompts: ['Implement API', 'Document results']
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          needsClarification: true,
+          questions: ['Which API surface?', 'Any constraints?']
+        })
+      );
+
+    try {
+      const result = await planGoalFromPrompt({ projectId: 906, prompt: 'Add reporting' });
+
+      expect(llmClient.generateResponse).toHaveBeenCalledTimes(2);
+      expect(result.questions).toEqual(['Which API surface?', 'Any constraints?']);
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  });
+
+  it('falls back to heuristic plans when strict planning fails', async () => {
+    const { llmClient } = await import('../llm-client.js');
+
+    llmClient.generateResponse
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          parentTitle: 'Profile Plan',
+          questions: ['Need profile details?'],
+          childGoals: [{ title: 'Add profile page', prompt: 'Add profile page' }]
+        })
+      )
+      .mockRejectedValueOnce(new Error('strict planning failed'));
+
+    const result = await planGoalFromPrompt({ projectId: 907, prompt: 'Add profile page' });
+
+    expect(result.questions).toEqual(['Need profile details?']);
+    const prompts = result.children.map((child) => child.prompt);
+    expect(prompts[0]).toMatch(/^Identify the components/);
+    expect(prompts).toHaveLength(3);
   });
 });

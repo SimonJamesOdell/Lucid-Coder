@@ -228,7 +228,12 @@ describe('goalHandlers clarification paths', () => {
     await vi.runAllTimersAsync();
     const result = await promise;
 
-    expect(result).toEqual({ success: true, processed: 0, needsClarification: true });
+    expect(result).toEqual({
+      success: true,
+      processed: 0,
+      needsClarification: true,
+      clarifyingQuestions: ['Clarify scope']
+    });
     expect(ensureBranchModule.ensureBranch).toHaveBeenCalled();
   });
 
@@ -258,7 +263,12 @@ describe('goalHandlers clarification paths', () => {
     await vi.runAllTimersAsync();
     const result = await promise;
 
-    expect(result).toEqual({ success: true, processed: 0, needsClarification: true });
+    expect(result).toEqual({
+      success: true,
+      processed: 0,
+      needsClarification: true,
+      clarifyingQuestions: ['Confirm edge cases']
+    });
     expect(createMessage).toHaveBeenCalledWith(
       'assistant',
       'Confirm edge cases',

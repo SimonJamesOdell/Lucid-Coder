@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { initializeDatabase } from '../database.js';
+import fs from 'fs';
+import path from 'path';
+import { initializeDatabase, createProject } from '../database.js';
 import {
   createGoalFromPrompt,
   createChildGoal,
@@ -318,6 +320,14 @@ describe('agentOrchestrator', () => {
     await expect(
       createChildGoal({ projectId: 7, parentGoalId: parent.id, prompt: 'Mismatched child' })
     ).rejects.toThrow('Child goal must use same projectId as parent');
+  });
+
+  it('rejects child goals when the prompt is not a string', async () => {
+    const { goal: parent } = await createGoalFromPrompt({ projectId: 8, prompt: 'Parent goal' });
+
+    await expect(
+      createChildGoal({ projectId: parent.projectId, parentGoalId: parent.id, prompt: 123 })
+    ).rejects.toThrow('prompt is required');
   });
 
   it('can create a meta-goal with multiple child goals', async () => {
@@ -1027,6 +1037,27 @@ describe('agentOrchestrator', () => {
       expect(prompts).toEqual(['Implement navigation', 'Add tests']);
     });
 
+    it('includes project snapshots in planner prompts when available', async () => {
+      const projectRoot = path.resolve(process.cwd(), '..');
+      const project = await createProject({
+        name: 'Snapshot Project',
+        description: 'snapshot test',
+        path: projectRoot
+      });
+
+      llmClient.generateResponse.mockResolvedValue(
+        JSON.stringify({
+          childPrompts: ['Implement snapshot-driven plan']
+        })
+      );
+
+      await planGoalFromPrompt({ projectId: project.id, prompt: 'Plan with snapshot' });
+
+      const messages = llmClient.generateResponse.mock.calls[0][0];
+      const systemMessage = messages.find((message) => message.role === 'system');
+      expect(systemMessage?.content).toContain('Project snapshot:');
+    });
+
     it('rejects responses that trim to zero usable prompts', async () => {
       llmClient.generateResponse.mockResolvedValue(
         JSON.stringify({ childPrompts: ['   ', 99, ''] })
@@ -1035,6 +1066,72 @@ describe('agentOrchestrator', () => {
       await expect(
         planGoalFromPrompt({ projectId: 44, prompt: 'Plan settings page' })
       ).rejects.toThrow('LLM planning produced no usable child prompts');
+    });
+
+    it('falls back to heuristic plans when strict planning fails', async () => {
+      llmClient.generateResponse
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            parentTitle: 'Profile Plan',
+            questions: ['Need profile details?'],
+            childGoals: [{ title: 'Add profile page', prompt: 'Add profile page' }]
+          })
+        )
+        .mockRejectedValueOnce(new Error('strict planning failed'));
+
+      const result = await planGoalFromPrompt({ projectId: 600, prompt: 'Add profile page' });
+
+      expect(result.questions).toEqual(['Need profile details?']);
+      const prompts = result.children.map((child) => child.prompt);
+      expect(prompts[0]).toMatch(/^Identify the components/);
+      expect(prompts).toHaveLength(3);
+    });
+
+    it('logs strict retry failures when low-information plans trigger a retry', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      llmClient.generateResponse
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            childGoals: [{ prompt: 'Implement audit logging' }]
+          })
+        )
+        .mockRejectedValueOnce({ code: 'retry-failed' });
+
+      const result = await planGoalFromPrompt({ projectId: 606, prompt: 'Implement audit logging' });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[WARN] Strict planning retry failed:',
+        { code: 'retry-failed' }
+      );
+      expect(result.questions).toEqual([]);
+      const prompts = result.children.map((child) => child.prompt);
+      expect(prompts[0]).toMatch(/^Identify the components/);
+      expect(prompts).toHaveLength(3);
+
+      warnSpy.mockRestore();
+    });
+
+    it('falls back to the raw retry error when no message is provided', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      llmClient.generateResponse
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            childGoals: [{ prompt: 'Add login and signup pages' }]
+          })
+        )
+        .mockRejectedValueOnce(null);
+
+      const result = await planGoalFromPrompt({ projectId: 607, prompt: 'Add login and signup pages' });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[WARN] Strict planning retry failed:',
+        null
+      );
+      expect(result.questions).toEqual([]);
+
+      warnSpy.mockRestore();
     });
 
     it('creates nested goal trees when child goals include subgoals', async () => {
@@ -1088,6 +1185,110 @@ describe('agentOrchestrator', () => {
       ]);
       expect(snapshot.tasks[0].type).toBe('clarification');
     });
+
+    it('requests clarifying questions when NODE_ENV is not test', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+
+      llmClient.generateResponse
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            childPrompts: ['Implement profile page', 'Add tests']
+          })
+        )
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            needsClarification: true,
+            questions: ['Which layout should we use?']
+          })
+        );
+
+      try {
+        const result = await planGoalFromPrompt({ projectId: 503, prompt: 'Add profile page' });
+
+        expect(llmClient.generateResponse).toHaveBeenCalledTimes(2);
+        expect(result.questions).toEqual(['Which layout should we use?']);
+      } finally {
+        process.env.NODE_ENV = originalEnv;
+      }
+    });
+
+    it('falls back to empty clarifications when clarification JSON is invalid', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+
+      llmClient.generateResponse
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            childPrompts: ['Implement profile page']
+          })
+        )
+        .mockResolvedValueOnce('not json');
+
+      try {
+        const result = await planGoalFromPrompt({ projectId: 504, prompt: 'Add profile page' });
+
+        expect(result.questions).toEqual([]);
+      } finally {
+        process.env.NODE_ENV = originalEnv;
+      }
+    });
+
+    it('swallows clarification generation failures when NODE_ENV is not test', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+
+      llmClient.generateResponse
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            childPrompts: ['Implement billing page']
+          })
+        )
+        .mockRejectedValueOnce(new Error('llm unavailable'));
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        const result = await planGoalFromPrompt({ projectId: 504, prompt: 'Add billing page' });
+
+        expect(result.questions).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Clarification question generation failed:'),
+          expect.any(String)
+        );
+      } finally {
+        warnSpy.mockRestore();
+        process.env.NODE_ENV = originalEnv;
+      }
+    });
+
+    it('logs clarification failures when errors lack a message', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+
+      llmClient.generateResponse
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            childPrompts: ['Implement account settings']
+          })
+        )
+        .mockRejectedValueOnce(null);
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        const result = await planGoalFromPrompt({ projectId: 505, prompt: 'Add account settings' });
+
+        expect(result.questions).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Clarification question generation failed:'),
+          null
+        );
+      } finally {
+        warnSpy.mockRestore();
+        process.env.NODE_ENV = originalEnv;
+      }
+    });
   });
 
   describe('normalizeJsonLikeText helper', () => {
@@ -1131,10 +1332,214 @@ describe('agentOrchestrator', () => {
       expect(normalizeClarifyingQuestions('not-an-array')).toEqual([]);
     });
 
+    it('filters non-string clarification items', () => {
+      const { normalizeClarifyingQuestions } = __testExports__;
+
+      expect(normalizeClarifyingQuestions(['  Keep me  ', 123, null])).toEqual(['Keep me']);
+    });
+
     it('returns false for empty verification prompts', () => {
       const { isProgrammaticVerificationStep } = __testExports__;
 
       expect(isProgrammaticVerificationStep('')).toBe(false);
+    });
+
+    it('derives fallback titles when the prompt is not a string', () => {
+      const { deriveGoalTitle } = __testExports__;
+
+      expect(deriveGoalTitle(null, { fallback: 'Goal' })).toBe('Goal');
+    });
+
+    it('stops acceptance criteria at the next section header', () => {
+      const { extractAcceptanceCriteria } = __testExports__;
+
+      const criteria = extractAcceptanceCriteria(
+        'Acceptance criteria:\n- First item\nNotes:\n- Should be ignored'
+      );
+
+      expect(criteria).toEqual(['First item']);
+    });
+
+    it('uses unknown stack labels when framework details are missing', async () => {
+      const { resolveProjectStackContext } = __testExports__;
+
+      const project = await createProject({
+        name: 'Unknown stack',
+        description: 'Missing stack metadata',
+        framework: '',
+        language: '',
+        path: ''
+      });
+
+      const summary = await resolveProjectStackContext(project.id);
+
+      expect(summary).toContain('frontend: unknown (unknown)');
+      expect(summary).toContain('backend: unknown (unknown)');
+    });
+
+    it('detects python frameworks from requirements text', () => {
+      const { detectPythonFramework } = __testExports__;
+
+      expect(detectPythonFramework('flask\n')).toBe('flask');
+      expect(detectPythonFramework('quart\n')).toBe('quart');
+    });
+
+    it('detects additional frontend and backend frameworks', () => {
+      const { detectFrontendFramework, detectBackendFramework } = __testExports__;
+
+      expect(detectFrontendFramework({ dependencies: { react: '^18.0.0' } })).toBe('react');
+      expect(detectFrontendFramework({ dependencies: { next: '^14.0.0' } })).toBe('nextjs');
+      expect(detectFrontendFramework({ dependencies: { vue: '^3.0.0' } })).toBe('vue');
+      expect(detectFrontendFramework({ dependencies: { nuxt: '^3.0.0' } })).toBe('nuxt');
+      expect(detectFrontendFramework({ dependencies: { '@angular/core': '^16.0.0' } })).toBe('angular');
+      expect(detectFrontendFramework({ dependencies: { svelte: '^4.0.0' } })).toBe('svelte');
+      expect(detectFrontendFramework({ dependencies: { 'solid-js': '^1.0.0' } })).toBe('solid');
+      expect(detectFrontendFramework({ dependencies: { gatsby: '^5.0.0' } })).toBe('gatsby');
+      expect(detectFrontendFramework({ dependencies: { astro: '^1.0.0' } })).toBe('astro');
+      expect(detectBackendFramework({ dependencies: { fastify: '^4.0.0' } })).toBe('fastify');
+      expect(detectBackendFramework({ dependencies: { '@nestjs/core': '^10.0.0' } })).toBe('nestjs');
+      expect(detectBackendFramework({ dependencies: { '@hapi/hapi': '^21.0.0' } })).toBe('hapi');
+      expect(detectBackendFramework({ dependencies: { '@adonisjs/core': '^6.0.0' } })).toBe('adonisjs');
+    });
+
+    it('uses preconfigured backend framework values when present', async () => {
+      const { resolveProjectStackContext } = __testExports__;
+      const baseDir = process.env.PROJECTS_DIR || process.cwd();
+      fs.mkdirSync(baseDir, { recursive: true });
+      const tempDir = fs.mkdtempSync(path.join(baseDir, 'stack-'));
+
+      try {
+        const project = await createProject({
+          name: 'Backend preset',
+          description: 'Preset backend stack',
+          framework: 'react',
+          language: 'javascript',
+          path: tempDir
+        });
+
+        const { default: db } = await import('../database.js');
+        await new Promise((resolve, reject) => {
+          db.run(
+            'UPDATE projects SET backend_framework = ?, backend_language = ? WHERE id = ?',
+            ['express', 'javascript', project.id],
+            (err) => (err ? reject(err) : resolve())
+          );
+        });
+
+        const summary = await resolveProjectStackContext(project.id);
+
+        expect(summary).toContain('backend: express (javascript)');
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('normalizes non-string framework values in stack summaries', async () => {
+      const { resolveProjectStackContext } = __testExports__;
+      const dbModule = await import('../database.js');
+      const getProjectSpy = vi.spyOn(dbModule, 'getProject').mockResolvedValue({
+        id: 999,
+        name: 'Numeric stack',
+        description: 'Non-string framework values',
+        framework: 123,
+        language: 456,
+        path: ''
+      });
+
+      try {
+        const summary = await resolveProjectStackContext(999);
+
+        expect(summary).toContain('frontend: unknown (unknown)');
+      } finally {
+        getProjectSpy.mockRestore();
+      }
+    });
+
+    it('returns null stack context when loading the project fails', async () => {
+      const { resolveProjectStackContext } = __testExports__;
+      const dbModule = await import('../database.js');
+      const getProjectSpy = vi.spyOn(dbModule, 'getProject').mockRejectedValueOnce(new Error('db down'));
+
+      try {
+        const summary = await resolveProjectStackContext(12345);
+
+        expect(summary).toBeNull();
+      } finally {
+        getProjectSpy.mockRestore();
+      }
+    });
+
+    it('returns an empty snapshot when the project has no readable files', async () => {
+      const { buildPlannerProjectSnapshot } = __testExports__;
+      const baseDir = process.env.PROJECTS_DIR || process.cwd();
+      fs.mkdirSync(baseDir, { recursive: true });
+      const tempDir = fs.mkdtempSync(path.join(baseDir, 'snapshot-'));
+
+      try {
+        const project = await createProject({
+          name: 'Snapshot empty',
+          description: 'Empty project',
+          framework: '',
+          language: '',
+          path: tempDir
+        });
+
+        const snapshot = await buildPlannerProjectSnapshot(project.id);
+
+        expect(snapshot).toBe('');
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns an empty snapshot when project lookup fails', async () => {
+      const { buildPlannerProjectSnapshot } = __testExports__;
+      const dbModule = await import('../database.js');
+      const getProjectSpy = vi.spyOn(dbModule, 'getProject').mockRejectedValueOnce(new Error('db down'));
+
+      try {
+        const snapshot = await buildPlannerProjectSnapshot(12345);
+
+        expect(snapshot).toBe('');
+      } finally {
+        getProjectSpy.mockRestore();
+      }
+    });
+
+    it('detects low-information plan inputs for empty and compound prompts', () => {
+      const { isLowInformationPlan, isCompoundPrompt } = __testExports__;
+
+      expect(isLowInformationPlan('Add logging', null)).toBe(true);
+      expect(isLowInformationPlan('Add login and signup pages', [{ prompt: 'Implement settings page' }])).toBe(true);
+      expect(isCompoundPrompt('')).toBe(false);
+      expect(isCompoundPrompt(42)).toBe(false);
+    });
+
+    it('covers low-information plan fallbacks for missing child prompt fields', () => {
+      const { isLowInformationPlan } = __testExports__;
+      const compoundPrompt = 'Add login and signup pages';
+
+      expect(isLowInformationPlan(compoundPrompt, [null])).toBe(true);
+      expect(isLowInformationPlan(compoundPrompt, [{ title: 'Login steps' }])).toBe(true);
+      expect(isLowInformationPlan(compoundPrompt, [{}])).toBe(true);
+    });
+
+    it('sorts goal trees when ids are missing', () => {
+      const { buildGoalTreeFromList } = __testExports__;
+
+      const result = buildGoalTreeFromList([
+        { id: 5, projectId: 1, parentGoalId: null, title: 'Second', prompt: 'Second' },
+        { id: null, projectId: 1, parentGoalId: null, title: 'First', prompt: 'First' }
+      ]);
+
+      expect(result).toHaveLength(2);
+    });
+
+    it('normalizes planner prompts with non-string values', () => {
+      const { normalizePlannerPrompt } = __testExports__;
+
+      expect(normalizePlannerPrompt(123)).toBe('');
+      expect(normalizePlannerPrompt('  Trim me  ')).toBe('Trim me');
     });
 
     it('normalizes child plan strings and skips empty entries', () => {
@@ -1161,6 +1566,7 @@ describe('agentOrchestrator', () => {
 
       const plans = normalizeChildPlans([
         { prompt: 'Draft spec', title: '   ' },
+        { prompt: 'Outline API', title: 123 },
         { prompt: 123, title: 'Ignored' },
         '  Ship it  ',
         42
@@ -1172,8 +1578,12 @@ describe('agentOrchestrator', () => {
           title: deriveGoalTitle('Draft spec', { fallback: 'Child Goal 1' })
         },
         {
+          prompt: 'Outline API',
+          title: deriveGoalTitle('Outline API', { fallback: 'Child Goal 2' })
+        },
+        {
           prompt: 'Ship it',
-          title: deriveGoalTitle('Ship it', { fallback: 'Child Goal 3' })
+          title: deriveGoalTitle('Ship it', { fallback: 'Child Goal 4' })
         }
       ]);
     });

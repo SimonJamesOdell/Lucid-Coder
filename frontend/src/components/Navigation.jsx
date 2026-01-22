@@ -123,6 +123,7 @@ const Navigation = ({ versionLabel = null }) => {
     }
   };
 
+
   const shutdownStatus = projectShutdownState || {};
   const isStoppingCurrentProject = Boolean(
     shutdownStatus.isStopping && currentProject && shutdownStatus.projectId === currentProject.id
@@ -136,7 +137,7 @@ const Navigation = ({ versionLabel = null }) => {
         {versionLabel ? (
           <span className="nav-version" data-testid="nav-version">v{versionLabel}</span>
         ) : null}
-        
+
         <Dropdown 
           title="Projects" 
           disabled={!canUseProjects}

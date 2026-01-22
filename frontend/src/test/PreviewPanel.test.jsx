@@ -15,6 +15,7 @@ vi.mock('../utils/agentUiBridge', () => ({
 }));
 
 const reloadPreviewMock = vi.fn();
+let provideReloadPreview = true;
 const restartProjectMock = vi.fn();
 const getPreviewUrlMock = vi.fn(() => 'http://localhost:5173');
 const getDisplayedUrlMock = vi.fn(() => null);
@@ -44,7 +45,7 @@ vi.mock('../components/PreviewTab', () => ({
   __esModule: true,
   default: forwardRef((props, ref) => {
     useImperativeHandle(ref, () => ({
-      reloadPreview: reloadPreviewMock,
+      reloadPreview: provideReloadPreview ? reloadPreviewMock : null,
       restartProject: restartProjectMock,
       getPreviewUrl: getPreviewUrlMock,
       getDisplayedUrl: getDisplayedUrlMock
@@ -134,6 +135,7 @@ describe('PreviewPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     PreviewPanel.__testHooks = {};
+    provideReloadPreview = true;
     window.open = vi.fn();
     latestBridgeOptions = null;
     stopBridgeMock.mockClear();
@@ -313,7 +315,9 @@ describe('PreviewPanel', () => {
 
     expect(setPreviewPanelTab).toHaveBeenCalledWith('goals', expect.objectContaining({ source: 'user' }));
     expect(screen.getByTestId('mock-preview-tab')).toBeInTheDocument();
-    expect(screen.queryByTestId('mock-goals-tab')).not.toBeInTheDocument();
+    const goalsTab = screen.getByTestId('mock-goals-tab');
+    expect(goalsTab).toBeInTheDocument();
+    expect(goalsTab.closest('.tab-pane')).toHaveClass('is-hidden');
   });
 
   test('ignores agent executeCommand when followAutomation is disabled by user selecting Goals', async () => {
@@ -1175,10 +1179,37 @@ describe('PreviewPanel', () => {
     expect(typeof filesTabControls.onFileSaved).toBe('function');
 
     filesTabControls.onFileSaved?.('src/App.jsx');
-    expect(reloadPreviewMock).not.toHaveBeenCalled();
+    expect(reloadPreviewMock).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByTestId('preview-tab'));
     expect(reloadPreviewMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('defers preview reload when preview ref lacks reload handler and replays when active', async () => {
+    provideReloadPreview = false;
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 'pending-preview', name: 'Project' } })
+    );
+
+    const user = userEvent.setup();
+    const { rerender } = render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('files-tab'));
+    expect(typeof filesTabControls.onFileSaved).toBe('function');
+
+    act(() => {
+      filesTabControls.onFileSaved?.('src/App.jsx');
+    });
+
+    expect(reloadPreviewMock).not.toHaveBeenCalled();
+
+    provideReloadPreview = true;
+    rerender(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('preview-tab'));
+    await waitFor(() => {
+      expect(reloadPreviewMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   test('reloads preview immediately when a file saves while preview is active', async () => {

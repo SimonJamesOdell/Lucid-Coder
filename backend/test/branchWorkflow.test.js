@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 import db, { initializeDatabase, createProject, saveProjectGitSettings, saveGitSettings, deleteProjectGitSettings } from '../database.js';
 import * as databaseModule from '../database.js';
 import * as branchWorkflow from '../services/branchWorkflow.js';
+import * as cleanup from '../routes/projects/cleanup.js';
 import * as git from '../utils/git.js';
 import * as jobRunner from '../services/jobRunner.js';
 
@@ -777,6 +778,29 @@ describe('branchWorkflow staging automation', () => {
     expect(popSpy).toHaveBeenCalled();
 
     branchWorkflow.__testing.setGitContextOverride(projectId);
+  });
+
+  it('warns when project path is outside the managed root', async () => {
+    const projectPath = 'C:/tmp/outside-managed-root';
+    await exec('UPDATE projects SET path = ? WHERE id = ?', [projectPath, projectId]);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ensureRepoSpy = vi.spyOn(git, 'ensureGitRepository').mockResolvedValue();
+    const rootSpy = vi.spyOn(cleanup, 'isWithinManagedProjectsRoot').mockReturnValue(false);
+
+    try {
+      branchWorkflow.__testing.setTestModeOverride(false);
+
+      const context = await branchWorkflow.__testing.getProjectContext(projectId);
+      expect(context.projectPath).toBe(projectPath);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('outside managed root')
+      );
+      expect(ensureRepoSpy).toHaveBeenCalled();
+    } finally {
+      rootSpy.mockRestore();
+      branchWorkflow.__testing.setTestModeOverride(null);
+    }
   });
 
   it('runTestsForBranch defaults to the active branch when omitted', async () => {

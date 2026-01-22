@@ -1,3 +1,5 @@
+import fs from 'fs/promises';
+import path from 'path';
 import {
   createGoal as createStoredGoal,
   getGoal as getStoredGoal,
@@ -12,6 +14,7 @@ import {
 import { startJob, waitForJobCompletion, JOB_STATUS } from './jobRunner.js';
 import { llmClient } from '../llm-client.js';
 import { ensureGitRepository, runGitCommand } from '../utils/git.js';
+import { getProject } from '../database.js';
 import { assertGoalTransition, isGoalState } from './goalLifecycle.js';
 import { isStyleOnlyPrompt, extractStyleColor } from './promptHeuristics.js';
 
@@ -183,6 +186,231 @@ const EXPECTED_ACTUAL_QUESTION = 'What is the expected behavior, and what is cur
 const MAX_PLAN_DEPTH = 4;
 const MAX_PLAN_NODES = 40;
 
+const readJsonFile = async (filePath) => {
+  try {
+    const raw = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const readTextFile = async (filePath) => {
+  try {
+    return await fs.readFile(filePath, 'utf8');
+  } catch {
+    return '';
+  }
+};
+
+const normalizeDeps = (pkg) => ({
+  ...(pkg?.dependencies || {}),
+  ...(pkg?.devDependencies || {})
+});
+
+const detectFrontendFramework = (pkg) => {
+  const deps = normalizeDeps(pkg);
+  if (deps.react || deps['react-dom']) return 'react';
+  if (deps.next) return 'nextjs';
+  if (deps.vue) return 'vue';
+  if (deps.nuxt) return 'nuxt';
+  if (deps['@angular/core']) return 'angular';
+  if (deps.svelte || deps['@sveltejs/kit']) return 'svelte';
+  if (deps['solid-js']) return 'solid';
+  if (deps.gatsby) return 'gatsby';
+  if (deps.astro) return 'astro';
+  return '';
+};
+
+const detectBackendFramework = (pkg) => {
+  const deps = normalizeDeps(pkg);
+  if (deps.express) return 'express';
+  if (deps.fastify) return 'fastify';
+  if (deps.koa) return 'koa';
+  if (deps['@nestjs/core']) return 'nestjs';
+  if (deps['@hapi/hapi']) return 'hapi';
+  if (deps['@adonisjs/core']) return 'adonisjs';
+  return '';
+};
+
+const detectPythonFramework = (requirementsText = '') => {
+  const normalized = requirementsText.toLowerCase();
+  if (/(^|\n)flask\b/.test(normalized)) return 'flask';
+  if (/(^|\n)django\b/.test(normalized)) return 'django';
+  if (/(^|\n)fastapi\b/.test(normalized)) return 'fastapi';
+  if (/(^|\n)quart\b/.test(normalized)) return 'quart';
+  return '';
+};
+
+const resolveProjectStackContext = async (projectId) => {
+  const project = await getProject(projectId).catch(() => null);
+  if (!project) {
+    return null;
+  }
+
+  const projectPath = typeof project.path === 'string' && project.path.trim()
+    ? project.path.trim()
+    : '';
+
+  let frontendFramework = project.frontend_framework || project.framework || '';
+  let backendFramework = project.backend_framework || '';
+  let frontendLanguage = project.frontend_language || project.language || '';
+  let backendLanguage = project.backend_language || '';
+
+  if (projectPath) {
+    const frontendPackage = await readJsonFile(path.join(projectPath, 'frontend', 'package.json'));
+    if (!frontendFramework) {
+      frontendFramework = detectFrontendFramework(frontendPackage);
+    }
+    if (!frontendLanguage && frontendPackage) {
+      frontendLanguage = 'javascript';
+    }
+
+    const backendPackage = await readJsonFile(path.join(projectPath, 'backend', 'package.json'));
+    if (!backendFramework) {
+      backendFramework = detectBackendFramework(backendPackage);
+    }
+    if (!backendLanguage && backendPackage) {
+      backendLanguage = 'javascript';
+    }
+
+    if (!backendFramework || !backendLanguage) {
+      const requirementsText = await readTextFile(path.join(projectPath, 'backend', 'requirements.txt'));
+      const pythonFramework = detectPythonFramework(requirementsText);
+      if (pythonFramework) {
+        backendFramework = backendFramework || pythonFramework;
+        backendLanguage = backendLanguage || 'python';
+      }
+    }
+  }
+
+  const normalizeValue = (value) => (typeof value === 'string' ? value.trim() : '');
+  const summary = [
+    `frontend: ${normalizeValue(frontendFramework) || 'unknown'} (${normalizeValue(frontendLanguage) || 'unknown'})`,
+    `backend: ${normalizeValue(backendFramework) || 'unknown'} (${normalizeValue(backendLanguage) || 'unknown'})`
+  ];
+
+  if (projectPath) {
+    summary.push(`path: ${projectPath}`);
+  }
+
+  return summary.join('\n');
+};
+
+const truncateSection = (value = '', limit = 2000) => {
+  if (!value) {
+    return '';
+  }
+  return value.length > limit ? `${value.slice(0, limit)}\n…truncated…` : value;
+};
+
+const SNAPSHOT_MAX_FILES = 200;
+const SNAPSHOT_IGNORED_DIRS = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  'coverage-tmp',
+  '.cache',
+  '.next',
+  '.turbo',
+  '.vite',
+  '.idea',
+  '.vscode'
+]);
+const SNAPSHOT_IGNORED_FILES = new Set([
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lockb',
+  '.DS_Store'
+]);
+
+const collectProjectFileList = async (rootPath, limit = SNAPSHOT_MAX_FILES) => {
+  const results = [];
+  const queue = [''];
+
+  while (queue.length && results.length < limit) {
+    const relative = queue.shift();
+    const absolute = path.join(rootPath, relative);
+    let entries = [];
+
+    try {
+      entries = await fs.readdir(absolute, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+      if (results.length >= limit) break;
+      const entryName = entry.name;
+      if (SNAPSHOT_IGNORED_FILES.has(entryName)) {
+        continue;
+      }
+      const relPath = path.posix.join(relative.replace(/\\/g, '/'), entryName).replace(/^\//, '');
+      if (entry.isDirectory()) {
+        if (SNAPSHOT_IGNORED_DIRS.has(entryName)) {
+          continue;
+        }
+        results.push(`${relPath}/`);
+        queue.push(path.join(relative, entryName));
+      } else {
+        results.push(relPath);
+      }
+    }
+  }
+
+  return results;
+};
+
+const buildPlannerProjectSnapshot = async (projectId) => {
+  const project = await getProject(projectId).catch(() => null);
+  if (!project?.path) {
+    return '';
+  }
+
+  const projectRoot = project.path;
+  const sections = [];
+
+  const pushFileSection = async (label, relativePath, limit = 2000) => {
+    const content = await readTextFile(path.join(projectRoot, relativePath));
+    if (content) {
+      sections.push(`${label} (${relativePath}):\n${truncateSection(content, limit)}`);
+    }
+  };
+
+  await pushFileSection('README', 'README.md', 1800);
+  await pushFileSection('Root package.json', 'package.json', 1800);
+  await pushFileSection('Frontend package.json', path.join('frontend', 'package.json'), 1800);
+  await pushFileSection('Backend package.json', path.join('backend', 'package.json'), 1800);
+
+  const commonFrontendEntries = [
+    path.join('frontend', 'src', 'App.jsx'),
+    path.join('frontend', 'src', 'App.tsx'),
+    path.join('frontend', 'src', 'App.js'),
+    path.join('frontend', 'src', 'main.jsx'),
+    path.join('frontend', 'src', 'main.tsx'),
+    path.join('frontend', 'src', 'main.js'),
+    path.join('frontend', 'src', 'index.jsx'),
+    path.join('frontend', 'src', 'index.tsx'),
+    path.join('frontend', 'src', 'index.js')
+  ];
+
+  for (const entry of commonFrontendEntries) {
+    await pushFileSection('Frontend entry', entry, 1400);
+  }
+
+  const fileList = await collectProjectFileList(projectRoot, SNAPSHOT_MAX_FILES);
+  if (fileList.length > 0) {
+    sections.push(`Project file list (truncated):\n${fileList.join('\n')}`);
+  }
+
+  return sections.join('\n\n');
+};
+
 const looksUnderspecified = (prompt) => {
   const normalized = prompt.trim().toLowerCase();
   if (!normalized) return true;
@@ -215,6 +443,39 @@ const extractClarifyingQuestions = ({ prompt, acceptanceCriteria = [] }) => {
   }
 
   return Array.from(new Set(questions)).filter(Boolean);
+};
+
+const requestClarificationQuestions = async (prompt, projectContext) => {
+  const systemMessage = {
+    role: 'system',
+    content:
+      'You are a senior product engineer. Given a user request and project context, ' +
+      'return ONLY JSON in the shape { "needsClarification": boolean, "questions": [string] }. ' +
+      'Ask short, specific questions only if required to implement the request correctly. ' +
+      'If the request is sufficiently specified, return {"needsClarification": false, "questions": []}. '
+  };
+
+  const userMessage = {
+    role: 'user',
+    content: [
+      'Project context:',
+      projectContext || 'Unavailable',
+      '',
+      `User request: "${prompt}"`
+    ].join('\n')
+  };
+
+  const raw = await llmClient.generateResponse([systemMessage, userMessage], {
+    max_tokens: 300,
+    temperature: 0.2,
+    __lucidcoderPhase: 'meta_goal_clarification',
+    __lucidcoderRequestType: 'clarification_questions'
+  });
+
+  const parsed = extractJsonObject(raw) || {};
+  const needsClarification = Boolean(parsed.needsClarification);
+  const questions = normalizeClarifyingQuestions(parsed.questions || []);
+  return needsClarification ? questions : [];
 };
 
 const normalizeClarifyingQuestions = (questions = []) => {
@@ -575,23 +836,21 @@ const isLowInformationPlan = (prompt, plans = []) => {
 };
 
 const buildHeuristicChildPlans = (prompt) => {
-  const trimmed = typeof prompt === 'string' ? prompt.trim() : '';
-  const subject = trimmed || 'the requested feature';
-  return [
-    {
-      title: 'Define structure',
-      prompt: `Identify the components, routes, and behaviors needed for ${subject}.`
-    },
-    {
-      title: 'Implement components',
-      prompt: `Build the UI components required for ${subject}, including any reusable pieces.`
-    },
-    {
-      title: 'Integrate in app',
-      prompt: `Wire the new components into the app and ensure the behavior matches the request for ${subject}.`
-    }
+  const subject = typeof prompt === 'string' && prompt.trim()
+    ? prompt.trim()
+    : 'the requested feature';
+  const prompts = [
+    `Identify the components, routes, and behaviors needed for ${subject}.`,
+    `Build the UI components required for ${subject}, including any reusable pieces.`,
+    `Wire the new components into the app and ensure the behavior matches the request for ${subject}.`
   ];
+
+  return prompts.map((planPrompt, index) => ({
+    prompt: planPrompt,
+    title: deriveGoalTitle(planPrompt, { fallback: `Child Goal ${index + 1}` })
+  }));
 };
+
 
 const buildGoalTreeFromList = (goals = [], parentId = null) => {
   const map = new Map();
@@ -759,12 +1018,15 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
     return createMetaGoalWithChildren({ projectId, prompt, childPrompts, parentGoalId: goalId });
   }
 
+  const projectContext = await resolveProjectStackContext(projectId);
+  const projectSnapshot = await buildPlannerProjectSnapshot(projectId);
+
   const buildPlannerMessages = (strict = false) => {
     const strictInstructions = strict
       ? 'Return 3-7 child goals unless the request is truly trivial. ' +
-        'Each child goal must be actionable and include specific details pulled from the request. ' +
+        'Each child goal must be actionable and include concrete implementation details. ' +
         'Do NOT restate the user prompt verbatim. ' +
-        'Prefer component-level steps and integration steps when working on UI features.'
+        'Prefer generic, implementation-oriented steps that would apply to any web app unless project context is essential. '
       : '';
 
     const systemMessage = {
@@ -776,6 +1038,26 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
         'Do NOT include steps about running tests, running coverage, or re-running tests/coverage (those happen automatically). ' +
         'You MAY include steps that add/update tests as part of the work. ' +
         'If key details are missing, include a "questions" array with short clarifying questions. ' +
+        'NEVER copy or paste the user request into any goal title or prompt. ' +
+        'Avoid phrasing like "Implement the primary feature described in: <request>" or "Outline the main components needed for: <request>". ' +
+        'If the request mentions placement (e.g., "top of the screen", "header", "sidebar"), include a goal to integrate into the app layout and apply minimal styling so the placement is honored. ' +
+        'For navigation requests, avoid placing links inline in page content; prefer a dedicated navigation component mounted in the layout/header. ' +
+        'Preferred structure: one top-level goal with 3-5 sub-goals (children) that describe concrete steps. ' +
+        'Example of good goal structure (do not copy, follow the style): ' +
+        'For a nav bar request, good goals would be: ' +
+        'Goal: Implement navigation bar. ' +
+        'Sub-goal: Create or reuse a navigation bar component. ' +
+        'Sub-goal: Create or reuse a dropdown menu component. ' +
+        'Sub-goal: Mount the dropdown component within the navigation bar. ' +
+        'Sub-goal: Mount the navigation bar within the main layout. ' +
+        (projectContext
+          ? `Project context:\n${projectContext}\n` +
+            'Use the project context above only to refine or map generic goals when helpful. '
+          : 'Project context is unavailable. ') +
+        (projectSnapshot
+          ? `Project snapshot:\n${projectSnapshot}\n` +
+            'Use the snapshot to map generic goals to concrete files/components only when it clearly improves accuracy. '
+          : '') +
         strictInstructions +
         ' Respond with JSON shaped like ' +
         '{ "parentTitle": "Short summary (<=10 words)", ' +
@@ -842,13 +1124,25 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
       plan = await requestPlannerResult(true);
     } catch (retryError) {
       console.warn('[WARN] Strict planning retry failed:', retryError?.message || retryError);
+      plan = {
+        parentTitle: plan.parentTitle || null,
+        clarifyingQuestions: plan.clarifyingQuestions,
+        normalizedChildPlans: buildHeuristicChildPlans(prompt)
+      };
     }
   }
 
-  let normalizedChildPlans = plan.normalizedChildPlans;
-  if (isLowInformationPlan(prompt, normalizedChildPlans)) {
-    normalizedChildPlans = normalizeGoalPlanTree(buildHeuristicChildPlans(prompt));
+  const shouldRequestClarifications = process.env.NODE_ENV !== 'test';
+  if (shouldRequestClarifications && (!plan.clarifyingQuestions || plan.clarifyingQuestions.length === 0)) {
+    try {
+      plan.clarifyingQuestions = await requestClarificationQuestions(prompt, projectContext);
+    } catch (error) {
+      console.warn('[WARN] Clarification question generation failed:', error?.message || error);
+    }
   }
+
+  const normalizedChildPlans = plan.normalizedChildPlans;
+
 
   const result = await createGoalTreeWithChildren({
     projectId,
@@ -1018,6 +1312,16 @@ export const ensureGoalBranch = async (goalId, { projectPath, defaultBranch = 'm
 
 export const __testExports__ = {
   normalizeJsonLikeText,
+  stripCodeFences,
+  extractFirstJsonObjectSubstring,
+  extractJsonObject,
+  extractAcceptanceCriteria,
+  normalizeDeps,
+  detectFrontendFramework,
+  detectBackendFramework,
+  detectPythonFramework,
+  readJsonFile,
+  readTextFile,
   deriveGoalTitle,
   normalizeChildPlans,
   normalizeClarifyingQuestions,
@@ -1025,10 +1329,14 @@ export const __testExports__ = {
   normalizeGoalPlanTree,
   buildGoalTreeFromList,
   buildGoalMetadataFromPrompt,
+  buildHeuristicChildPlans,
+  collectProjectFileList,
+  buildPlannerProjectSnapshot,
+  resolveProjectStackContext,
+  truncateSection,
   isProgrammaticVerificationStep,
   isCompoundPrompt,
-  isLowInformationPlan,
-  buildHeuristicChildPlans
+  isLowInformationPlan
 };
 
 export default {

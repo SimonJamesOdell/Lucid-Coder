@@ -13,6 +13,7 @@ let createGoalFromPrompt;
 let createChildGoal;
 let createMetaGoalWithChildren;
 let planGoalFromPrompt;
+let advanceGoalPhase;
 let __testExports__;
 let llmClient;
 
@@ -39,6 +40,7 @@ beforeAll(async () => {
     createGoalFromPrompt,
     createChildGoal,
     createMetaGoalWithChildren,
+    advanceGoalPhase,
     __testExports__
   } = agentModule);
   ({ llmClient } = await import('../llm-client.js'));
@@ -305,6 +307,68 @@ describe('planGoalFromPrompt', () => {
     ]);
   });
 
+  it('parses clarification questions when NODE_ENV is not test', async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    llmClient.generateResponse
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          childPrompts: ['Implement API', 'Document results']
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          needsClarification: true,
+          questions: ['Which API surface?', 'Any constraints?']
+        })
+      );
+
+    try {
+      const result = await planGoalFromPrompt({ projectId: 906, prompt: 'Add reporting' });
+
+      expect(llmClient.generateResponse).toHaveBeenCalledTimes(2);
+      expect(result.questions).toEqual(['Which API surface?', 'Any constraints?']);
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  });
+
+  it('falls back to heuristic plans when strict planning fails', async () => {
+    llmClient.generateResponse
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          parentTitle: 'Profile Plan',
+          questions: ['Need profile details?'],
+          childGoals: [{ title: 'Add profile page', prompt: 'Add profile page' }]
+        })
+      )
+      .mockRejectedValueOnce(new Error('strict planning failed'));
+
+    const result = await planGoalFromPrompt({ projectId: 907, prompt: 'Add profile page' });
+
+    expect(result.questions).toEqual(['Need profile details?']);
+    const prompts = result.children.map((child) => child.prompt);
+    expect(prompts[0]).toMatch(/^Identify the components/);
+    expect(prompts).toHaveLength(3);
+  });
+
+  it('falls back to heuristic plans for compound prompts when strict planning fails', async () => {
+    llmClient.generateResponse
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          parentTitle: 'Compound Plan',
+          childGoals: [{ title: 'Build dashboard', prompt: 'Build dashboard' }]
+        })
+      )
+      .mockRejectedValueOnce(new Error('strict planning failed'));
+
+    const result = await planGoalFromPrompt({ projectId: 908, prompt: 'Build dashboard and settings' });
+
+    const prompts = result.children.map((child) => child.prompt);
+    expect(prompts[0]).toMatch(/^Identify the components/);
+    expect(prompts).toHaveLength(3);
+  });
   it('throws when the LLM response cannot be parsed as JSON', async () => {
     llmClient.generateResponse.mockResolvedValueOnce('totally invalid json');
 
@@ -536,5 +600,17 @@ describe('planGoalFromPrompt', () => {
     ]);
 
     warnSpy.mockRestore();
+  });
+});
+
+describe('advanceGoalPhase coverage', () => {
+  it('updates the goal phase via stored status helper', async () => {
+    const projectId = 920;
+    const { goal } = await createGoalFromPrompt({ projectId, prompt: 'Create phase coverage' });
+
+    const updated = await advanceGoalPhase(goal.id, 'testing', { note: 'phase update' });
+
+    expect(updated.status).toBe('testing');
+    expect(updated.metadata).toEqual(expect.objectContaining({ note: 'phase update' }));
   });
 });

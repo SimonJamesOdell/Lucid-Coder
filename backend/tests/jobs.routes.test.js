@@ -446,6 +446,27 @@ describe('Jobs Routes', () => {
     expect(describeBranchCssOnlyStatus).toHaveBeenCalledTimes(2);
   });
 
+  it('continues starting test jobs when css-only detection fails', async () => {
+    configureFsState({ projectRoot: true, backendDir: true, backendPackage: true });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    describeBranchCssOnlyStatus.mockImplementationOnce(() => {
+      throw new Error('css check failed');
+    });
+
+    const response = await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'backend:test', payload: { branchName: 'feature/bugfix' } });
+
+    expect(response.status).toBe(202);
+    expect(startJob).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[JobsRoute] Failed to evaluate css-only status before starting tests',
+      expect.any(Error)
+    );
+
+    warnSpy.mockRestore();
+  });
+
   it('falls back to 500 when starting a job fails unexpectedly', async () => {
     startJob.mockImplementationOnce(() => {
       throw new Error('runner offline');
