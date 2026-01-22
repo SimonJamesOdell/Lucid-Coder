@@ -32,6 +32,34 @@ vi.mock('../components/AutopilotTimeline.jsx', () => ({
   )
 }));
 
+const setViteMode = (mode) => {
+  const env = import.meta?.env;
+  if (!env) {
+    return () => {};
+  }
+  const originalMode = env.MODE;
+  try {
+    Object.defineProperty(env, 'MODE', { value: mode, configurable: true });
+  } catch {
+    try {
+      env.MODE = mode;
+    } catch {
+      // Ignore env override failures.
+    }
+  }
+  return () => {
+    try {
+      Object.defineProperty(env, 'MODE', { value: originalMode, configurable: true });
+    } catch {
+      try {
+        env.MODE = originalMode;
+      } catch {
+        // Ignore env restore failures.
+      }
+    }
+  };
+};
+
 describe('ChatPanel', () => {
   const mockSetPreviewPanelTab = vi.fn();
   const mockStageAiChange = vi.fn();
@@ -989,6 +1017,490 @@ describe('ChatPanel', () => {
       expect(screen.getByText('Test answer')).toBeInTheDocument();
     });
 
+    it('shows scroll-to-bottom button when user scrolls up', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const messagesContainer = screen.getByTestId('chat-messages');
+      Object.defineProperty(messagesContainer, 'scrollHeight', { value: 1000, configurable: true });
+      Object.defineProperty(messagesContainer, 'clientHeight', { value: 100, configurable: true });
+      Object.defineProperty(messagesContainer, 'scrollTop', { value: 0, writable: true, configurable: true });
+
+      fireEvent.scroll(messagesContainer);
+
+      const scrollButton = await screen.findByRole('button', { name: 'Scroll to latest message' });
+      expect(scrollButton).toBeInTheDocument();
+
+      await userEvent.click(scrollButton);
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).not.toBeInTheDocument();
+      });
+    });
+
+    it('keeps scroll-to-bottom button visible when new messages arrive off-scroll', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'OK', steps: [] });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const messagesContainer = screen.getByTestId('chat-messages');
+      Object.defineProperty(messagesContainer, 'scrollHeight', { value: 1000, configurable: true });
+      Object.defineProperty(messagesContainer, 'clientHeight', { value: 100, configurable: true });
+      Object.defineProperty(messagesContainer, 'scrollTop', { value: 0, writable: true, configurable: true });
+
+      fireEvent.scroll(messagesContainer);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'New message');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Scroll to latest message' })).toBeInTheDocument();
+      });
+    });
+
+    it('handles missing import.meta.env when determining test mode', () => {
+      const originalEnv = import.meta.env;
+
+      try {
+        Object.defineProperty(import.meta, 'env', { value: undefined, configurable: true });
+        render(<ChatPanel width={320} side="left" />);
+      } finally {
+        try {
+          Object.defineProperty(import.meta, 'env', { value: originalEnv, configurable: true });
+        } catch {
+          // Ignore restore failures.
+        }
+      }
+    });
+
+    it('streams agent responses when not in test mode', async () => {
+      const restoreMode = setViteMode('production');
+      const originalFetch = window.fetch;
+      window.fetch = vi.fn();
+
+      goalsApi.agentRequestStream.mockImplementation(async ({ onChunk, onComplete }) => {
+        onChunk?.('Streaming hello');
+        onComplete?.({ kind: 'question', answer: 'Streamed answer' });
+      });
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Stream it');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalsApi.agentRequestStream).toHaveBeenCalled();
+        });
+
+        expect(goalsApi.agentRequest).not.toHaveBeenCalled();
+      } finally {
+        restoreMode();
+        window.fetch = originalFetch;
+      }
+    });
+
+    it('ignores empty streaming chunks', async () => {
+      const restoreMode = setViteMode('production');
+      const originalFetch = window.fetch;
+      window.fetch = vi.fn();
+
+      goalsApi.agentRequestStream.mockImplementation(async ({ onChunk, onComplete }) => {
+        onChunk?.('');
+        onComplete?.({ kind: 'question', answer: 'OK' });
+      });
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Stream empty');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalsApi.agentRequestStream).toHaveBeenCalled();
+        });
+      } finally {
+        restoreMode();
+        window.fetch = originalFetch;
+      }
+    });
+
+    it('falls back to non-streaming when the stream errors', async () => {
+      const restoreMode = setViteMode('production');
+      const originalFetch = window.fetch;
+      window.fetch = vi.fn();
+
+      goalsApi.agentRequestStream.mockImplementation(async ({ onError }) => {
+        onError?.('Stream failed');
+      });
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Fallback answer', steps: [] });
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Fallback please');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalsApi.agentRequestStream).toHaveBeenCalled();
+          expect(goalsApi.agentRequest).toHaveBeenCalled();
+        });
+      } finally {
+        restoreMode();
+        window.fetch = originalFetch;
+      }
+    });
+
+    it('falls back to non-streaming when the stream error message is missing', async () => {
+      const restoreMode = setViteMode('production');
+      const originalFetch = window.fetch;
+      window.fetch = vi.fn();
+
+      goalsApi.agentRequestStream.mockImplementation(async ({ onError }) => {
+        onError?.();
+      });
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Fallback answer', steps: [] });
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Fallback please');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(goalsApi.agentRequestStream).toHaveBeenCalled();
+          expect(goalsApi.agentRequest).toHaveBeenCalled();
+        });
+      } finally {
+        restoreMode();
+        window.fetch = originalFetch;
+      }
+    });
+
+    it('ignores null agent results without crashing', async () => {
+      goalsApi.agentRequest.mockResolvedValue(null);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Return null');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+    });
+
+    it('animates assistant responses outside test mode', async () => {
+      const restoreMode = setViteMode('production');
+      const originalFetch = window.fetch;
+      window.fetch = undefined;
+      vi.useFakeTimers();
+
+      goalsApi.agentRequest.mockResolvedValue({
+        kind: 'question',
+        answer: 'OK',
+        steps: []
+      });
+
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        const messagesContainer = screen.getByTestId('chat-messages');
+        Object.defineProperty(messagesContainer, 'scrollHeight', { value: 1000, configurable: true });
+        Object.defineProperty(messagesContainer, 'clientHeight', { value: 100, configurable: true });
+        Object.defineProperty(messagesContainer, 'scrollTop', { value: 0, writable: true, configurable: true });
+        fireEvent.scroll(messagesContainer);
+
+        await user.type(screen.getByTestId('chat-input'), 'Animated');
+        await user.click(screen.getByTestId('chat-send-button'));
+
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+
+        await act(async () => {
+          vi.advanceTimersByTime(32);
+        });
+      } finally {
+        vi.useRealTimers();
+        restoreMode();
+        window.fetch = originalFetch;
+      }
+    });
+
+    it('skips auto-scroll effect when the message container is missing', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'OK', steps: [] });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      expect(instance?.messagesContainerRef).toBeDefined();
+      instance.messagesContainerRef.current = null;
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Trigger effect');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+    });
+
+    it('builds a prompt without conversation context when messagesRef is empty', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'OK', steps: [] });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      expect(instance?.messagesRef).toBeDefined();
+      instance.messagesRef.current = null;
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Hello');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+
+      const lastPrompt = goalsApi.agentRequest.mock.calls[0][0].prompt;
+      expect(lastPrompt).toBe('Current request: Hello');
+    });
+
+    it('handles missing containers in scroll helpers', () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      expect(instance?.messagesContainerRef).toBeDefined();
+
+      instance.messagesContainerRef.current = null;
+
+      expect(instance.isMessagesScrolledToBottom()).toBe(true);
+      instance.scrollMessagesToBottom();
+    });
+
+    it('clears chat history when the current project is unset', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Response', steps: [] });
+
+      let state = {
+        currentProject: { id: 123, name: 'Test Project' },
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        setPreviewPanelTab: mockSetPreviewPanelTab,
+        startAutomationJob: mockStartAutomationJob,
+        markTestRunIntent: mockMarkTestRunIntent,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        workingBranches: {
+          123: {
+            name: 'feature/test-branch',
+            stagedFiles: [{ path: 'src/App.jsx' }]
+          }
+        }
+      };
+
+      useAppState.mockImplementation(() => state);
+
+      const { rerender } = render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First prompt');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(screen.getByText('First prompt')).toBeInTheDocument();
+      });
+
+      state = { ...state, currentProject: null, workingBranches: {} };
+      rerender(<ChatPanel width={320} side="left" />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('First prompt')).not.toBeInTheDocument();
+      });
+    });
+
+    it('skips streaming when agent answer is not text', async () => {
+      goalsApi.agentRequest.mockResolvedValue({
+        kind: 'question',
+        answer: { text: 'Not a string' },
+        steps: []
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Non-text answer');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+
+      expect(screen.getByText('Non-text answer')).toBeInTheDocument();
+    });
+
+    it('bails out of chat persistence without a project id', () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const persistChat = ChatPanel.__testHooks?.chatStorage?.persistChat;
+      expect(typeof persistChat).toBe('function');
+
+      persistChat(null, []);
+      persistChat(undefined, []);
+    });
+
+    it('ignores storage errors while persisting chat history', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'OK', steps: [] });
+
+      const originalSetItem = window.localStorage.setItem;
+      const setItemSpy = vi.fn(() => {
+        throw new Error('storage failed');
+      });
+      window.localStorage.setItem = setItemSpy;
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        await userEvent.type(screen.getByTestId('chat-input'), 'Persist me');
+        await userEvent.click(screen.getByTestId('chat-send-button'));
+
+        await waitFor(() => {
+          expect(setItemSpy).toHaveBeenCalled();
+        });
+      } finally {
+        window.localStorage.setItem = originalSetItem;
+      }
+    });
+
+    it('persists chat history when messages are non-array or missing timestamps', () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const persistChat = ChatPanel.__testHooks?.chatStorage?.persistChat;
+      expect(typeof persistChat).toBe('function');
+
+      const originalSetItem = window.localStorage.setItem;
+      const setItemSpy = vi.fn();
+      window.localStorage.setItem = setItemSpy;
+
+      try {
+        persistChat(123, null);
+        persistChat(123, [{ id: '1', text: 'Hello', sender: 'user' }]);
+
+        expect(setItemSpy).toHaveBeenCalled();
+        const lastPayload = JSON.parse(setItemSpy.mock.calls[setItemSpy.mock.calls.length - 1][1]);
+        expect(typeof lastPayload[0].timestamp).toBe('string');
+      } finally {
+        window.localStorage.setItem = originalSetItem;
+      }
+    });
+
+    it('hydrates stored chat entries with timestamps', () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const readStoredChat = ChatPanel.__testHooks?.chatStorage?.readStoredChat;
+      expect(typeof readStoredChat).toBe('function');
+
+      const key = 'lucidcoder.chat.123';
+      const original = window.localStorage.getItem(key);
+
+      try {
+        window.localStorage.setItem(key, JSON.stringify([
+          { id: '1', text: 'Hello', sender: 'user', timestamp: '2024-01-01T00:00:00.000Z' }
+        ]));
+
+        const result = readStoredChat(123);
+        expect(result).toHaveLength(1);
+        expect(result[0].timestamp).toBeInstanceOf(Date);
+      } finally {
+        if (original === null) {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, original);
+        }
+      }
+    });
+
+    it('hydrates stored chat entries without timestamps', () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const readStoredChat = ChatPanel.__testHooks?.chatStorage?.readStoredChat;
+      expect(typeof readStoredChat).toBe('function');
+
+      const key = 'lucidcoder.chat.123';
+      const original = window.localStorage.getItem(key);
+
+      try {
+        window.localStorage.setItem(key, JSON.stringify([
+          { id: '1', text: 'Hello', sender: 'user' },
+          null
+        ]));
+
+        const result = readStoredChat(123);
+        expect(result).toHaveLength(2);
+        expect(result[0].timestamp).toBeInstanceOf(Date);
+        expect(result[1].timestamp).toBeInstanceOf(Date);
+      } finally {
+        if (original === null) {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, original);
+        }
+      }
+    });
+
+    it('returns an empty array when stored chat data is invalid', () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const readStoredChat = ChatPanel.__testHooks?.chatStorage?.readStoredChat;
+      expect(typeof readStoredChat).toBe('function');
+
+      const key = 'lucidcoder.chat.123';
+      const original = window.localStorage.getItem(key);
+
+      try {
+        window.localStorage.setItem(key, '{not-json');
+        const result = readStoredChat(123);
+        expect(result).toEqual([]);
+      } finally {
+        if (original === null) {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, original);
+        }
+      }
+    });
+
+    it('returns an empty array when stored chat data is missing a project id', () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const readStoredChat = ChatPanel.__testHooks?.chatStorage?.readStoredChat;
+      expect(typeof readStoredChat).toBe('function');
+
+      expect(readStoredChat(null)).toEqual([]);
+      expect(readStoredChat(undefined)).toEqual([]);
+    });
+
+    it('returns an empty array when stored chat is not a list', () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const readStoredChat = ChatPanel.__testHooks?.chatStorage?.readStoredChat;
+      expect(typeof readStoredChat).toBe('function');
+
+      const key = 'lucidcoder.chat.123';
+      const original = window.localStorage.getItem(key);
+
+      try {
+        window.localStorage.setItem(key, JSON.stringify({ id: 'not-a-list' }));
+        const result = readStoredChat(123);
+        expect(result).toEqual([]);
+      } finally {
+        if (original === null) {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, original);
+        }
+      }
+    });
+
     it('shows an error message when automated test jobs fail to start', async () => {
       const mockStartAutomationJob = vi
         .fn()
@@ -1115,7 +1627,7 @@ describe('ChatPanel', () => {
       });
 
       await waitFor(() => {
-        expect(screen.queryByTestId('chat-status')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('chat-typing')).not.toBeInTheDocument();
       });
 
       await userEvent.type(screen.getByTestId('chat-input'), 'Answer');
@@ -1128,7 +1640,7 @@ describe('ChatPanel', () => {
       });
 
       const clarifiedPrompt = goalsApi.agentRequest.mock.calls[1][0].prompt;
-      expect(clarifiedPrompt).toContain('Original request: First request');
+      expect(clarifiedPrompt).toContain('Original request: Current request: First request');
       expect(clarifiedPrompt).toContain('Clarification questions:');
       expect(clarifiedPrompt).toContain('- Need details?');
       expect(clarifiedPrompt).toContain('User answer: Answer');
@@ -1140,7 +1652,7 @@ describe('ChatPanel', () => {
         expect(goalsApi.agentRequest).toHaveBeenCalledTimes(3);
       });
 
-      expect(goalsApi.agentRequest.mock.calls[2][0].prompt).toBe('Third');
+      expect(goalsApi.agentRequest.mock.calls[2][0].prompt).toContain('Current request: Third');
     });
 
     it('logs a warning when stale goal cleanup fails after clarification', async () => {
@@ -1494,6 +2006,141 @@ describe('ChatPanel', () => {
       expect(mockMarkTestRunIntent).toHaveBeenCalledWith('automation');
     });
 
+    it('renders clarification option buttons and submits on click', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Pick one:\n- Option A\n- Option B']
+        });
+      });
+
+      const optionButton = await screen.findByRole('button', { name: 'Option A' });
+      await userEvent.click(optionButton);
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
+      });
+
+      const lastPrompt = goalsApi.agentRequest.mock.calls[goalsApi.agentRequest.mock.calls.length - 1][0].prompt;
+      expect(lastPrompt).toContain('Option A');
+    });
+
+    it('parses clarification options from an options line', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Options: Red / Blue']
+        });
+      });
+
+      const optionButton = await screen.findByRole('button', { name: 'Red' });
+      await userEvent.click(optionButton);
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('parses clarification options from inline parentheses', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Choose a color (Red / Blue)']
+        });
+      });
+
+      const optionButton = await screen.findByRole('button', { name: 'Red' });
+      await userEvent.click(optionButton);
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('renders clarification text without options for non-string questions', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: [42]
+        });
+      });
+
+      const clarification = await screen.findByTestId('chat-clarification');
+      expect(within(clarification).getByText('42')).toBeInTheDocument();
+      expect(within(clarification).queryAllByRole('button')).toHaveLength(0);
+    });
+
+    it('uses reduced motion fallback when matchMedia is unavailable', () => {
+      const originalMatchMedia = window.matchMedia;
+      window.matchMedia = undefined;
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+      } finally {
+        window.matchMedia = originalMatchMedia;
+      }
+    });
+
     it('submits prompts via the lucidcoder:run-prompt window event', async () => {
       goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Event answer', steps: [] });
 
@@ -1508,8 +2155,8 @@ describe('ChatPanel', () => {
       );
 
       await waitFor(() => {
-        expect(goalsApi.agentRequest).toHaveBeenCalledWith({ projectId: 123, prompt: 'Hello from event' });
-        expect(goalsApi.agentRequest).toHaveBeenCalledWith({ projectId: 123, prompt: 'Hello from user event' });
+        expect(goalsApi.agentRequest).toHaveBeenCalledWith({ projectId: 123, prompt: 'Current request: Hello from event' });
+        expect(goalsApi.agentRequest).toHaveBeenCalledWith({ projectId: 123, prompt: 'Current request: Hello from user event' });
       });
 
       expect(screen.getByText('Hello from event')).toBeInTheDocument();
@@ -1714,8 +2361,8 @@ describe('ChatPanel', () => {
       await userEvent.click(sendButton);
 
       await waitFor(() => {
-        expect(screen.getByTestId('chat-status')).toBeInTheDocument();
-        expect(screen.getByTestId('chat-status')).toHaveTextContent('Assistant is thinking');
+        expect(screen.getByTestId('chat-typing')).toBeInTheDocument();
+        expect(screen.getByText('Assistant is thinking')).toBeInTheDocument();
       });
     });
 

@@ -15,7 +15,8 @@ import {
   agentAutopilotStatus,
   agentAutopilotMessage,
   agentAutopilotCancel,
-  agentAutopilotResume
+  agentAutopilotResume,
+  agentRequestStream
 } from '../utils/goalsApi.js';
 
 vi.mock('axios');
@@ -229,6 +230,48 @@ describe('goalsApi', () => {
         window.sessionStorage.setItem(key, originalValue);
       }
     }
+  });
+
+  it('agentRequestStream emits chunk/done/error events and parses event names', async () => {
+    const originalFetch = global.fetch;
+    const encoder = new TextEncoder();
+    const chunks = [
+      'event: chunk\n',
+      'data: {"text":"Hello"}\n\n',
+      'event: done\n',
+      'data: {"result":{"kind":"question"}}\n\n',
+      'event: error\n',
+      'data: {}\n\n'
+    ];
+
+    const stream = new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+        controller.close();
+      }
+    });
+
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: stream });
+
+    const receivedChunks = [];
+    const completed = [];
+    const errors = [];
+
+    try {
+      await agentRequestStream({
+        projectId: 'proj-1',
+        prompt: 'Hello',
+        onChunk: (text) => receivedChunks.push(text),
+        onComplete: (result) => completed.push(result),
+        onError: (message) => errors.push(message)
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+
+    expect(receivedChunks).toEqual(['Hello']);
+    expect(completed).toEqual([{ kind: 'question' }]);
+    expect(errors).toEqual(['Agent request failed']);
   });
 
   it('agentAutopilot omits uiSessionId when stored value is only whitespace', async () => {

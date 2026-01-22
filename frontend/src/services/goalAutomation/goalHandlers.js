@@ -26,7 +26,7 @@ export async function processGoals(
 
   setPreviewPanelTab?.('goals', { source: 'automation' });
 
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await new Promise((resolve) => setTimeout(resolve, 40));
 
   const processTree = async (goals, count = 0) => {
     let processed = count;
@@ -126,7 +126,7 @@ export async function handlePlanOnlyFeature(
       setMessages,
       options
     );
-  }, 400);
+  }, 40);
 }
 
 export async function handleRegularFeature(
@@ -154,7 +154,7 @@ export async function handleRegularFeature(
     createMessage('assistant', 'Goals created.', { variant: 'status' })
   ]);
 
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await new Promise((resolve) => setTimeout(resolve, 40));
 
   await ensureBranch(projectId, prompt, setPreviewPanelTab, createMessage, setMessages, options);
 

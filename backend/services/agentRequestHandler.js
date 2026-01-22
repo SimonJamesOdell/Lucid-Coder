@@ -122,7 +122,8 @@ export const classifyAgentRequest = async ({ projectId, prompt }) => {
       'Return ONLY a JSON object, no prose. The JSON MUST be of the form ' +
       '{ "kind": "question" | "small-change" | "feature", "answer"?: string }. ' +
       'Use kind:"question" for conceptual questions or explanations, ' +
-      'kind:"small-change" for narrow, localized edits, and kind:"feature" for broader, multi-step work.'
+      'kind:"small-change" for narrow, localized edits, and kind:"feature" for broader, multi-step work. ' +
+      'Reminder: this repo commonly uses frontend/ and backend/ subfolders for source code.'
   };
 
   const userMessage = {
@@ -183,6 +184,11 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
     throw new Error('prompt is required');
   }
 
+  const isClarificationWrapper = /\bOriginal request:\b/i.test(prompt)
+    && /\bUser answer:\b/i.test(prompt);
+  const isDirectivePrompt = /^(make|add|update|change|move|fix|set|adjust|ensure|implement|mount|render|place|stick)\b/i
+    .test(prompt.trim());
+
   const safeAnswerProjectQuestion = async (meta = undefined) => {
     try {
       const { answer, steps } = await answerProjectQuestion({ projectId, prompt });
@@ -213,7 +219,11 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
 
   let classification;
   try {
-    classification = await classifyAgentRequest({ projectId, prompt });
+    if (isClarificationWrapper || isDirectivePrompt) {
+      classification = { kind: 'feature' };
+    } else {
+      classification = await classifyAgentRequest({ projectId, prompt });
+    }
   } catch (error) {
     console.warn('[Agent] Classification failed, falling back to question agent:', error?.message || error);
     const classificationError = error?.message || 'Unknown error';

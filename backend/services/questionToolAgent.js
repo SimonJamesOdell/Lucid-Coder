@@ -9,7 +9,13 @@ const FALLBACK_FILES = [
   'README.md',
   'package.json',
   'frontend/package.json',
-  'backend/package.json'
+  'backend/package.json',
+  'frontend/src/App.jsx',
+  'frontend/src/App.tsx',
+  'frontend/src/main.jsx',
+  'frontend/src/main.tsx',
+  'frontend/src/index.jsx',
+  'frontend/src/index.tsx'
 ];
 
 /* c8 ignore start */
@@ -20,6 +26,7 @@ IMPORTANT:
 - You must respond with a SINGLE JSON object and nothing else (no prose, no Markdown, no code fences).
 - Never invoke API-level tool/function calls. All tool usage must be described via the JSON object you output.
 - If you need to use a tool, emit { "action": "read_file", ... } as text; do NOT rely on the API for tools.
+- This repo often uses a workspace layout. Frontend files usually live under frontend/ and backend files under backend/. Check those folders first for UI questions.
  - Output MUST be plain text JSON in the assistant message content. Do NOT use tool_calls/function_call.
 
 TOOLS AVAILABLE:
@@ -40,6 +47,7 @@ Rules:
 - Plan carefully. If you need information, call read_file with a relative path like README.md or frontend/package.json.
 - If the user asks about "goals" (e.g. list/show/continue goals), prefer list_goals() over trying to read GOALS.md files.
 - When you have enough evidence, respond with {"action":"answer","answer":"..."}.
+- The "answer" field MAY include Markdown for formatting.
 - If you truly cannot answer, respond with {"action":"unable","explanation":"why"}.
 - Never return prose outside the JSON object.`;
 /* c8 ignore stop */
@@ -153,7 +161,7 @@ const buildMessages = (prompt, steps) => [
   { role: 'system', content: SYSTEM_PROMPT },
   {
     role: 'user',
-    content: `QUESTION:\n${prompt}\n\nPREVIOUS STEPS:\n${formatStepsForPrompt(steps)}\n\nRespond with the next JSON action. If you already have enough information, use the answer action.`
+    content: `QUESTION:\n${prompt}\n\nPREVIOUS STEPS:\n${formatStepsForPrompt(steps)}\n\nReminder: UI code is often under frontend/ and backend code under backend/. Respond with the next JSON action. If you already have enough information, use the answer action.`
   }
 ];
 
@@ -242,7 +250,7 @@ const tryRepairPlannerJson = async ({ messages, rawDecision }) => {
 
 const createAgentError = (message) => Object.assign(new Error(message), { statusCode: 502 });
 
-const FALLBACK_SYSTEM_PROMPT = `You are a senior developer assistant. You will be given project files and a question about the project. Answer the question as accurately as possible using ONLY the supplied files. If the information is not present, say so explicitly.`;
+const FALLBACK_SYSTEM_PROMPT = `You are a senior developer assistant. You will be given project files and a question about the project. Answer the question as accurately as possible using ONLY the supplied files. If the information is not present, say so explicitly. The repo may use frontend/ and backend/ subfolders for source code. You may use Markdown for formatting.`;
 
 const collectFallbackSections = async (projectId, prompt) => {
   const sections = [];
