@@ -230,27 +230,31 @@ describe('GoalsPanel', () => {
     expect(goalButton.querySelector('.goals-modal-progressbar')).toBeNull();
   });
 
-  it('loads details when selecting a goal and renders tasks (falls back to type when title missing)', async () => {
+  it('clears all root goals when confirmed', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
-    goalsApi.fetchGoals.mockResolvedValue([
-      { id: 22, prompt: 'Goal with tasks', status: 'planning', parentGoalId: null }
-    ]);
-    goalsApi.fetchGoalWithTasks.mockResolvedValue({
-      tasks: [{ id: 1, title: '', type: 'edit', status: 'done' }]
-    });
-
+    goalsApi.fetchGoals
+      .mockResolvedValueOnce([
+        { id: 10, prompt: 'Parent goal', status: 'planning', parentGoalId: null },
+        { id: 11, prompt: 'Child goal', status: 'planning', parentGoalId: 10 },
+        { id: 12, prompt: 'Orphan goal', status: 'planning', parentGoalId: null }
+      ])
+      .mockResolvedValueOnce([]);
+    goalsApi.deleteGoal.mockResolvedValue({ success: true, deletedGoalIds: [10, 11, 12] });
     const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
 
-    await user.click(await screen.findByTestId('goals-modal-goal-22'));
+    await user.click(await screen.findByTestId('goals-clear-goals'));
+    await user.click(await screen.findByTestId('modal-confirm'));
 
     await waitFor(() => {
-      expect(goalsApi.fetchGoalWithTasks).toHaveBeenCalledWith(22);
+      expect(goalsApi.deleteGoal).toHaveBeenCalledWith(10);
+      expect(goalsApi.deleteGoal).toHaveBeenCalledWith(12);
     });
 
-    const taskList = await screen.findByTestId('goals-modal-task-list');
-    expect(within(taskList).getByText('edit', { selector: '.goals-modal-task-title' })).toBeInTheDocument();
-    expect(within(taskList).getByText('done')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalledTimes(2);
+    });
+
   });
 
   it('renders child goals in creation order (oldest first)', async () => {
@@ -368,118 +372,37 @@ describe('GoalsPanel', () => {
     )).toBeGreaterThan(0);
   });
 
-  it('shows empty details state when tasks are missing or empty', async () => {
-    useAppState.mockReturnValue({ currentProject: project, jobState: null });
-    goalsApi.fetchGoals.mockResolvedValue([
-      { id: 23, prompt: 'Goal without tasks', status: '', parentGoalId: null }
-    ]);
-    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
-
-    const user = userEvent.setup();
-    render(<GoalsPanel mode="tab" />);
-
-    await user.click(await screen.findByTestId('goals-modal-goal-23'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/No tasks recorded/i)).toBeInTheDocument();
-    });
-
-    // status fallback: blank status -> unknown
-    expect(screen.getByText(/Status: Unknown/i)).toBeInTheDocument();
-  });
-
-  it('surfaces details load failures as an alert', async () => {
-    useAppState.mockReturnValue({ currentProject: project, jobState: null });
-    goalsApi.fetchGoals.mockResolvedValue([
-      { id: 24, prompt: 'Flaky details', status: 'planning', parentGoalId: null }
-    ]);
-    goalsApi.fetchGoalWithTasks.mockRejectedValue(new Error('boom'));
-
-    const user = userEvent.setup();
-    render(<GoalsPanel mode="tab" />);
-
-    await user.click(await screen.findByTestId('goals-modal-goal-24'));
-
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Failed to load goal details');
-    });
-  });
-
-  it('does not delete a selected goal when confirmation is declined', async () => {
+  it('does not clear goals when confirmation is declined', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
     goalsApi.fetchGoals.mockResolvedValue([
       { id: 40, prompt: 'Delete me', status: 'planning', parentGoalId: null }
     ]);
-    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
-
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
 
-    await user.click(await screen.findByTestId('goals-modal-goal-40'));
+    await user.click(await screen.findByTestId('goals-clear-goals'));
+    await user.click(await screen.findByTestId('modal-cancel'));
 
-    await user.click(screen.getByTestId('goals-modal-remove-goal'));
-
-    expect(confirmSpy).toHaveBeenCalled();
     expect(goalsApi.deleteGoal).not.toHaveBeenCalled();
-
-    confirmSpy.mockRestore();
   });
 
-  it('deletes a selected goal when confirmed and refreshes goals list', async () => {
-    useAppState.mockReturnValue({ currentProject: project, jobState: null });
-
-    goalsApi.fetchGoals
-      .mockResolvedValueOnce([{ id: 41, prompt: 'Remove me', status: 'planning', parentGoalId: null }])
-      .mockResolvedValueOnce([]);
-
-    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
-    goalsApi.deleteGoal.mockResolvedValue();
-
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-    const user = userEvent.setup();
-    render(<GoalsPanel mode="tab" />);
-
-    await user.click(await screen.findByTestId('goals-modal-goal-41'));
-
-    await user.click(screen.getByTestId('goals-modal-remove-goal'));
-
-    await waitFor(() => {
-      expect(goalsApi.deleteGoal).toHaveBeenCalledWith(41);
-    });
-
-    await waitFor(() => {
-      expect(goalsApi.fetchGoals).toHaveBeenCalledTimes(2);
-      expect(screen.queryByText('Remove me')).not.toBeInTheDocument();
-      expect(screen.getByText(/Select a goal/i)).toBeInTheDocument();
-    });
-
-    confirmSpy.mockRestore();
-  });
-
-  it('shows an error when deleteGoal fails', async () => {
+  it('shows an error when clear goals fails', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
     goalsApi.fetchGoals.mockResolvedValue([
       { id: 42, prompt: 'Cannot remove', status: 'planning', parentGoalId: null }
     ]);
-    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
     goalsApi.deleteGoal.mockRejectedValue(new Error('nope'));
-
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
 
-    await user.click(await screen.findByTestId('goals-modal-goal-42'));
-    await user.click(screen.getByTestId('goals-modal-remove-goal'));
+    await user.click(await screen.findByTestId('goals-clear-goals'));
+    await user.click(await screen.findByTestId('modal-confirm'));
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Failed to remove goal');
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to clear goals');
     });
-
-    confirmSpy.mockRestore();
   });
 
   it('polls for goals while a job is active and ignores silent failures', async () => {
@@ -554,7 +477,7 @@ describe('GoalsPanel', () => {
     // Keep the initial goals request pending so isLoading stays true.
     goalsApi.fetchGoals.mockImplementation(() => new Promise(() => {}));
 
-    render(<GoalsPanel mode="tab" />);
+    render(<GoalsPanel mode="modal" isOpen={true} onRequestClose={vi.fn()} />);
 
     const refresh = screen.getByTestId('goals-modal-refresh');
     await waitFor(() => {
@@ -671,27 +594,6 @@ describe('GoalsPanel', () => {
     expect(onRequestClose).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the Resume automation button and calls onResumeAutomation when clicked', async () => {
-    useAppState.mockReturnValue({ currentProject: project, jobState: null });
-    goalsApi.fetchGoals.mockResolvedValue([]);
-
-    const onResumeAutomation = vi.fn();
-    const user = userEvent.setup();
-
-    render(
-      <GoalsPanel
-        mode="tab"
-        automationPaused={true}
-        onResumeAutomation={onResumeAutomation}
-      />
-    );
-
-    const button = await screen.findByTestId('goals-tab-resume-automation');
-    await user.click(button);
-
-    expect(onResumeAutomation).toHaveBeenCalledTimes(1);
-  });
-
   it('modal defaults isOpen=true when omitted', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
     goalsApi.fetchGoals.mockResolvedValue([]);
@@ -700,28 +602,20 @@ describe('GoalsPanel', () => {
     expect(await screen.findByTestId('goals-modal')).toBeInTheDocument();
   });
 
-  it('removes a goal without prompting when confirm is unavailable', async () => {
+  it('opens the clear goals confirmation dialog', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
 
     goalsApi.fetchGoals
       .mockResolvedValueOnce([{ id: 77, prompt: 'SSR remove', status: 'planning', parentGoalId: null }])
       .mockResolvedValueOnce([]);
-    goalsApi.fetchGoalWithTasks.mockResolvedValue({ tasks: [] });
     goalsApi.deleteGoal.mockResolvedValue();
 
     const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
 
-    await user.click(await screen.findByTestId('goals-modal-goal-77'));
+    await user.click(await screen.findByTestId('goals-clear-goals'));
 
-    const originalConfirm = window.confirm;
-    window.confirm = undefined;
-    await user.click(screen.getByTestId('goals-modal-remove-goal'));
-    window.confirm = originalConfirm;
-
-    await waitFor(() => {
-      expect(goalsApi.deleteGoal).toHaveBeenCalledWith(77);
-    });
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
   });
 
   it('modal: locks body scroll, closes on Escape/backdrop, and unlocks on close', async () => {
@@ -735,7 +629,9 @@ describe('GoalsPanel', () => {
     );
 
     expect(screen.getByTestId('goals-modal')).toBeInTheDocument();
-    expect(document.body.style.overflow).toBe('hidden');
+    await waitFor(() => {
+      expect(document.body.style.overflow).toBe('hidden');
+    });
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onRequestClose).toHaveBeenCalledTimes(1);
@@ -755,7 +651,9 @@ describe('GoalsPanel', () => {
     rerender(<GoalsPanel mode="modal" isOpen={false} onRequestClose={onRequestClose} />);
 
     expect(screen.queryByTestId('goals-modal')).not.toBeInTheDocument();
-    expect(document.body.style.overflow).toBe('unset');
+    await waitFor(() => {
+      expect(document.body.style.overflow).toBe('unset');
+    });
   });
 });
 

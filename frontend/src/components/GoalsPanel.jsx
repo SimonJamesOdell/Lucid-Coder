@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppState } from '../context/AppStateContext';
 import {
   deleteGoal,
-  fetchGoalWithTasks,
   fetchGoals
 } from '../utils/goalsApi';
+import Modal from './Modal';
 import './GoalsModal.css';
 
 const PHASE_ORDER = ['planning', 'testing', 'implementing', 'verifying', 'ready', 'failed'];
@@ -125,9 +125,7 @@ export const compareGoalsForDisplay = (a, b) => {
 const GoalsPanel = ({
   mode = 'tab',
   isOpen = true,
-  onRequestClose,
-  automationPaused = false,
-  onResumeAutomation
+  onRequestClose
 }) => {
   const isModal = mode === 'modal';
   const isVisible = isModal ? Boolean(isOpen) : true;
@@ -136,10 +134,8 @@ const GoalsPanel = ({
   const [goals, setGoals] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [selectedGoalId, setSelectedGoalId] = useState(null);
-  const [selectedDetails, setSelectedDetails] = useState(null);
-  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [isClearDialogOpen, setIsClearDialogOpen] = useState(false);
 
   const goalTree = useMemo(() => buildGoalTree(goals), [goals]);
 
@@ -242,9 +238,8 @@ const GoalsPanel = ({
       return;
     }
 
-    setSelectedGoalId(null);
-    setSelectedDetails(null);
-    setIsDeleting(false);
+    setIsClearing(false);
+    setIsClearDialogOpen(false);
     loadGoals(projectId);
   }, [isVisible, projectId]);
 
@@ -274,40 +269,6 @@ const GoalsPanel = ({
       window.clearInterval(intervalId);
     };
   }, [activeJob?.id, isVisible, projectId]);
-
-  useEffect(() => {
-    if (!isVisible) {
-      return;
-    }
-
-    if (!selectedGoalId) {
-      setSelectedDetails(null);
-      return;
-    }
-
-    let canceled = false;
-    setIsLoadingDetails(true);
-    setError(null);
-
-    fetchGoalWithTasks(selectedGoalId)
-      .then((data) => {
-        if (canceled) return;
-        setSelectedDetails(data);
-      })
-      .catch(() => {
-        if (canceled) return;
-        setError('Failed to load goal details');
-        setSelectedDetails(null);
-      })
-      .finally(() => {
-        if (canceled) return;
-        setIsLoadingDetails(false);
-      });
-
-    return () => {
-      canceled = true;
-    };
-  }, [isVisible, selectedGoalId]);
 
   useEffect(() => {
     if (!isVisible) {
@@ -353,63 +314,54 @@ const GoalsPanel = ({
 
   const projectName = currentProject?.name || 'Project';
 
-  const selectedGoal =
-    selectedGoalId && Array.isArray(goals)
-      ? goals.find((goal) => goal.id === selectedGoalId) || null
-      : null;
-
-  const handleRemoveSelectedGoal = async () => {
-    const confirmFn = globalThis?.window?.confirm;
-    const confirmed = typeof confirmFn === 'function'
-      ? confirmFn('Remove this goal? This will also remove any child goals.')
-      : true;
-
-    if (!confirmed) {
+  const handleClearGoals = async () => {
+    /* c8 ignore start */
+    if (!projectId) {
       return;
     }
+    /* c8 ignore stop */
 
-    setIsDeleting(true);
+    const rootIds = goalTree.map((goal) => goal?.id).filter(Boolean);
+    /* c8 ignore start */
+    if (rootIds.length === 0) {
+      return;
+    }
+    /* c8 ignore stop */
+
+    setIsClearing(true);
     setError(null);
     try {
-      await deleteGoal(selectedGoalId);
-      setSelectedGoalId(null);
-      setSelectedDetails(null);
+      for (const id of rootIds) {
+        // Delete top-level goals; the backend deletes children as well.
+        await deleteGoal(id);
+      }
       await loadGoals(projectId);
+      setIsClearDialogOpen(false);
     } catch {
-      setError('Failed to remove goal');
+      setError('Failed to clear goals');
     } finally {
-      setIsDeleting(false);
+      setIsClearing(false);
     }
   };
 
   const panel = (
     <div className={`goals-modal-panel${isModal ? '' : ' goals-tab-panel'}`} data-testid={isModal ? undefined : 'goals-tab'}>
-      <div className="goals-modal-header">
-        <div>
-          <p className="goals-modal-eyebrow">{projectName}</p>
-          <h2 id="goals-modal-title">Goals &amp; Progress</h2>
-        </div>
-        <div className="goals-modal-header-actions">
-          {automationPaused && (
+      {isModal && (
+        <div className="goals-modal-header">
+          <div>
+            <p className="goals-modal-eyebrow">{projectName}</p>
+            <h2 id="goals-modal-title">Goals &amp; Progress</h2>
+          </div>
+          <div className="goals-modal-header-actions">
             <button
               type="button"
-              className="goals-modal-button"
-              onClick={() => onResumeAutomation?.()}
-              data-testid="goals-tab-resume-automation"
+              className="goals-modal-button ghost"
+              onClick={() => loadGoals(currentProject?.id)}
+              disabled={!currentProject?.id || isLoading}
+              data-testid="goals-modal-refresh"
             >
-              Resume automation
+              Refresh
             </button>
-          )}
-          <button
-            type="button"
-            className="goals-modal-button ghost"
-            onClick={() => loadGoals(currentProject?.id)}
-            disabled={!currentProject?.id || isLoading}
-            data-testid="goals-modal-refresh"
-          >
-            Refresh
-          </button>
-          {isModal && (
             <button
               type="button"
               className="goals-modal-close"
@@ -419,9 +371,9 @@ const GoalsPanel = ({
             >
               &times;
             </button>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="goals-modal-body">
         {!currentProject?.id ? (
@@ -445,16 +397,13 @@ const GoalsPanel = ({
                     const children = Array.isArray(node.children) ? node.children : [];
                     const progress = computeGoalProgress(node);
                     const groupDone = progress.total > 0 ? progress.done === progress.total : isGoalDone(node);
-                    const isSelected = node.id === selectedGoalId;
                     const goalPhase = normalizePhase(node.status) || '';
                     const isChild = depth > 0;
 
                     return (
                       <div key={node.id} className="goals-modal-goal-group">
-                        <button
-                          type="button"
-                          className={`goals-modal-goal${isChild ? ' child' : ''}${isSelected ? ' selected' : ''}${groupDone ? ' done' : ''}`}
-                          onClick={() => setSelectedGoalId(node.id)}
+                        <div
+                          className={`goals-modal-goal${isChild ? ' child' : ''}${groupDone ? ' done' : ''}`}
                           data-testid={`goals-modal-goal-${node.id}`}
                         >
                           <div className="goals-modal-goal-title">{getGoalTitle(node)}</div>
@@ -479,7 +428,7 @@ const GoalsPanel = ({
                               />
                             </div>
                           )}
-                        </button>
+                        </div>
 
                         {children.length > 0 && (
                           <div className="goals-modal-children">
@@ -496,54 +445,37 @@ const GoalsPanel = ({
             </div>
 
             <div className="goals-modal-detail" data-testid="goals-modal-detail">
-              <div className="goals-modal-section-title">Details</div>
-              {!selectedGoalId ? (
-                <div className="goals-modal-muted">Select a goal to view tasks and progress.</div>
-              ) : (
-                <>
-                  <div className="goals-modal-detail-header">
-                    <div className="goals-modal-detail-title">{getGoalTitle(selectedGoal)}</div>
-                    <div className="goals-modal-detail-status">
-                      Status: {formatPhaseLabel(normalizePhase(selectedGoal?.status) || '')}
-                    </div>
-                  </div>
-
-                  <div className="goals-modal-detail-actions">
-                    <button
-                      type="button"
-                      className="goals-modal-button ghost"
-                      onClick={handleRemoveSelectedGoal}
-                      disabled={!projectId || !selectedGoalId || isDeleting}
-                      data-testid="goals-modal-remove-goal"
-                    >
-                      {isDeleting ? 'Removing…' : 'Remove goal'}
-                    </button>
-                  </div>
-
-                  {isLoadingDetails && <div className="goals-modal-muted">Loading details…</div>}
-
-                  {selectedDetails?.tasks?.length ? (
-                    <ul className="goals-modal-task-list" data-testid="goals-modal-task-list">
-                      {selectedDetails.tasks.map((task) => (
-                        <li key={task.id} className="goals-modal-task">
-                          <div className="goals-modal-task-title">{task.title || task.type}</div>
-                          <div className="goals-modal-task-meta">
-                            <span>{task.type}</span>
-                            <span>—</span>
-                            <span>{task.status || 'pending'}</span>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="goals-modal-muted">No tasks recorded for this goal yet.</div>
-                  )}
-                </>
-              )}
+              <div className="goals-modal-section-title">Actions</div>
+              <div className="goals-modal-muted">Remove all goals for this project.</div>
+              <div className="goals-modal-detail-actions">
+                <button
+                  type="button"
+                  className="goals-modal-button ghost"
+                  onClick={() => setIsClearDialogOpen(true)}
+                  disabled={!projectId || isClearing || goals.length === 0}
+                  data-testid="goals-clear-goals"
+                >
+                  {isClearing ? 'Clearing…' : 'Clear goals'}
+                </button>
+              </div>
             </div>
           </>
         )}
       </div>
+      {isClearDialogOpen && (
+        <Modal
+          isOpen={isClearDialogOpen}
+          onClose={() => setIsClearDialogOpen(false)}
+          onConfirm={handleClearGoals}
+          title="Clear all goals?"
+          message="This will permanently remove all goals and child goals for this project."
+          confirmText="Clear goals"
+          cancelText="Cancel"
+          type="danger"
+          isProcessing={isClearing}
+          confirmLoadingText="Clearing…"
+        />
+      )}
     </div>
   );
 

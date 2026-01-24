@@ -94,6 +94,7 @@ export const useAppState = () => {
 };
 
 export const AppStateProvider = ({ children }) => {
+  const enableAutoStartRetry = !isTestEnv || Boolean(globalThis.__lucidcoderEnableAutoStartRetryTests);
   const [isLLMConfigured, setIsLLMConfigured] = useState(false);
   const [llmConfig, setLlmConfig] = useState(null);
   const [llmStatusLoaded, setLlmStatusLoaded] = useState(false);
@@ -107,6 +108,8 @@ export const AppStateProvider = ({ children }) => {
   const hydratedProjectFromStorageRef = useRef(false);
   const autoClosedProjectIdRef = useRef(null);
   const autoStartedProjectIdRef = useRef(null);
+  const autoStartInFlightRef = useRef(false);
+  const autoStartRetryTimerRef = useRef(null);
   const llmStatusRequestIdRef = useRef(0);
   const [currentProject, setCurrentProject] = useState(null);
   const [projects, setProjects] = useState([]);
@@ -124,6 +127,7 @@ export const AppStateProvider = ({ children }) => {
   const [previewPanelStateByProject, setPreviewPanelStateByProject] = useState(loadPreviewPanelStateByProject);
   const [projectShutdownState, setProjectShutdownState] = useState(buildInitialShutdownState);
   const [editorFocusRequest, setEditorFocusRequest] = useState(null);
+  const [stoppedProjects, setStoppedProjects] = useState({});
   const [previewPanelState, setPreviewPanelState] = useState({
     activeTab: 'preview',
     followAutomation: true
@@ -138,6 +142,7 @@ export const AppStateProvider = ({ children }) => {
     status: 'unknown',
     lastError: null
   });
+  const [autoStartRetryTick, setAutoStartRetryTick] = useState(0);
 
   if (isTestEnv) {
     __appStateTestHelpers.setAutoStartState = ({ autoStartedProjectId, hydratedProjectFromStorage } = {}) => {
@@ -161,6 +166,40 @@ export const AppStateProvider = ({ children }) => {
       returnToCommits
     });
   }, []);
+
+  const markProjectStopped = useCallback((projectId) => {
+    if (!projectId) {
+      return;
+    }
+    setStoppedProjects((prev) => ({
+      ...prev,
+      [projectId]: true
+    }));
+  }, []);
+
+  const clearProjectStopped = useCallback((projectId) => {
+    if (!projectId) {
+      return;
+    }
+    setStoppedProjects((prev) => {
+      /* v8 ignore next */
+      if (!prev[projectId]) {
+        /* v8 ignore next */
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[projectId];
+      return next;
+    });
+  }, []);
+
+  if (isTestEnv) {
+    __appStateTestHelpers.clearProjectStopped = clearProjectStopped;
+    __appStateTestHelpers.markProjectStopped = markProjectStopped;
+    __appStateTestHelpers.setAutoStartRetryTimer = (value) => {
+      autoStartRetryTimerRef.current = value;
+    };
+  }
 
   const normalizePreviewTab = useCallback((value) => {
     if (typeof value !== 'string') {
@@ -709,9 +748,9 @@ export const AppStateProvider = ({ children }) => {
     []
   );
 
-  const selectProject = (project) => {
+  const selectProject = async (project) => {
     hydratedProjectFromStorageRef.current = false;
-    return selectProjectWithProcesses({
+    const started = await selectProjectWithProcesses({
       project,
       currentProject,
       closeProject,
@@ -721,6 +760,10 @@ export const AppStateProvider = ({ children }) => {
       applyProcessSnapshot,
       refreshProcessStatus
     });
+    if (started && project?.id) {
+      clearProjectStopped(project.id);
+    }
+    return started;
   };
 
   const closeProject = () => closeProjectWithProcesses({
@@ -767,6 +810,10 @@ export const AppStateProvider = ({ children }) => {
       return;
     }
 
+    if (autoStartInFlightRef.current) {
+      return;
+    }
+
     setPreviewPanelTab('preview', { source: 'system' });
 
     if (projectProcesses?.projectId === projectSnapshot.id && projectProcesses.isRunning) {
@@ -775,9 +822,7 @@ export const AppStateProvider = ({ children }) => {
       return;
     }
 
-    autoStartedProjectIdRef.current = projectSnapshot.id;
-    hydratedProjectFromStorageRef.current = false;
-
+    autoStartInFlightRef.current = true;
     void selectProjectWithProcesses({
       project: projectSnapshot,
       currentProject: projectSnapshot,
@@ -787,10 +832,27 @@ export const AppStateProvider = ({ children }) => {
       trackedFetch,
       applyProcessSnapshot,
       refreshProcessStatus
+    }).then((started) => {
+      if (started && projectSnapshot?.id) {
+        autoStartedProjectIdRef.current = projectSnapshot.id;
+        hydratedProjectFromStorageRef.current = false;
+        clearProjectStopped(projectSnapshot.id);
+      }
+      if (!started && backendConnectivity?.status !== 'offline' && enableAutoStartRetry) {
+        if (!autoStartRetryTimerRef.current) {
+          autoStartRetryTimerRef.current = setTimeout(() => {
+            autoStartRetryTimerRef.current = null;
+            setAutoStartRetryTick((tick) => tick + 1);
+          }, 2000);
+        }
+      }
+    }).finally(() => {
+      autoStartInFlightRef.current = false;
     });
   }, [
     applyProcessSnapshot,
     backendConnectivity?.status,
+    clearProjectStopped,
     closeProject,
     currentProject,
     fetchProjectGitSettings,
@@ -798,24 +860,65 @@ export const AppStateProvider = ({ children }) => {
     projectProcesses?.projectId,
     refreshProcessStatus,
     setPreviewPanelTab,
-    trackedFetch
+    trackedFetch,
+    autoStartRetryTick
   ]);
 
+  const finalizeHydratedAutoStart = useCallback(() => {
+    if (!currentProject?.id || !hydratedProjectFromStorageRef.current) {
+      return false;
+    }
+
+    if (projectProcesses?.projectId === currentProject.id && projectProcesses.isRunning) {
+      autoStartedProjectIdRef.current = currentProject.id;
+      hydratedProjectFromStorageRef.current = false;
+      /* v8 ignore next */
+      if (autoStartRetryTimerRef.current) {
+        /* v8 ignore next */
+        clearTimeout(autoStartRetryTimerRef.current);
+        /* v8 ignore next */
+        autoStartRetryTimerRef.current = null;
+      }
+      return true;
+    }
+
+    return false;
+  }, [currentProject?.id, projectProcesses?.projectId, projectProcesses?.isRunning]);
+
+  if (isTestEnv) {
+    __appStateTestHelpers.finalizeHydratedAutoStart = finalizeHydratedAutoStart;
+  }
+
+  useEffect(() => {
+    finalizeHydratedAutoStart();
+  }, [finalizeHydratedAutoStart]);
+
+  // Auto-start for non-hydrated projects is handled explicitly via user actions
+  // or PreviewTab's idle auto-start behavior.
+
   const stopProject = useCallback(
-    (projectId = currentProject?.id) => stopProjectProcesses({
-      projectId,
-      projectName: currentProject?.id === projectId ? currentProject?.name : '',
-      setProjectShutdownState,
-      trackedFetch,
-      resetProjectShutdownState,
-      resetProjectProcesses,
-      clearJobPolls,
-      refreshProcessStatus
-    }),
+    async (projectId = currentProject?.id) => {
+      const targetId = projectId || currentProject?.id;
+      const result = await stopProjectProcesses({
+        projectId,
+        projectName: currentProject?.id === projectId ? currentProject?.name : '',
+        setProjectShutdownState,
+        trackedFetch,
+        resetProjectShutdownState,
+        resetProjectProcesses,
+        clearJobPolls,
+        refreshProcessStatus
+      });
+      if (targetId) {
+        markProjectStopped(targetId);
+      }
+      return result;
+    },
     [
       clearJobPolls,
       currentProject?.id,
       currentProject?.name,
+      markProjectStopped,
       refreshProcessStatus,
       resetProjectProcesses,
       resetProjectShutdownState,
@@ -824,19 +927,31 @@ export const AppStateProvider = ({ children }) => {
   );
 
   const stopProjectProcess = useCallback(
-    (projectId, target) => stopProjectProcessTarget({ projectId, target, trackedFetch, refreshProcessStatus }),
-    [refreshProcessStatus, trackedFetch]
+    async (projectId, target) => {
+      const result = await stopProjectProcessTarget({ projectId, target, trackedFetch, refreshProcessStatus });
+      if (projectId && (!target || target === 'frontend' || target === 'all')) {
+        markProjectStopped(projectId);
+      }
+      return result;
+    },
+    [markProjectStopped, refreshProcessStatus, trackedFetch]
   );
 
   const restartProject = useCallback(
-    (projectId = currentProject?.id) => restartProjectProcesses({
-      projectId,
-      trackedFetch,
-      applyProcessSnapshot,
-      refreshProcessStatus,
-      resetProjectProcesses
-    }),
-    [applyProcessSnapshot, currentProject?.id, refreshProcessStatus, resetProjectProcesses, trackedFetch]
+    async (projectId = currentProject?.id) => {
+      const result = await restartProjectProcesses({
+        projectId,
+        trackedFetch,
+        applyProcessSnapshot,
+        refreshProcessStatus,
+        resetProjectProcesses
+      });
+      if (projectId) {
+        clearProjectStopped(projectId);
+      }
+      return result;
+    },
+    [applyProcessSnapshot, clearProjectStopped, currentProject?.id, refreshProcessStatus, resetProjectProcesses, trackedFetch]
   );
 
   const createProject = useCallback(
@@ -1036,6 +1151,7 @@ export const AppStateProvider = ({ children }) => {
     previewPanelState,
     testRunIntent,
     backendConnectivity,
+    stoppedProjects,
 
     refreshLLMStatus,
     

@@ -104,7 +104,7 @@ describe('appState/projects coverage', () => {
         applyProcessSnapshot: vi.fn(),
         refreshProcessStatus: vi.fn()
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(true);
 
     expect(trackedFetch).toHaveBeenCalledWith('/api/agent/autopilot/resume', expect.any(Object));
 

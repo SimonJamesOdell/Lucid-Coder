@@ -23,6 +23,7 @@ describe('PreviewTab (SSR guards)', () => {
             project={{ id: 123, name: 'SSR Project' }}
             processInfo={null}
             onRestartProject={() => Promise.resolve(null)}
+            autoStartOnNotRunning={false}
           />
         );
       });

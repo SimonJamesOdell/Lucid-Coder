@@ -271,10 +271,9 @@ describe('PreviewPanel', () => {
 
     await act(async () => {
       testTabControls.register({
-        onRefresh: vi.fn(),
-        refreshDisabled: false,
+        onCancelActiveRuns: vi.fn(),
+        runAllTests: vi.fn(),
         cancelDisabled: true,
-        isRefreshing: false,
         notAFunction: 123
       });
       await flushPromises();
@@ -283,10 +282,9 @@ describe('PreviewPanel', () => {
     const snapshot = latestBridgeOptions.getSnapshot();
     expect(snapshot).toEqual(
       expect.objectContaining({
-        availableTestActions: expect.arrayContaining(['onRefresh'])
+        availableTestActions: expect.arrayContaining(['onCancelActiveRuns'])
       })
     );
-    expect(snapshot.availableTestActions).not.toContain('refreshDisabled');
     expect(snapshot.availableTestActions).not.toContain('notAFunction');
   });
 
@@ -769,15 +767,14 @@ describe('PreviewPanel', () => {
 
     await act(async () => {
       testTabControls.register({
-        onRefresh: actionSpy,
-        refreshDisabled: false,
+        onCancelActiveRuns: actionSpy,
         cancelDisabled: true,
-        isRefreshing: false
+        runAllTests: vi.fn()
       });
     });
 
     await act(async () => {
-      latestBridgeOptions.executeCommand({ type: 'TEST_ACTION', payload: { action: 'onRefresh' } });
+      latestBridgeOptions.executeCommand({ type: 'TEST_ACTION', payload: { action: 'onCancelActiveRuns' } });
       latestBridgeOptions.executeCommand({ type: 'TEST_ACTION', payload: { action: 42 } });
       await flushPromises();
     });
@@ -785,30 +782,6 @@ describe('PreviewPanel', () => {
     expect(actionSpy).toHaveBeenCalledTimes(1);
 
     unmount();
-  });
-
-  test('does not render the test refresh timestamp meta (timestamp removed)', async () => {
-    useAppState.mockReturnValue(
-      createAppState({ currentProject: { id: 15, name: 'Test Refresh Meta' } })
-    );
-
-    const user = userEvent.setup();
-    render(<PreviewPanel />);
-
-    await user.click(screen.getByTestId('test-tab'));
-    expect(await screen.findByTestId('mock-test-tab')).toBeInTheDocument();
-
-    await act(async () => {
-      testTabControls.register({
-        onRefresh: vi.fn(),
-        refreshDisabled: false,
-        cancelDisabled: false,
-        isRefreshing: false,
-        lastFetchedAt: 1700000000000
-      });
-    });
-
-    expect(screen.queryByTestId('test-refresh-meta')).toBeNull();
   });
 
   test('agent UI bridge can execute branch toolbar actions once registered', async () => {
@@ -859,10 +832,9 @@ describe('PreviewPanel', () => {
 
     await act(async () => {
       testTabControls.register({
-        onRefresh: vi.fn(),
-        refreshDisabled: false,
-        cancelDisabled: true,
-        isRefreshing: false
+        onCancelActiveRuns: vi.fn(),
+        runAllTests: vi.fn(),
+        cancelDisabled: true
       });
       await flushPromises();
     });
@@ -887,8 +859,7 @@ describe('PreviewPanel', () => {
     const snapshot = latestBridgeOptions.getSnapshot();
     expect(snapshot.hasBranchNotification).toBe(true);
     expect(snapshot.availableBranchActions).toContain('merge');
-    expect(snapshot.availableTestActions).toContain('onRefresh');
-    expect(snapshot.availableTestActions).not.toContain('refreshDisabled');
+    expect(snapshot.availableTestActions).toContain('onCancelActiveRuns');
   });
 
   test('preview panel skips wiring test hooks when helpers are unavailable', () => {
@@ -1380,43 +1351,23 @@ describe('PreviewPanel', () => {
     expect(screen.getByTestId('mock-test-tab')).toBeInTheDocument();
     expect(typeof testTabControls.register).toBe('function');
 
-    const onRefresh = vi.fn();
     const onCancel = vi.fn();
 
     act(() => {
       testTabControls.register?.({
-        onRefresh,
         onCancelActiveRuns: onCancel,
-        refreshDisabled: false,
-        cancelDisabled: true,
-        isRefreshing: true
+        cancelDisabled: true
       });
     });
 
-    const refreshButton = screen.getByTestId('test-refresh-button');
-    expect(refreshButton).toHaveTextContent('Refreshing…');
-    expect(refreshButton).toBeEnabled();
-    await user.click(refreshButton);
-    expect(onRefresh).toHaveBeenCalled();
-
-    const cancelButton = screen.getByTestId('test-cancel-button');
-    expect(cancelButton).toBeDisabled();
 
     act(() => {
       testTabControls.register?.({
-        onRefresh,
         onCancelActiveRuns: onCancel,
-        refreshDisabled: true,
-        cancelDisabled: false,
-        isRefreshing: false
+        cancelDisabled: false
       });
     });
-
-    expect(screen.getByTestId('test-refresh-button')).toBeDisabled();
-    const enabledCancelButton = screen.getByTestId('test-cancel-button');
-    expect(enabledCancelButton).toBeEnabled();
-    await user.click(enabledCancelButton);
-    expect(onCancel).toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   test('commits tab requests tests and auto-runs after test actions register', async () => {
@@ -1444,11 +1395,8 @@ describe('PreviewPanel', () => {
     act(() => {
       testTabControls.register?.({
         runAllTests,
-        onRefresh: vi.fn(),
         onCancelActiveRuns: vi.fn(),
-        refreshDisabled: false,
-        cancelDisabled: false,
-        isRefreshing: false
+        cancelDisabled: false
       });
     });
 
@@ -1483,11 +1431,8 @@ describe('PreviewPanel', () => {
     act(() => {
       testTabControls.register?.({
         runAllTests,
-        onRefresh: vi.fn(),
         onCancelActiveRuns: vi.fn(),
-        refreshDisabled: false,
-        cancelDisabled: false,
-        isRefreshing: false
+        cancelDisabled: false
       });
     });
 
@@ -1518,11 +1463,8 @@ describe('PreviewPanel', () => {
     act(() => {
       testTabControls.register?.({
         runAllTests,
-        onRefresh: vi.fn(),
         onCancelActiveRuns: vi.fn(),
-        refreshDisabled: false,
-        cancelDisabled: false,
-        isRefreshing: false
+        cancelDisabled: false
       });
     });
 
@@ -1540,23 +1482,15 @@ describe('PreviewPanel', () => {
 
     act(() => {
       testTabControls.register?.({
-        onRefresh: vi.fn(),
         onCancelActiveRuns: vi.fn(),
-        refreshDisabled: false,
-        cancelDisabled: false,
-        isRefreshing: false
+        cancelDisabled: false
       });
     });
-
-    const refreshButton = screen.getByTestId('test-refresh-button');
-    expect(refreshButton).toBeEnabled();
 
     act(() => {
       testTabControls.register?.(null);
     });
 
-    expect(screen.getByTestId('test-refresh-button')).toBeDisabled();
-    expect(screen.getByTestId('test-cancel-button')).toBeDisabled();
   });
 
   test('branch action registrations render header buttons and toggle tabs', async () => {

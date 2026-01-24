@@ -33,7 +33,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     cancelAutomationJob,
     getJobsForProject,
     jobState,
-    refreshJobs,
     workspaceChanges,
     workingBranches,
     syncBranchOverview,
@@ -522,15 +521,45 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     submitProofIfNeeded
   ]);
 
+  const shouldRunTest = useCallback((type) => {
+    const job = jobsByType[type];
+    
+    // Always run if there's no previous job or if it failed
+    if (!job || job.status !== 'succeeded') {
+      return true;
+    }
+    
+    // If test succeeded, check if any files changed after the test completed
+    const testCompletedAt = job.completedAt ? new Date(job.completedAt).getTime() : 0;
+    if (!testCompletedAt) {
+      return true; // No completion time, run the test
+    }
+    
+    // Check if any staged files were modified after the test completed
+    const hasNewerChanges = stagedFiles.some(file => {
+      const fileTimestamp = file.timestamp ? new Date(file.timestamp).getTime() : Date.now();
+      return fileTimestamp > testCompletedAt;
+    });
+    
+    return hasNewerChanges;
+  }, [jobsByType, stagedFiles]);
+
   const handleRun = useCallback(async (type) => {
     setLocalError(null);
+    
+    // Check if we need to run this test
+    if (!shouldRunTest(type)) {
+      console.log(`Skipping ${type} - no file changes since last successful run`);
+      return;
+    }
+    
     try {
       markTestRunIntent?.('user');
       await startAutomationJob(type, { projectId });
     } catch (error) {
       setLocalError(error.message);
     }
-  }, [markTestRunIntent, startAutomationJob, projectId]);
+  }, [shouldRunTest, markTestRunIntent, startAutomationJob, projectId]);
 
   const runAllTests = useCallback(async (options = {}) => {
     if (!projectId || activeJobs.length) {
@@ -547,13 +576,25 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         returnToCommits: Boolean(options?.returnToCommits)
       });
 
+      // Filter to only run tests that need to be run
+      const testsToRun = TEST_JOB_TYPES.filter((config) => shouldRunTest(config.type));
+      
+      if (testsToRun.length === 0) {
+        console.log('All tests previously succeeded with no file changes - skipping test runs');
+        return;
+      }
+      
+      if (testsToRun.length < TEST_JOB_TYPES.length) {
+        console.log(`Running ${testsToRun.length} of ${TEST_JOB_TYPES.length} test suites (others already passed with no changes)`);
+      }
+
       await Promise.all(
-        TEST_JOB_TYPES.map((config) => startAutomationJob(config.type, { projectId }))
+        testsToRun.map((config) => startAutomationJob(config.type, { projectId }))
       );
     } catch (error) {
       setLocalError(error.message);
     }
-  }, [activeJobs.length, markTestRunIntent, projectId, startAutomationJob]);
+  }, [activeJobs.length, markTestRunIntent, projectId, startAutomationJob, shouldRunTest]);
 
   const handleCancel = useCallback(async (job) => {
     if (!job) {
@@ -597,15 +638,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
   }, [activeJobs, cancelAutomationJob, projectId]);
 
-  const handleRefresh = useCallback(async () => {
-    setLocalError(null);
-    try {
-      await refreshJobs(projectId);
-    } catch (error) {
-      setLocalError(error.message);
-    }
-  }, [projectId, refreshJobs]);
-
   useEffect(() => {
     if (typeof registerTestActions !== 'function') {
       return;
@@ -617,15 +649,12 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
 
     registerTestActions({
-      onRefresh: handleRefresh,
       onCancelActiveRuns: handleCancelActiveRuns,
       runAllTests,
-      refreshDisabled: jobState.isLoading,
       cancelDisabled: activeJobs.length === 0,
-      isRefreshing: jobState.isLoading,
       lastFetchedAt: jobsLastFetchedAt
     });
-  }, [registerTestActions, project, handleRefresh, handleCancelActiveRuns, runAllTests, jobState.isLoading, activeJobs.length, jobsLastFetchedAt]);
+  }, [registerTestActions, project, handleCancelActiveRuns, runAllTests, activeJobs.length, jobsLastFetchedAt]);
 
   useEffect(() => () => {
     if (typeof registerTestActions === 'function') {
@@ -642,7 +671,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     hooks.handleRun = handleRun;
     hooks.handleCancel = handleCancel;
     hooks.handleCancelActiveRuns = handleCancelActiveRuns;
-    hooks.handleRefresh = handleRefresh;
     hooks.setLocalError = setLocalError;
     hooks.getLocalError = () => localError;
     hooks.getActiveJobs = () => activeJobs;
@@ -662,7 +690,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       hooks.handleRun = undefined;
       hooks.handleCancel = undefined;
       hooks.handleCancelActiveRuns = undefined;
-      hooks.handleRefresh = undefined;
       hooks.setLocalError = undefined;
       hooks.getLocalError = undefined;
       hooks.getActiveJobs = undefined;
@@ -673,7 +700,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     handleRun,
     handleCancel,
     handleCancelActiveRuns,
-    handleRefresh,
     localError,
     activeJobs,
     submitProofIfNeeded,

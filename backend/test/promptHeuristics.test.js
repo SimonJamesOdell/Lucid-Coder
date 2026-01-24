@@ -21,6 +21,52 @@ describe('promptHeuristics', () => {
     expect(isStyleOnlyPrompt('Refine the onboarding workflow for authentication')).toBe(false);
   });
 
+  it('ignores style-only context when a non-style current request is provided', () => {
+    const prompt = [
+      'Conversation context:',
+      'User: Change the background color to blue',
+      'Assistant: Sure, updating styles.',
+      '',
+      'Current request: Make a contact form on the contact page'
+    ].join('\n');
+
+    expect(isStyleOnlyPrompt(prompt)).toBe(false);
+  });
+
+  it('uses the current request line for style-only detection', () => {
+    const prompt = [
+      'Conversation context:',
+      'User: Add a contact form',
+      '',
+      'Current request: Change the background color to teal'
+    ].join('\n');
+
+    expect(isStyleOnlyPrompt(prompt)).toBe(true);
+    expect(extractStyleColor(prompt)).toBe('teal');
+  });
+
+  it('extracts user answer when no current request is present', () => {
+    const prompt = [
+      'Previous context:',
+      'Assistant: What color would you like?',
+      '',
+      'User answer: Change font color to blue'
+    ].join('\n');
+
+    expect(isStyleOnlyPrompt(prompt)).toBe(true);
+  });
+
+  it('extracts original request when neither current request nor user answer is present', () => {
+    const prompt = [
+      'Context:',
+      'Some background information',
+      '',
+      'Original request: Update the theme colors'
+    ].join('\n');
+
+    expect(isStyleOnlyPrompt(prompt)).toBe(true);
+  });
+
   describe('extractStyleColor', () => {
     it('returns null when the prompt is undefined or blank', () => {
       expect(extractStyleColor()).toBeNull();

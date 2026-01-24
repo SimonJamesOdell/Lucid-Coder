@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 (2026-01-23)
+- Increased AI assistant header height to align with address bar.
+- Repositioned scroll-to-bottom button inside chat panel with downward arrow icon.
+- Unified styling for chat header buttons (stop/position toggle).
+- Replaced position toggle triangle with cleaner arrow icons.
+- Optimized test execution to skip re-running tests that previously succeeded when no files have changed.
+
 ## 0.2.2 (2026-01-22)
 - Streamlined commit gating with a single testing CTA that launches tests and returns to commits with an auto-populated message.
 - Added queued test-run handling, return-to-commits flows, and related UI/state updates across Preview, Tests, and Commits.

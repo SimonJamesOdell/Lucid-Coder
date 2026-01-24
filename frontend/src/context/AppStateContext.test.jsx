@@ -1278,6 +1278,205 @@ describe('AppStateContext integrations', () => {
     });
   });
 
+  test('auto-start retry schedules and clears when processes start', async () => {
+    globalThis.__lucidcoderEnableAutoStartRetryTests = true;
+
+    localStorage.setItem('currentProject', JSON.stringify({ id: 'proj-retry', name: 'Retry Project' }));
+
+    fetchMock.mockImplementation((url, options) => {
+      if (url === '/api/llm/status') {
+        return Promise.resolve(createResponse(true, {
+          success: true,
+          configured: true,
+          ready: true,
+          config: {
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            api_url: 'https://api.openai.com/v1',
+            requires_api_key: true,
+            has_api_key: true
+          }
+        }));
+      }
+      if (url === '/api/projects') {
+        return Promise.resolve(createResponse(true, { success: true, projects: [] }));
+      }
+      if (url === '/api/settings/git') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (url === '/api/settings/ports') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-retry/git-settings')) {
+        return Promise.resolve(createResponse(true, { success: true, inheritsFromGlobal: true, projectSettings: null, settings: {} }));
+      }
+      if (typeof url === 'string' && url.includes('/api/projects/proj-retry/start')) {
+        return Promise.resolve(createResponse(false, { success: false, error: 'start failed' }));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    try {
+      const { result } = renderHook(() => useAppState(), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.currentProject?.id).toBe('proj-retry');
+      });
+
+      act(() => {
+        result.current.reportBackendConnectivity('online');
+      });
+
+      await waitFor(() => {
+        expect(setTimeoutSpy).toHaveBeenCalled();
+      });
+
+      act(() => {
+        __appStateTestHelpers.applyProcessSnapshot('proj-retry', {
+          processes: { frontend: { status: 'running', port: 5173 } }
+        });
+      });
+
+      await waitFor(() => {
+        expect(clearTimeoutSpy).toHaveBeenCalled();
+      });
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      delete globalThis.__lucidcoderEnableAutoStartRetryTests;
+    }
+  });
+
+  test('clearProjectStopped no-ops when project is not marked stopped', async () => {
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      __appStateTestHelpers.clearProjectStopped('proj-missing');
+    });
+
+    await waitFor(() => {
+      expect(result.current.stoppedProjects).toEqual({});
+    });
+  });
+
+  test('clearProjectStopped ignores missing project ids', async () => {
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      __appStateTestHelpers.clearProjectStopped(null);
+    });
+
+    await waitFor(() => {
+      expect(result.current.stoppedProjects).toEqual({});
+    });
+  });
+
+  test('markProjectStopped ignores missing project ids', async () => {
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      __appStateTestHelpers.markProjectStopped(undefined);
+    });
+
+    await waitFor(() => {
+      expect(result.current.stoppedProjects).toEqual({});
+    });
+  });
+
+  test('clearProjectStopped removes an existing stopped project entry', async () => {
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      __appStateTestHelpers.markProjectStopped('proj-stopped');
+    });
+
+    await waitFor(() => {
+      expect(result.current.stoppedProjects).toEqual({ 'proj-stopped': true });
+    });
+
+    act(() => {
+      __appStateTestHelpers.clearProjectStopped('proj-stopped');
+    });
+
+    await waitFor(() => {
+      expect(result.current.stoppedProjects).toEqual({});
+    });
+  });
+
+  test('auto-start retry timer ref clears when processes report running', async () => {
+    fetchMock.mockImplementation((url, options) => {
+      if (url === '/api/llm/status') {
+        return Promise.resolve(createResponse(true, {
+          success: true,
+          configured: true,
+          ready: true,
+          config: {
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            api_url: 'https://api.openai.com/v1',
+            requires_api_key: true,
+            has_api_key: true
+          }
+        }));
+      }
+      if (url === '/api/projects') {
+        return Promise.resolve(createResponse(true, { success: true, projects: [] }));
+      }
+      if (url === '/api/settings/git') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      if (url === '/api/settings/ports') {
+        return Promise.resolve(createResponse(true, { success: true, settings: {} }));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    try {
+      const { result } = renderHook(() => useAppState(), { wrapper });
+
+      act(() => {
+        result.current.setCurrentProject({ id: 'proj-retry-clear', name: 'Retry Clear' });
+      });
+
+      await waitFor(() => {
+        expect(result.current.currentProject?.id).toBe('proj-retry-clear');
+      });
+
+      act(() => {
+        __appStateTestHelpers.setAutoStartState({
+          autoStartedProjectId: null,
+          hydratedProjectFromStorage: true
+        });
+        __appStateTestHelpers.setAutoStartRetryTimer(123);
+      });
+
+      act(() => {
+        __appStateTestHelpers.applyProcessSnapshot('proj-retry-clear', {
+          processes: { frontend: { status: 'running', port: 5173 } }
+        });
+      });
+
+      act(() => {
+        __appStateTestHelpers.setAutoStartState({ hydratedProjectFromStorage: true });
+      });
+
+      act(() => {
+        __appStateTestHelpers.finalizeHydratedAutoStart();
+      });
+
+      await waitFor(() => {
+        expect(clearTimeoutSpy).toHaveBeenCalled();
+      });
+    } finally {
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+
   test('initial load keeps hydrated currentProject when LLM is not configured', async () => {
     localStorage.setItem('currentProject', JSON.stringify({ id: 'proj-boot', name: 'Boot Project' }));
 
@@ -2026,6 +2225,20 @@ describe('AppStateContext integrations', () => {
   test('stopProject requires an active project when called without an id', async () => {
     const { result } = renderHook(() => useAppState(), { wrapper });
     await expect(result.current.stopProject()).rejects.toThrow('Select a project before stopping processes');
+  });
+
+  test('stopProject falls back to currentProject id when passed null', async () => {
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      result.current.setCurrentProject({ id: 'proj-null-stop', name: 'Null Stop' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.currentProject?.id).toBe('proj-null-stop');
+    });
+
+    await expect(result.current.stopProject(null)).rejects.toThrow('Select a project before stopping processes');
   });
 
   test('stopProject defaults to the current project id and surfaces its name while inflight', async () => {

@@ -235,9 +235,9 @@ describe('ChatPanel - Component Rendering Integration', () => {
       const svg = button.querySelector('svg');
       expect(svg).toBeInTheDocument();
       
-      // Check that the path is for right arrow (M5 starts right-pointing path)
+      // Check that the path is for right arrow (M6 starts right-pointing path)
       const path = svg.querySelector('path');
-      expect(path.getAttribute('d')).toContain('M5');
+      expect(path.getAttribute('d')).toContain('M6');
     });
 
     it('renders left-pointing arrow icon when side is right', () => {
@@ -253,9 +253,9 @@ describe('ChatPanel - Component Rendering Integration', () => {
       const svg = button.querySelector('svg');
       expect(svg).toBeInTheDocument();
       
-      // Check that the path is for left arrow (M11 starts left-pointing path)
+      // Check that the path is for left arrow (M10 starts left-pointing path)
       const path = svg.querySelector('path');
-      expect(path.getAttribute('d')).toContain('M11');
+      expect(path.getAttribute('d')).toContain('M10');
     });
 
     it('sets correct aria attributes on SVG icons', () => {

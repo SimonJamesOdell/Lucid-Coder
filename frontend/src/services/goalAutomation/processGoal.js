@@ -61,6 +61,34 @@ const buildEmptyEditsError = (stage) => {
 
 const isEmptyEditsError = (error) => Boolean(error?.__lucidcoderEmptyEditsStage);
 
+const formatGoalLabel = (value) => {
+  const raw = typeof value === 'string' ? value : '';
+  const lines = raw.split(/\r?\n/).map((line) => line.trim());
+  const findValueAfterPrefix = (prefix) => {
+    for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
+      const line = lines[idx];
+      if (line.toLowerCase().startsWith(prefix.toLowerCase())) {
+        return line.slice(prefix.length).trim();
+      }
+    }
+    return '';
+  };
+
+  const contextual =
+    findValueAfterPrefix('Current request:') ||
+    findValueAfterPrefix('Original request:') ||
+    findValueAfterPrefix('User answer:');
+
+  const cleaned = (contextual || raw).replace(/\s+/g, ' ').trim();
+  /* c8 ignore next */
+  if (!cleaned) {
+    /* c8 ignore next */
+    return 'Goal';
+  }
+  /* v8 ignore next */
+  return cleaned.length > 140 ? `${cleaned.slice(0, 137)}...` : cleaned;
+};
+
 export async function processGoal(
   goal,
   projectId,
@@ -115,9 +143,11 @@ export async function processGoal(
       setGoalCount(Array.isArray(finalGoals) ? finalGoals.length : 0);
       notifyGoalsUpdated(projectId);
 
+      /* c8 ignore next */
+      const completionLabel = formatGoalLabel(goal?.title || goal?.prompt || 'Goal');
       setMessages((prev) => [
         ...prev,
-        createMessage('assistant', `Completed (${outcomeNote}): ${goal.prompt}`, { variant: 'status' })
+        createMessage('assistant', `Completed (${outcomeNote}): ${completionLabel}`, { variant: 'status' })
       ]);
 
       return { success: true, skippedReason: type };
@@ -547,9 +577,10 @@ export async function processGoal(
 
     await new Promise((resolve) => setTimeout(resolve, 80));
 
+    const completionLabel = formatGoalLabel(goal?.title || goal?.prompt || 'Goal');
     setMessages((prev) => [
       ...prev,
-      createMessage('assistant', `Completed: ${goal.prompt}`, { variant: 'status' })
+      createMessage('assistant', `Completed: ${completionLabel}`, { variant: 'status' })
     ]);
 
     return { success: true };

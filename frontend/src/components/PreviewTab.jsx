@@ -9,7 +9,7 @@ const PORT_MAP = {
 };
 
 const PreviewTab = forwardRef(
-  ({ project, processInfo, onRestartProject }, ref) => {
+  ({ project, processInfo, onRestartProject, autoStartOnNotRunning = true, isProjectStopped = false }, ref) => {
   const [iframeError, setIframeError] = useState(false);
   const [iframeLoading, setIframeLoading] = useState(false);
   const [pendingIframeError, setPendingIframeError] = useState(false);
@@ -92,11 +92,18 @@ const PreviewTab = forwardRef(
   // When processInfo is missing or stale (e.g. right after a hard refresh or project switch),
   // treat the runtime status as "unknown" and attempt to load the preview anyway.
   // The backend preview proxy will return a clear "Preview unavailable" response if needed.
+  const isStartingProject = Boolean(
+    startInFlight ||
+    (isProcessInfoCurrent && frontendRawStatus === 'starting')
+  );
+
   const showNotRunningState = Boolean(
-    project?.id &&
+    isProjectStopped &&
+      project?.id &&
       onRestartProject &&
       isProcessInfoCurrent &&
-      !isFrontendReadyForPreview
+      !isFrontendReadyForPreview &&
+      !isStartingProject
   );
   const resolvePortValue = (portBundle, key) => {
     if (!portBundle) {
@@ -104,6 +111,40 @@ const PreviewTab = forwardRef(
     }
     return portBundle[key] ?? null;
   };
+  const autoStartAttemptRef = useRef({ projectId: null, attempted: false });
+
+  useEffect(() => {
+    const projectId = project?.id ?? null;
+    if (autoStartAttemptRef.current.projectId !== projectId) {
+      autoStartAttemptRef.current = { projectId, attempted: false };
+    }
+  }, [project?.id]);
+
+  const shouldAutoStartOnIdle = Boolean(
+    autoStartOnNotRunning &&
+    !isProjectStopped &&
+    project?.id &&
+    onRestartProject &&
+    isProcessInfoCurrent &&
+    !isFrontendReadyForPreview &&
+    !isStartingProject
+  );
+
+  useEffect(() => {
+    if (!shouldAutoStartOnIdle) {
+      return;
+    }
+
+    if (autoStartAttemptRef.current.attempted) {
+      return;
+    }
+
+    /* v8 ignore next */
+    autoStartAttemptRef.current.attempted = true;
+    /* v8 ignore next */
+    handleStartProject();
+  }, [shouldAutoStartOnIdle]);
+
 
   const chooseFrontendPort = () => {
     if (!project) {
@@ -298,6 +339,12 @@ const PreviewTab = forwardRef(
     clearErrorConfirmTimeout();
     setPendingIframeError(false);
 
+    if (isStartingProject) {
+      setIframeError(false);
+      setIframeLoading(true);
+      return;
+    }
+
     if (showNotRunningState || iframeError) {
       setIframeLoading(false);
       return;
@@ -317,7 +364,7 @@ const PreviewTab = forwardRef(
     return () => {
       clearLoadTimeout();
     };
-  }, [previewUrl, iframeKey, showNotRunningState, iframeError]);
+  }, [previewUrl, iframeKey, showNotRunningState, iframeError, isStartingProject]);
 
   const handleIframeError = () => {
     clearLoadTimeout();
@@ -376,14 +423,14 @@ const PreviewTab = forwardRef(
       return;
     }
 
-    setRestartStatus({ type: 'info', message: 'Restarting project…' });
+    setRestartStatus(null);
     setIframeLoading(true);
     setErrorGracePeriod(4000);
     setHasConfirmedPreview(false);
 
     try {
       await onRestartProject(project.id);
-      setRestartStatus({ type: 'success', message: 'Project restarted. Reloading preview…' });
+      setRestartStatus(null);
       scheduleReloadIframe();
     } catch (error) {
       const message = error?.message || 'Failed to restart project';
@@ -393,14 +440,14 @@ const PreviewTab = forwardRef(
 
   const handleStartProject = async () => {
     setStartInFlight(true);
-    setRestartStatus({ type: 'info', message: 'Starting project…' });
+    setRestartStatus(null);
     setIframeLoading(true);
     setErrorGracePeriod(4000);
     setHasConfirmedPreview(false);
 
     try {
       await onRestartProject(project.id);
-      setRestartStatus({ type: 'success', message: 'Project started. Loading preview…' });
+      setRestartStatus(null);
       scheduleReloadIframe();
     } catch (error) {
       const message = error?.message || 'Failed to start project';
@@ -458,14 +505,22 @@ const PreviewTab = forwardRef(
   }, [updateDisplayedUrlFromIframe]);
 
   const normalizedDisplayedUrl = displayedUrl || previewUrl || 'about:blank';
+  const shouldAttemptPreview =
+    !showNotRunningState &&
+    !isStartingProject &&
+    (isFrontendReadyForPreview || !isProcessInfoCurrent);
+  const effectivePreviewUrl = shouldAttemptPreview ? previewUrl : 'about:blank';
 
   const renderStatusBanner = () => (
-    restartStatus && (
+    restartStatus?.type === 'error' && (
       <div className={`preview-status ${restartStatus.type}`} data-testid="preview-status">
         {restartStatus.message}
       </div>
     )
   );
+
+  /* c8 ignore next */
+  const startLabel = startInFlight ? 'Starting…' : 'Start project';
 
   if (showNotRunningState) {
     return (
@@ -481,7 +536,7 @@ const PreviewTab = forwardRef(
               onClick={handleStartProject}
               disabled={startInFlight}
             >
-              {startInFlight ? 'Starting…' : 'Start project'}
+              {startLabel}
             </button>
           </div>
         </div>
@@ -557,6 +612,9 @@ const PreviewTab = forwardRef(
       <div className="preview-loading" data-testid="preview-loading">
         <div className="preview-loading-card">
           <h3>Loading preview…</h3>
+          <div className="preview-loading-bar" aria-hidden="true">
+            <span className="preview-loading-bar-swoosh" />
+          </div>
           <p className="expected-url">
             URL: <code>{normalizedDisplayedUrl}</code>
           </p>
@@ -593,7 +651,7 @@ const PreviewTab = forwardRef(
           data-testid="preview-iframe"
           className={`full-iframe${iframeLoading || pendingIframeError || !hasConfirmedPreview ? ' full-iframe--loading' : ''}`}
           key={iframeKey}
-          src={previewUrl}
+          src={effectivePreviewUrl}
           title={`${project?.name || 'Project'} Preview`}
           onError={handleIframeError}
           onLoad={handleIframeLoad}

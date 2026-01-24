@@ -168,6 +168,88 @@ describe('processGoal instruction-only goals', () => {
     expect(result).toEqual({ success: true, skippedReason: 'branch-only' });
     expect(args.setGoalCount).toHaveBeenCalledWith(0);
   });
+
+  test('uses Original request line when formatting completion label', async () => {
+    const args = defaultArgs();
+    const branchGoal = {
+      ...goal,
+      prompt: 'Please create a branch for QA validation\nOriginal request: Update button color'
+    };
+
+    const result = await processGoal(
+      branchGoal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      baseOptions
+    );
+
+    expect(result).toEqual({ success: true, skippedReason: 'branch-only' });
+    expect(args.createMessage).toHaveBeenCalledWith(
+      'assistant',
+      expect.stringContaining('Update button color'),
+      { variant: 'status' }
+    );
+  });
+
+  test('uses User answer line when formatting completion label', async () => {
+    const args = defaultArgs();
+    const stageGoal = {
+      ...goal,
+      prompt: 'Stage the updated files for review\nUser answer: Add a footer link'
+    };
+
+    const result = await processGoal(
+      stageGoal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      baseOptions
+    );
+
+    expect(result).toEqual({ success: true, skippedReason: 'stage-only' });
+    expect(args.createMessage).toHaveBeenCalledWith(
+      'assistant',
+      expect.stringContaining('Add a footer link'),
+      { variant: 'status' }
+    );
+  });
+
+  test('falls back to Goal label when title is whitespace', async () => {
+    const args = defaultArgs();
+    const branchGoal = {
+      ...goal,
+      title: '   ',
+      prompt: 'Please create a branch for QA validation'
+    };
+
+    const result = await processGoal(
+      branchGoal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      baseOptions
+    );
+
+    expect(result).toEqual({ success: true, skippedReason: 'branch-only' });
+    expect(args.createMessage).toHaveBeenCalledWith(
+      'assistant',
+      expect.stringContaining('Goal'),
+      { variant: 'status' }
+    );
+  });
 });
 
 describe('processGoal scope reflection handling', () => {

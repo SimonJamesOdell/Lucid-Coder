@@ -16,7 +16,6 @@ const buildContext = (overrides = {}) => ({
   cancelAutomationJob: vi.fn().mockResolvedValue({}),
   getJobsForProject: vi.fn().mockReturnValue([]),
   jobState: { isLoading: false, error: null, jobsByProject: {} },
-  refreshJobs: vi.fn().mockResolvedValue([]),
   workspaceChanges: {},
   workingBranches: {},
   syncBranchOverview: vi.fn(),
@@ -1639,10 +1638,7 @@ describe('TestTab', () => {
       expect(registerTestActions).toHaveBeenCalledWith(
         expect.objectContaining({
           lastFetchedAt,
-          refreshDisabled: false,
           cancelDisabled: true,
-          isRefreshing: false,
-          onRefresh: expect.any(Function),
           onCancelActiveRuns: expect.any(Function)
         })
       );
@@ -1912,26 +1908,6 @@ describe('TestTab', () => {
     expect(command).toHaveTextContent(/^npm\s*$/);
   });
 
-  test('registers refresh handler with parent actions', async () => {
-    const refreshJobs = vi.fn().mockResolvedValue([]);
-    const registerTestActions = vi.fn();
-    useAppState.mockReturnValue(buildContext({ refreshJobs }));
-
-    render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
-
-    await waitFor(() => {
-      expect(registerTestActions).toHaveBeenCalledWith(expect.objectContaining({ onRefresh: expect.any(Function) }));
-    });
-
-    const refreshPayload = registerTestActions.mock.calls
-      .map(([payload]) => payload)
-      .find((payload) => payload?.onRefresh);
-    expect(refreshPayload).toBeTruthy();
-
-    await refreshPayload.onRefresh();
-    expect(refreshJobs).toHaveBeenCalledWith(baseProject.id);
-  });
-
   test('registers cancel handler for active tests', async () => {
     const cancelAutomationJob = vi.fn().mockResolvedValue({});
     const getJobsForProject = vi.fn().mockReturnValue([
@@ -1975,33 +1951,11 @@ describe('TestTab', () => {
     const { unmount } = render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
 
     await waitFor(() => {
-      expect(registerTestActions).toHaveBeenCalledWith(expect.objectContaining({ onRefresh: expect.any(Function) }));
+      expect(registerTestActions).toHaveBeenCalledWith(expect.objectContaining({ onCancelActiveRuns: expect.any(Function) }));
     });
 
     unmount();
     expect(registerTestActions).toHaveBeenCalledWith(null);
-  });
-
-  test('surfacing refresh errors through registered handler', async () => {
-    const refreshJobs = vi.fn().mockRejectedValue(new Error('refresh failed'));
-    const registerTestActions = vi.fn();
-    useAppState.mockReturnValue(buildContext({ refreshJobs }));
-
-    render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
-
-    await waitFor(() => {
-      expect(registerTestActions).toHaveBeenCalledWith(expect.objectContaining({ onRefresh: expect.any(Function) }));
-    });
-
-    const refreshPayload = registerTestActions.mock.calls
-      .map(([payload]) => payload)
-      .find((payload) => payload?.onRefresh);
-
-    await act(async () => {
-      await refreshPayload.onRefresh();
-    });
-
-    expect(await screen.findByTestId('test-error-banner')).toHaveTextContent('refresh failed');
   });
 
   test('cancel handler ignores requests when nothing is running', async () => {
@@ -3530,6 +3484,227 @@ describe('TestTab', () => {
       expect(tempHooks.handleCancel).toBeUndefined();
 
       TestTab.__testHooks = originalHooks || {};
+    });
+  });
+
+  describe('Test optimization (shouldRunTest)', () => {
+    test('handleRun skips test when no files changed since last success', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const startAutomationJob = vi.fn();
+      const pastTime = new Date(Date.now() - 10000).toISOString();
+      
+      const workingBranches = {
+        [baseProject.id]: {
+          name: 'feature/test',
+          stagedFiles: [{ path: 'src/App.jsx', timestamp: new Date(Date.now() - 20000).toISOString() }]
+        }
+      };
+
+      useAppState.mockReturnValue(buildContext({
+        startAutomationJob,
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-passed',
+            type: 'frontend:test',
+            status: 'succeeded',
+            completedAt: pastTime,
+            logs: []
+          }
+        ])
+      }));
+
+      render(<TestTab project={baseProject} />);
+      const hooks = await waitForInstanceHooks();
+      
+      await act(async () => {
+        await hooks.handleRun('frontend:test');
+      });
+
+      expect(consoleSpy).toHaveBeenCalledWith('Skipping frontend:test - no file changes since last successful run');
+      expect(startAutomationJob).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('runAllTests skips all when no tests need to run', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const startAutomationJob = vi.fn();
+      const pastTime = new Date(Date.now() - 10000).toISOString();
+      
+      const workingBranches = {
+        [baseProject.id]: {
+          name: 'feature/test',
+          stagedFiles: [{ path: 'src/App.jsx', timestamp: new Date(Date.now() - 20000).toISOString() }]
+        }
+      };
+
+      useAppState.mockReturnValue(buildContext({
+        startAutomationJob,
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-passed',
+            type: 'frontend:test',
+            status: 'succeeded',
+            completedAt: pastTime,
+            logs: []
+          },
+          {
+            id: 'back-passed',
+            type: 'backend:test',
+            status: 'succeeded',
+            completedAt: pastTime,
+            logs: []
+          }
+        ])
+      }));
+
+      const registerTestActions = vi.fn();
+      render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
+
+      let runAllTests;
+      await waitFor(() => {
+        const payload = registerTestActions.mock.calls
+          .map(([value]) => value)
+          .find((value) => value && typeof value.runAllTests === 'function');
+        runAllTests = payload?.runAllTests;
+        expect(runAllTests).toBeTruthy();
+      });
+
+      await act(async () => {
+        await runAllTests();
+      });
+
+      expect(consoleSpy).toHaveBeenCalledWith('All tests previously succeeded with no file changes - skipping test runs');
+      expect(startAutomationJob).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('runAllTests runs subset when some tests need to run', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const startAutomationJob = vi.fn().mockResolvedValue({});
+      const markTestRunIntent = vi.fn();
+      const pastTime = new Date(Date.now() - 10000).toISOString();
+      const futureTime = new Date(Date.now() + 10000).toISOString();
+      
+      const workingBranches = {
+        [baseProject.id]: {
+          name: 'feature/test',
+          stagedFiles: [{ path: 'src/App.jsx', timestamp: futureTime }]
+        }
+      };
+
+      useAppState.mockReturnValue(buildContext({
+        startAutomationJob,
+        markTestRunIntent,
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-passed',
+            type: 'frontend:test',
+            status: 'succeeded',
+            completedAt: pastTime,
+            logs: []
+          },
+          {
+            id: 'back-passed',
+            type: 'backend:test',
+            status: 'succeeded',
+            completedAt: futureTime,
+            logs: []
+          }
+        ])
+      }));
+
+      const registerTestActions = vi.fn();
+      render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
+
+      let runAllTests;
+      await waitFor(() => {
+        const payload = registerTestActions.mock.calls
+          .map(([value]) => value)
+          .find((value) => value && typeof value.runAllTests === 'function');
+        runAllTests = payload?.runAllTests;
+        expect(runAllTests).toBeTruthy();
+      });
+
+      await act(async () => {
+        await runAllTests();
+      });
+
+      expect(consoleSpy).toHaveBeenCalledWith('Running 1 of 2 test suites (others already passed with no changes)');
+      expect(startAutomationJob).toHaveBeenCalledTimes(1);
+      expect(startAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: baseProject.id });
+      consoleSpy.mockRestore();
+    });
+
+    test('handleRun runs test when completedAt is missing', async () => {
+      const startAutomationJob = vi.fn().mockResolvedValue({});
+      
+      const workingBranches = {
+        [baseProject.id]: {
+          name: 'feature/test',
+          stagedFiles: [{ path: 'src/App.jsx', timestamp: new Date(Date.now() - 20000).toISOString() }]
+        }
+      };
+
+      useAppState.mockReturnValue(buildContext({
+        startAutomationJob,
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-passed',
+            type: 'frontend:test',
+            status: 'succeeded',
+            // No completedAt timestamp
+            logs: []
+          }
+        ])
+      }));
+
+      render(<TestTab project={baseProject} />);
+      const hooks = await waitForInstanceHooks();
+      
+      await act(async () => {
+        await hooks.handleRun('frontend:test');
+      });
+
+      expect(startAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: baseProject.id });
+    });
+
+    test('handleRun runs test when a staged file timestamp is missing', async () => {
+      const startAutomationJob = vi.fn().mockResolvedValue({});
+      const pastTime = new Date(1).toISOString();
+
+      const workingBranches = {
+        [baseProject.id]: {
+          name: 'feature/test',
+          stagedFiles: [{ path: 'src/App.jsx' }]
+        }
+      };
+
+      useAppState.mockReturnValue(buildContext({
+        startAutomationJob,
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-passed',
+            type: 'frontend:test',
+            status: 'succeeded',
+            completedAt: pastTime,
+            logs: []
+          }
+        ])
+      }));
+
+      render(<TestTab project={baseProject} />);
+      const hooks = await waitForInstanceHooks();
+
+      await act(async () => {
+        await hooks.handleRun('frontend:test');
+      });
+
+      expect(startAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: baseProject.id });
     });
   });
 });

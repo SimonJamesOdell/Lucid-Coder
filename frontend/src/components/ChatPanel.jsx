@@ -1193,20 +1193,28 @@ const ChatPanel = ({
             {side === 'left' ? (
               <svg
                 className="chat-toggle-icon"
+                width="16"
+                height="16"
                 viewBox="0 0 16 16"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
                 aria-hidden="true"
                 focusable="false"
               >
-                <path d="M5 3.5a.5.5 0 0 1 .8-.4l6 4.5a.5.5 0 0 1 0 .8l-6 4.5a.5.5 0 0 1-.8-.4z" />
+                <path d="M6 4L10 8L6 12V4Z" fill="currentColor"/>
               </svg>
             ) : (
               <svg
                 className="chat-toggle-icon"
+                width="16"
+                height="16"
                 viewBox="0 0 16 16"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
                 aria-hidden="true"
                 focusable="false"
               >
-                <path d="M11 3.5a.5.5 0 0 0-.8-.4l-6 4.5a.5.5 0 0 0 0 .8l6 4.5a.5.5 0 0 0 .8-.4z" />
+                <path d="M10 4L6 8L10 12V4Z" fill="currentColor"/>
               </svg>
             )}
           </button>
@@ -1262,7 +1270,9 @@ const ChatPanel = ({
           onClick={scrollMessagesToBottom}
           aria-label="Scroll to latest message"
         >
-          Scroll to bottom
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 12L3 7L4.4 5.6L8 9.2L11.6 5.6L13 7L8 12Z" fill="currentColor"/>
+          </svg>
         </button>
       ) : null}
 

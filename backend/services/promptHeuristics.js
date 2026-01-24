@@ -1,7 +1,34 @@
 const normalizePrompt = (prompt = '') => String(prompt || '').trim().toLowerCase();
 
+const extractLatestRequest = (prompt = '') => {
+  const raw = String(prompt || '');
+  if (!raw) return raw;
+
+  const lines = raw.split(/\r?\n/).map((line) => line.trim());
+  const findValueAfterPrefix = (prefix) => {
+    for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
+      const line = lines[idx];
+      if (line.toLowerCase().startsWith(prefix.toLowerCase())) {
+        return line.slice(prefix.length).trim();
+      }
+    }
+    return '';
+  };
+
+  const current = findValueAfterPrefix('Current request:');
+  if (current) return current;
+
+  const answer = findValueAfterPrefix('User answer:');
+  if (answer) return answer;
+
+  const original = findValueAfterPrefix('Original request:');
+  if (original) return original;
+
+  return raw;
+};
+
 export const isStyleOnlyPrompt = (prompt = '') => {
-  const text = normalizePrompt(prompt);
+  const text = normalizePrompt(extractLatestRequest(prompt));
   if (!text) return false;
 
   // Positive signals for style-only changes.
@@ -68,7 +95,7 @@ const COLOR_PHRASE_REGEX = new RegExp(
 );
 
 export const extractStyleColor = (prompt = '') => {
-  const raw = String(prompt || '');
+  const raw = extractLatestRequest(prompt);
   const text = normalizePrompt(raw);
   if (!text) {
     return null;

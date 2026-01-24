@@ -26,6 +26,7 @@ export const selectProjectWithProcesses = async ({
   applyProcessSnapshot,
   refreshProcessStatus
 }) => {
+  let started = false;
   const getUiSessionId = () => {
     if (typeof window === 'undefined') {
       return null;
@@ -44,7 +45,7 @@ export const selectProjectWithProcesses = async ({
   };
 
   if (!project) {
-    return;
+    return false;
   }
 
   if (currentProject && currentProject.id !== project.id) {
@@ -78,6 +79,7 @@ export const selectProjectWithProcesses = async ({
       } catch (statusError) {
         console.warn('Failed to refresh process status after start:', statusError);
       }
+      started = true;
     } catch (error) {
       if (error.message.includes('Failed to fetch') || error.message.includes('fetch')) {
         console.warn(
@@ -105,6 +107,8 @@ export const selectProjectWithProcesses = async ({
       }
     }
   }
+
+  return started;
 };
 
 export const closeProjectWithProcesses = async ({

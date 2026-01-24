@@ -29,7 +29,8 @@ const PreviewPanel = () => {
     restartProject,
     stopProjectProcess,
     editorFocusRequest,
-    reportBackendConnectivity
+    reportBackendConnectivity,
+    stoppedProjects
   } = useAppState();
   const previewRef = useRef(null);
   const pendingPreviewReloadRef = useRef(false);
@@ -38,13 +39,26 @@ const PreviewPanel = () => {
   const [branchActions, setBranchActions] = useState(null);
   const pendingTestRunRef = useRef(null);
   const activeTab = previewPanelState?.activeTab || localActiveTab;
+  const validTabsRef = useRef(new Set([
+    'preview',
+    'goals',
+    'files',
+    'test',
+    'branch',
+    'commits',
+    'git',
+    'processes',
+    'packages',
+    'llm-usage'
+  ]));
+  const safeActiveTab = validTabsRef.current.has(activeTab) ? activeTab : 'preview';
   const followAutomation =
     typeof previewPanelState?.followAutomation === 'boolean'
       ? previewPanelState.followAutomation
       : localFollowAutomation;
-  const commitsAutofillContextRef = useRef({ tab: activeTab, projectId: currentProject?.id ?? null });
+  const commitsAutofillContextRef = useRef({ tab: safeActiveTab, projectId: currentProject?.id ?? null });
   const followAutomationRef = useRef(Boolean(followAutomation));
-  const activeTabRef = useRef(activeTab);
+  const activeTabRef = useRef(safeActiveTab);
   const branchActionsRef = useRef(branchActions);
   const testActionsRef = useRef(testActions);
   const projectIdRef = useRef(currentProject?.id ?? null);
@@ -103,8 +117,12 @@ const PreviewPanel = () => {
   }, [followAutomation]);
 
   useEffect(() => {
+    if (!validTabsRef.current.has(activeTab)) {
+      setActiveTab('preview', { source: 'system' });
+      return;
+    }
     activeTabRef.current = activeTab;
-  }, [activeTab]);
+  }, [activeTab, setActiveTab]);
 
   useEffect(() => {
     branchActionsRef.current = branchActions;
@@ -121,15 +139,15 @@ const PreviewPanel = () => {
   useEffect(() => {
     const projectId = currentProject?.id ?? null;
     const previousContext = commitsAutofillContextRef.current;
-    const shouldRequestAutofill = activeTab === 'commits'
+    const shouldRequestAutofill = safeActiveTab === 'commits'
       && (previousContext.tab !== 'commits' || previousContext.projectId !== projectId);
 
-    commitsAutofillContextRef.current = { tab: activeTab, projectId };
+    commitsAutofillContextRef.current = { tab: safeActiveTab, projectId };
 
     if (shouldRequestAutofill) {
       setCommitsAutofillRequestId((current) => (typeof current === 'number' ? current + 1 : 1));
     }
-  }, [activeTab, currentProject?.id]);
+  }, [safeActiveTab, currentProject?.id]);
 
   useEffect(() => {
     if (PreviewPanel.__testHooks) {
@@ -154,13 +172,13 @@ const PreviewPanel = () => {
     };
   }, [setActiveTab, focusLatestStagedFile]);
 
-  const isPreviewActive = activeTab === 'preview';
-  const isGoalsActive = activeTab === 'goals';
-  const isFilesActive = activeTab === 'files';
-  const isTestActive = activeTab === 'test';
-  const isBranchActive = activeTab === 'branch';
-  const isCommitsActive = activeTab === 'commits';
-  const isPackagesActive = activeTab === 'packages';
+  const isPreviewActive = safeActiveTab === 'preview';
+  const isGoalsActive = safeActiveTab === 'goals';
+  const isFilesActive = safeActiveTab === 'files';
+  const isTestActive = safeActiveTab === 'test';
+  const isBranchActive = safeActiveTab === 'branch';
+  const isCommitsActive = safeActiveTab === 'commits';
+  const isPackagesActive = safeActiveTab === 'packages';
 
   const handleRegisterFilesSave = useCallback((payload) => {
     if (payload) {
@@ -522,8 +540,6 @@ const PreviewPanel = () => {
         );
       case 'llm-usage':
         return <LLMUsageTab />;
-      default:
-        return null;
     }
   };
 
@@ -665,24 +681,6 @@ const PreviewPanel = () => {
           )}
           {isTestActive && (
             <>
-              <button
-                type="button"
-                className="preview-action-button"
-                onClick={testActions?.onRefresh}
-                disabled={!currentProject || !testActions || testActions.refreshDisabled}
-                data-testid="test-refresh-button"
-              >
-                {testActions?.isRefreshing ? 'Refreshing…' : 'Refresh'}
-              </button>
-              <button
-                type="button"
-                className="preview-action-button"
-                onClick={testActions?.onCancelActiveRuns}
-                disabled={!currentProject || !testActions || testActions.cancelDisabled}
-                data-testid="test-cancel-button"
-              >
-                Cancel Active Run
-              </button>
             </>
           )}
           {isBranchActive && (
@@ -701,6 +699,7 @@ const PreviewPanel = () => {
             project={currentProject}
             processInfo={projectProcesses}
             onRestartProject={restartProject}
+            isProjectStopped={Boolean(currentProject?.id && stoppedProjects?.[currentProject.id])}
           />
         </div>
         <div className={`tab-pane ${isGoalsActive ? 'is-active' : 'is-hidden'}`}>

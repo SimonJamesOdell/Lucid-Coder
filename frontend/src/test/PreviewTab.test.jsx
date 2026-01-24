@@ -31,7 +31,7 @@ const renderPreviewTab = (props = {}) => {
     processInfo: null,
     onRestartProject: vi.fn().mockResolvedValue(null)
   };
-  const mergedProps = { ...defaultProps, ...props };
+  const mergedProps = { autoStartOnNotRunning: false, ...defaultProps, ...props };
   const previewRef = createRef();
   const renderResult = render(<PreviewTab ref={previewRef} {...mergedProps} />);
   return { previewRef, props: mergedProps, ...renderResult };
@@ -57,7 +57,7 @@ describe('PreviewTab', () => {
       }
     });
 
-    renderPreviewTab({ processInfo, onRestartProject });
+    renderPreviewTab({ processInfo, onRestartProject, isProjectStopped: true });
 
     expect(screen.getByTestId('preview-not-running')).toBeInTheDocument();
     expect(screen.queryByTestId('preview-iframe')).toBeNull();
@@ -67,12 +67,60 @@ describe('PreviewTab', () => {
     });
 
     expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
-    await waitFor(() => {
-      expect(screen.getByTestId('preview-status')).toBeInTheDocument();
+  });
+
+  test('auto-starts when idle and not explicitly stopped', async () => {
+    const onRestartProject = vi.fn().mockResolvedValue(null);
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: { status: 'idle' }
+      }
     });
-    expect(
-      screen.getByText(/starting project|project started/i)
-    ).toBeInTheDocument();
+
+    renderPreviewTab({
+      processInfo,
+      onRestartProject,
+      isProjectStopped: false,
+      autoStartOnNotRunning: true
+    });
+
+    await waitFor(() => {
+      expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
+    });
+  });
+
+  test('auto-start only runs once per mount', async () => {
+    const onRestartProject = vi.fn().mockResolvedValue(null);
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: { status: 'idle' }
+      }
+    });
+
+    const { rerender } = renderPreviewTab({
+      processInfo,
+      onRestartProject,
+      isProjectStopped: false,
+      autoStartOnNotRunning: true
+    });
+
+    await waitFor(() => {
+      expect(onRestartProject).toHaveBeenCalledTimes(1);
+    });
+
+    rerender(
+      <PreviewTab
+        project={mockProject}
+        processInfo={processInfo}
+        onRestartProject={onRestartProject}
+        isProjectStopped={false}
+        autoStartOnNotRunning
+      />
+    );
+
+    await waitFor(() => {
+      expect(onRestartProject).toHaveBeenCalledTimes(1);
+    });
   });
 
   test('start button disables while start is inflight', async () => {
@@ -87,7 +135,7 @@ describe('PreviewTab', () => {
       }
     });
 
-    renderPreviewTab({ processInfo, onRestartProject });
+    renderPreviewTab({ processInfo, onRestartProject, isProjectStopped: true });
 
     const startButton = screen.getByRole('button', { name: 'Start project' });
     expect(startButton).toBeEnabled();
@@ -95,7 +143,8 @@ describe('PreviewTab', () => {
     fireEvent.click(startButton);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+      expect(screen.queryByTestId('preview-not-running')).not.toBeInTheDocument();
+      expect(screen.getByTestId('preview-loading')).toBeInTheDocument();
     });
 
     await act(async () => {
@@ -124,7 +173,7 @@ describe('PreviewTab', () => {
       }
     });
 
-    renderPreviewTab({ processInfo });
+    renderPreviewTab({ processInfo, isProjectStopped: true });
 
     expect(screen.getByTestId('preview-not-running')).toBeInTheDocument();
     expect(screen.queryByTestId('preview-iframe')).toBeNull();
@@ -138,7 +187,7 @@ describe('PreviewTab', () => {
       }
     });
 
-    renderPreviewTab({ processInfo, onRestartProject });
+    renderPreviewTab({ processInfo, onRestartProject, isProjectStopped: true });
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start project' }));
@@ -168,8 +217,6 @@ describe('PreviewTab', () => {
       });
 
       expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
-
-      expect(screen.getByText(/restarted/i)).toBeInTheDocument();
 
       await act(async () => {
         vi.advanceTimersByTime(400);

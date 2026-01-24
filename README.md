@@ -1,6 +1,6 @@
 # LucidCoder
 
-Version: 0.2.2
+Version: 0.2.3
 
 LucidCoder is a fullstack system for orchestrating goal-driven coding workflows. The frontend provides a rich React UI and the backend exposes REST and Socket.IO APIs for projects, goals, agents, and test execution.
 
