@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.5 (Unreleased)
+- (No changes yet.)
+
 ## 0.2.4 (2026-01-25)
 - Hardened preview proxy routing (dev assets + Vite HMR websockets) and expanded coverage for those paths.
 - Improved branch workflow automation and scaffolding behavior with additional backend test coverage.
