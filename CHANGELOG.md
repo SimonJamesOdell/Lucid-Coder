@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.6 (Unreleased)
+- (No changes yet.)
+
 ## 0.2.5 (2026-01-25)
 - Added best-effort preview auto-restart after repeated proxy connection failures (primarily iframe/HTML navigation).
 - Improved preview proxy error placeholder UX and stabilized detection via consistent page title.
