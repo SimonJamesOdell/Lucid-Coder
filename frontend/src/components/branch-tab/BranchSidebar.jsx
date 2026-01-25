@@ -2,7 +2,6 @@ import React from 'react';
 import { formatStatus, safeTestId, deriveDisplayStatus } from './utils';
 
 const BranchSidebar = ({
-  projectName,
   branchSummaries,
   sortedBranches,
   workingBranchMap,
@@ -13,7 +12,6 @@ const BranchSidebar = ({
     <div className="panel-header">
       <div>
         <p className="panel-eyebrow">Branches</p>
-        <h4>{projectName || 'Active project'}</h4>
       </div>
       <span className="panel-count">{branchSummaries.length} total</span>
     </div>

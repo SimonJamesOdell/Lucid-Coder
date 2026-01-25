@@ -1,6 +1,6 @@
 {
   "name": "lucidcoder-fullstack",
-  "version": "0.1.0",
+  "version": "0.2.4",
   "description": "A fullstack React + Vite / Node.js + Express application",
   "scripts": {
     "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install",

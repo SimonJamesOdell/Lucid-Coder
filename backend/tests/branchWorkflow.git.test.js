@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
 
 const createGitSpies = (gitModule, overrides = {}) => {
   const spy = (method, fallback) => {
@@ -2066,6 +2069,805 @@ describe('branchWorkflow git-ready operations', () => {
       });
       expect(attemptedMerge).toBe(true);
     });
+  });
+
+  it('bumps VERSION and rolls changelog entries after merging to main', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-24T12:00:00Z'));
+
+    const targetPath = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-merge-bump-'));
+
+    try {
+      const changelogText = [
+        '# Changelog',
+        '',
+        '## Unreleased',
+        '',
+        '- Add merge bump test coverage',
+        '',
+        '## 0.1.0 (2026-01-01)',
+        '',
+        '- Initial scaffold'
+      ].join('\n');
+
+      await fs.writeFile(path.join(targetPath, 'VERSION'), '0.1.0\n', 'utf8');
+      await fs.writeFile(path.join(targetPath, 'CHANGELOG.md'), changelogText + '\n', 'utf8');
+
+      await fs.mkdir(path.join(targetPath, 'frontend'), { recursive: true });
+      await fs.mkdir(path.join(targetPath, 'backend'), { recursive: true });
+
+      await fs.writeFile(
+        path.join(targetPath, 'frontend', 'package.json'),
+        JSON.stringify({ name: 'frontend', version: '0.1.0' }, null, 2) + '\n',
+        'utf8'
+      );
+      await fs.writeFile(
+        path.join(targetPath, 'backend', 'package.json'),
+        JSON.stringify({ name: 'backend', version: '0.1.0' }, null, 2) + '\n',
+        'utf8'
+      );
+
+      let headSha = 'sha-main-0';
+      const mergedBranches = new Set();
+
+      await runGitScenario(
+        async ({ branchWorkflow, createProject, forceGitContext, gitSpies }) => {
+          const project = await createProject({
+            ...createProjectPayload('-merge-bump'),
+            path: targetPath
+          });
+          forceGitContext(project.id, targetPath);
+
+          const branchName = 'feature/merge-bump';
+          await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+          const branchRow = await branchWorkflow.__testing.getSql(
+            'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+            [project.id, branchName]
+          );
+
+          await branchWorkflow.__testing.runSql(
+            'UPDATE branches SET status = ? WHERE id = ?',
+            ['ready-for-merge', branchRow.id]
+          );
+
+          await branchWorkflow.__testing.runSql(
+            `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+             VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+            [project.id, branchRow.id]
+          );
+
+          const result = await branchWorkflow.mergeBranch(project.id, branchName);
+          expect(result).toMatchObject({ mergedBranch: branchName, current: 'main' });
+
+          const mergedRow = await branchWorkflow.__testing.getSql(
+            'SELECT status FROM branches WHERE project_id = ? AND name = ?',
+            [project.id, branchName]
+          );
+          expect(mergedRow?.status).toBe('merged');
+
+          const versionAfter = (await fs.readFile(path.join(targetPath, 'VERSION'), 'utf8')).trim();
+          expect(versionAfter).toBe('0.1.1');
+
+          const changelogAfter = await fs.readFile(path.join(targetPath, 'CHANGELOG.md'), 'utf8');
+          expect(changelogAfter).toMatch(/##\s+0\.1\.1\s+\(2026-01-24\)/);
+          expect(changelogAfter).toMatch(/- Add merge bump test coverage/);
+
+          const frontendPkg = JSON.parse(await fs.readFile(path.join(targetPath, 'frontend', 'package.json'), 'utf8'));
+          const backendPkg = JSON.parse(await fs.readFile(path.join(targetPath, 'backend', 'package.json'), 'utf8'));
+          expect(frontendPkg.version).toBe('0.1.1');
+          expect(backendPkg.version).toBe('0.1.1');
+
+          const bumpCommitCall = gitSpies.runGitCommand.mock.calls.find((call) => {
+            const [, args] = call;
+            return Array.isArray(args)
+              && args[0] === 'commit'
+              && args[1] === '-m'
+              && String(args[2] || '').includes('chore: bump version to 0.1.1');
+          });
+          expect(bumpCommitCall).toBeTruthy();
+        },
+        {
+          gitOverrides: {
+            runGitCommand: async (cwd, args = []) => {
+              if (cwd !== targetPath || !Array.isArray(args)) {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              // Changelog enforcement
+              if (args[0] === 'show' && typeof args[1] === 'string' && /:CHANGELOG\.md$/.test(args[1])) {
+                return { stdout: changelogText + '\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'diff' && args[1] === '--name-only' && typeof args[2] === 'string') {
+                // listBranchChangedPaths() uses: diff --name-only main..branch
+                if (args[2].startsWith('main..')) {
+                  return { stdout: 'CHANGELOG.md\n', stderr: '', code: 0 };
+                }
+              }
+
+              // Merge workflow
+              if (args[0] === 'status' && args[1] === '--porcelain') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref' && args[2] === 'HEAD') {
+                return { stdout: 'main\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+                return { stdout: `${headSha}\n`, stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'show-ref' && args[1] === '--verify') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'checkout' && args[1] === '-b') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'checkout') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'merge' && args[1] === '--no-ff' && typeof args[2] === 'string') {
+                mergedBranches.add(args[2]);
+                headSha = `sha-main-merged-${mergedBranches.size}`;
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'add') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'commit' && args[1] === '-m') {
+                headSha = `sha-main-bump-${Date.now()}`;
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              return { stdout: '', stderr: '', code: 0 };
+            }
+          }
+        }
+      );
+    } finally {
+      await fs.rm(targetPath, { recursive: true, force: true }).catch(() => null);
+      vi.useRealTimers();
+    }
+  });
+
+  it('continues merge when pre-merge HEAD sha cannot be resolved', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-24T12:00:00Z'));
+
+    const targetPath = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-merge-nopre-'));
+
+    try {
+      const changelogText = [
+        '# Changelog',
+        '',
+        '## Unreleased',
+        '',
+        '- Ensure pre-merge sha fallback is covered'
+      ].join('\n');
+
+      await fs.writeFile(path.join(targetPath, 'VERSION'), '0.1.0\n', 'utf8');
+      await fs.writeFile(path.join(targetPath, 'CHANGELOG.md'), changelogText + '\n', 'utf8');
+
+      let headSha = 'sha-main-0';
+      let preMergeRevParseShouldThrow = true;
+
+      await runGitScenario(
+        async ({ branchWorkflow, createProject, forceGitContext }) => {
+          const project = await createProject({
+            ...createProjectPayload('-merge-nopre'),
+            path: targetPath
+          });
+          forceGitContext(project.id, targetPath);
+
+          const branchName = 'feature/premerge-sha-fails';
+          await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+          const branchRow = await branchWorkflow.__testing.getSql(
+            'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+            [project.id, branchName]
+          );
+
+          await branchWorkflow.__testing.runSql('UPDATE branches SET status = ? WHERE id = ?', ['ready-for-merge', branchRow.id]);
+          await branchWorkflow.__testing.runSql(
+            `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+             VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+            [project.id, branchRow.id]
+          );
+
+          const result = await branchWorkflow.mergeBranch(project.id, branchName);
+          expect(result).toMatchObject({ mergedBranch: branchName, current: 'main' });
+
+          const versionAfter = (await fs.readFile(path.join(targetPath, 'VERSION'), 'utf8')).trim();
+          expect(versionAfter).toBe('0.1.1');
+        },
+        {
+          gitOverrides: {
+            runGitCommand: async (cwd, args = []) => {
+              if (cwd !== targetPath || !Array.isArray(args)) {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'show' && typeof args[1] === 'string' && /:CHANGELOG\.md$/.test(args[1])) {
+                return { stdout: changelogText + '\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'diff' && args[1] === '--name-only' && typeof args[2] === 'string' && args[2].startsWith('main..')) {
+                return { stdout: 'CHANGELOG.md\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'status' && args[1] === '--porcelain') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref' && args[2] === 'HEAD') {
+                return { stdout: 'main\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+                if (preMergeRevParseShouldThrow) {
+                  preMergeRevParseShouldThrow = false;
+                  throw new Error('rev-parse HEAD failed');
+                }
+                return { stdout: `${headSha}\n`, stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'show-ref' && args[1] === '--verify') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'checkout') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'merge') {
+                headSha = `sha-main-merged-${Date.now()}`;
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'add') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'commit') {
+                headSha = `sha-main-bump-${Date.now()}`;
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              return { stdout: '', stderr: '', code: 0 };
+            }
+          }
+        }
+      );
+    } finally {
+      await fs.rm(targetPath, { recursive: true, force: true }).catch(() => null);
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets main to pre-merge sha when version bump commit fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-24T12:00:00Z'));
+
+    const targetPath = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-merge-reset-'));
+
+    try {
+      const changelogText = [
+        '# Changelog',
+        '',
+        '## Unreleased',
+        '',
+        '- Force bump failure to cover reset'
+      ].join('\n');
+
+      await fs.writeFile(path.join(targetPath, 'VERSION'), '0.1.0\n', 'utf8');
+      await fs.writeFile(path.join(targetPath, 'CHANGELOG.md'), changelogText + '\n', 'utf8');
+
+      const preMergeSha = 'sha-main-pre-merge';
+      let sawReset = false;
+
+      await runGitScenario(
+        async ({ branchWorkflow, createProject, forceGitContext }) => {
+          const project = await createProject({
+            ...createProjectPayload('-merge-reset'),
+            path: targetPath
+          });
+          forceGitContext(project.id, targetPath);
+
+          const branchName = 'feature/bump-fails';
+          await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+          const branchRow = await branchWorkflow.__testing.getSql(
+            'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+            [project.id, branchName]
+          );
+
+          await branchWorkflow.__testing.runSql('UPDATE branches SET status = ? WHERE id = ?', ['ready-for-merge', branchRow.id]);
+          await branchWorkflow.__testing.runSql(
+            `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+             VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+            [project.id, branchRow.id]
+          );
+
+          const err = await branchWorkflow.mergeBranch(project.id, branchName).then(() => null).catch((e) => e);
+          expect(err).toBeTruthy();
+          expect(err).toMatchObject({ statusCode: 500 });
+          expect(String(err.message || '')).toMatch(/Failed to bump version after merge/i);
+          expect(sawReset).toBe(true);
+        },
+        {
+          gitOverrides: {
+            runGitCommand: async (cwd, args = []) => {
+              if (cwd !== targetPath || !Array.isArray(args)) {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'show' && typeof args[1] === 'string' && /:CHANGELOG\.md$/.test(args[1])) {
+                return { stdout: changelogText + '\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'diff' && args[1] === '--name-only' && typeof args[2] === 'string' && args[2].startsWith('main..')) {
+                return { stdout: 'CHANGELOG.md\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'status' && args[1] === '--porcelain') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref' && args[2] === 'HEAD') {
+                return { stdout: 'main\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+                return { stdout: `${preMergeSha}\n`, stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'show-ref' && args[1] === '--verify') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'checkout') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'merge') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'add') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'commit' && args[1] === '-m' && String(args[2] || '').startsWith('chore: bump version to')) {
+                throw new Error('commit failed');
+              }
+
+              if (args[0] === 'reset' && args[1] === '--hard' && args[2] === preMergeSha) {
+                sawReset = true;
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              return { stdout: '', stderr: '', code: 0 };
+            }
+          }
+        }
+      );
+    } finally {
+      await fs.rm(targetPath, { recursive: true, force: true }).catch(() => null);
+      vi.useRealTimers();
+    }
+  });
+
+  it('bumps version even if the on-disk changelog lacks an Unreleased heading (enforcement skipped)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-24T12:00:00Z'));
+
+    const targetPath = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-merge-no-unreleased-'));
+
+    try {
+      const onDiskChangelog = [
+        '# Changelog',
+        '',
+        '## 0.1.0 (2026-01-01)',
+        '',
+        '- Initial scaffold'
+      ].join('\n');
+
+      await fs.writeFile(path.join(targetPath, 'VERSION'), '0.1.0\n', 'utf8');
+      await fs.writeFile(path.join(targetPath, 'CHANGELOG.md'), onDiskChangelog + '\n', 'utf8');
+
+      // Git-probed changelog is empty -> enforcement returns early.
+      const gitChangelogText = '';
+
+      await runGitScenario(
+        async ({ branchWorkflow, createProject, forceGitContext }) => {
+          const project = await createProject({
+            ...createProjectPayload('-merge-no-unreleased'),
+            path: targetPath
+          });
+          forceGitContext(project.id, targetPath);
+
+          const branchName = 'feature/no-unreleased';
+          await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+          const branchRow = await branchWorkflow.__testing.getSql(
+            'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+            [project.id, branchName]
+          );
+
+          await branchWorkflow.__testing.runSql('UPDATE branches SET status = ? WHERE id = ?', ['ready-for-merge', branchRow.id]);
+          await branchWorkflow.__testing.runSql(
+            `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+             VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+            [project.id, branchRow.id]
+          );
+
+          const result = await branchWorkflow.mergeBranch(project.id, branchName);
+          expect(result).toMatchObject({ mergedBranch: branchName, current: 'main' });
+
+          const versionAfter = (await fs.readFile(path.join(targetPath, 'VERSION'), 'utf8')).trim();
+          expect(versionAfter).toBe('0.1.1');
+
+          const changelogAfter = await fs.readFile(path.join(targetPath, 'CHANGELOG.md'), 'utf8');
+          // No Unreleased section means we don't inject a new section; we just preserve content.
+          expect(changelogAfter).toContain('## 0.1.0 (2026-01-01)');
+        },
+        {
+          gitOverrides: {
+            runGitCommand: async (cwd, args = []) => {
+              if (cwd !== targetPath || !Array.isArray(args)) {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'show' && typeof args[1] === 'string' && /:CHANGELOG\.md$/.test(args[1])) {
+                return { stdout: gitChangelogText, stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'status' && args[1] === '--porcelain') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse') {
+                return { stdout: 'sha\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'show-ref') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'checkout' || args[0] === 'merge' || args[0] === 'add' || args[0] === 'commit') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              return { stdout: '', stderr: '', code: 0 };
+            }
+          }
+        }
+      );
+    } finally {
+      await fs.rm(targetPath, { recursive: true, force: true }).catch(() => null);
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects merges when branch is not ready-for-merge and not css-only', async () => {
+    const targetPath = `C:/tmp/git-merge-not-ready-${Date.now()}`;
+
+    await runGitScenario(
+      async ({ branchWorkflow, createProject, forceGitContext }) => {
+        const project = await createProject({
+          ...createProjectPayload('-merge-not-ready'),
+          path: targetPath
+        });
+        forceGitContext(project.id, targetPath);
+
+        const branchName = 'feature/not-ready';
+        await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+        const branchRow = await branchWorkflow.__testing.getSql(
+          'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+          [project.id, branchName]
+        );
+
+        // Keep status as "active" (default from createWorkingBranch).
+        await branchWorkflow.__testing.runSql(
+          `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+           VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [project.id, branchRow.id]
+        );
+
+        const error = await branchWorkflow.mergeBranch(project.id, branchName).then(() => null).catch((e) => e);
+        expect(error).toBeTruthy();
+        expect(error).toMatchObject({ statusCode: 400 });
+        expect(String(error.message || '')).toMatch(/Branch must pass tests before merging/i);
+      },
+      {
+        gitOverrides: {
+          runGitCommand: async () => ({ stdout: '' })
+        }
+      }
+    );
+  });
+
+  it('rejects merges when the latest test run is missing', async () => {
+    const targetPath = `C:/tmp/git-merge-missing-test-${Date.now()}`;
+
+    await runGitScenario(
+      async ({ branchWorkflow, createProject, forceGitContext }) => {
+        const project = await createProject({
+          ...createProjectPayload('-merge-missing-test'),
+          path: targetPath
+        });
+        forceGitContext(project.id, targetPath);
+
+        const branchName = 'feature/missing-test';
+        await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+        const branchRow = await branchWorkflow.__testing.getSql(
+          'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+          [project.id, branchName]
+        );
+
+        await branchWorkflow.__testing.runSql('UPDATE branches SET status = ? WHERE id = ?', ['ready-for-merge', branchRow.id]);
+
+        // Intentionally do NOT insert a test_runs row.
+        const error = await branchWorkflow.mergeBranch(project.id, branchName).then(() => null).catch((e) => e);
+        expect(error).toBeTruthy();
+        expect(error).toMatchObject({ statusCode: 400 });
+        expect(String(error.message || '')).toMatch(/Latest test run must pass/i);
+      },
+      {
+        gitOverrides: {
+          runGitCommand: async () => ({ stdout: '' })
+        }
+      }
+    );
+  });
+
+  it('rejects merges when the latest test run failed', async () => {
+    const targetPath = `C:/tmp/git-merge-failed-test-${Date.now()}`;
+
+    await runGitScenario(
+      async ({ branchWorkflow, createProject, forceGitContext }) => {
+        const project = await createProject({
+          ...createProjectPayload('-merge-failed-test'),
+          path: targetPath
+        });
+        forceGitContext(project.id, targetPath);
+
+        const branchName = 'feature/failed-test';
+        await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+        const branchRow = await branchWorkflow.__testing.getSql(
+          'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+          [project.id, branchName]
+        );
+
+        await branchWorkflow.__testing.runSql('UPDATE branches SET status = ? WHERE id = ?', ['ready-for-merge', branchRow.id]);
+        await branchWorkflow.__testing.runSql(
+          `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+           VALUES (?, ?, 'failed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [project.id, branchRow.id]
+        );
+
+        const error = await branchWorkflow.mergeBranch(project.id, branchName).then(() => null).catch((e) => e);
+        expect(error).toBeTruthy();
+        expect(error).toMatchObject({ statusCode: 400 });
+        expect(String(error.message || '')).toMatch(/Latest test run must pass/i);
+      },
+      {
+        gitOverrides: {
+          runGitCommand: async () => ({ stdout: '' })
+        }
+      }
+    );
+  });
+
+  it('enforces Unreleased section presence when changelog exists in git', async () => {
+    const targetPath = `C:/tmp/git-merge-changelog-no-unreleased-${Date.now()}`;
+    const changelogWithoutUnreleased = ['# Changelog', '', '## 0.1.0', '', '- Initial'].join('\n') + '\n';
+
+    await runGitScenario(
+      async ({ branchWorkflow, createProject, forceGitContext }) => {
+        const project = await createProject({
+          ...createProjectPayload('-merge-changelog-no-unreleased'),
+          path: targetPath
+        });
+        forceGitContext(project.id, targetPath);
+
+        const branchName = 'feature/changelog-no-unreleased';
+        await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+        const branchRow = await branchWorkflow.__testing.getSql(
+          'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+          [project.id, branchName]
+        );
+
+        await branchWorkflow.__testing.runSql('UPDATE branches SET status = ? WHERE id = ?', ['ready-for-merge', branchRow.id]);
+        await branchWorkflow.__testing.runSql(
+          `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+           VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [project.id, branchRow.id]
+        );
+
+        const error = await branchWorkflow.mergeBranch(project.id, branchName).then(() => null).catch((e) => e);
+        expect(error).toBeTruthy();
+        expect(error).toMatchObject({ statusCode: 400 });
+        expect(String(error.message || '')).toMatch(/must include an\s+"Unreleased"\s+section/i);
+      },
+      {
+        gitOverrides: {
+          runGitCommand: async (cwd, args = []) => {
+            if (cwd !== targetPath || !Array.isArray(args)) {
+              return { stdout: '' };
+            }
+
+            if (args[0] === 'show' && typeof args[1] === 'string' && /:CHANGELOG\.md$/.test(args[1])) {
+              return { stdout: changelogWithoutUnreleased };
+            }
+
+            if (args[0] === 'diff' && args[1] === '--name-only') {
+              // Ensure CHANGELOG.md is considered touched so we reach Unreleased parsing.
+              return { stdout: 'CHANGELOG.md\n' };
+            }
+
+            return { stdout: '' };
+          }
+        }
+      }
+    );
+  });
+
+  it('enforces at least one Unreleased entry when changelog exists in git', async () => {
+    const targetPath = `C:/tmp/git-merge-changelog-empty-unreleased-${Date.now()}`;
+    const changelogEmptyUnreleased = ['# Changelog', '', '## Unreleased', '', '## 0.1.0', '', '- Initial'].join('\n') + '\n';
+
+    await runGitScenario(
+      async ({ branchWorkflow, createProject, forceGitContext }) => {
+        const project = await createProject({
+          ...createProjectPayload('-merge-changelog-empty-unreleased'),
+          path: targetPath
+        });
+        forceGitContext(project.id, targetPath);
+
+        const branchName = 'feature/changelog-empty-unreleased';
+        await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+        const branchRow = await branchWorkflow.__testing.getSql(
+          'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+          [project.id, branchName]
+        );
+
+        await branchWorkflow.__testing.runSql('UPDATE branches SET status = ? WHERE id = ?', ['ready-for-merge', branchRow.id]);
+        await branchWorkflow.__testing.runSql(
+          `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+           VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [project.id, branchRow.id]
+        );
+
+        const error = await branchWorkflow.mergeBranch(project.id, branchName).then(() => null).catch((e) => e);
+        expect(error).toBeTruthy();
+        expect(error).toMatchObject({ statusCode: 400 });
+        expect(String(error.message || '')).toMatch(/at least one entry under Unreleased/i);
+      },
+      {
+        gitOverrides: {
+          runGitCommand: async (cwd, args = []) => {
+            if (cwd !== targetPath || !Array.isArray(args)) {
+              return { stdout: '' };
+            }
+
+            if (args[0] === 'show' && typeof args[1] === 'string' && /:CHANGELOG\.md$/.test(args[1])) {
+              return { stdout: changelogEmptyUnreleased };
+            }
+
+            if (args[0] === 'diff' && args[1] === '--name-only') {
+              return { stdout: 'CHANGELOG.md\n' };
+            }
+
+            return { stdout: '' };
+          }
+        }
+      }
+    );
+  });
+
+  it('skips post-merge bump when CHANGELOG.md is missing on disk (covers bumpVersionAfterMerge early return)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-24T12:00:00Z'));
+
+    const targetPath = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-merge-missing-changelog-'));
+
+    try {
+      // Invalid semver in VERSION covers the parseSemver("no match") path; missing changelog forces early return.
+      await fs.writeFile(path.join(targetPath, 'VERSION'), 'not-a-version\n', 'utf8');
+
+      await runGitScenario(
+        async ({ branchWorkflow, createProject, forceGitContext, gitSpies }) => {
+          const project = await createProject({
+            ...createProjectPayload('-merge-missing-changelog'),
+            path: targetPath
+          });
+          forceGitContext(project.id, targetPath);
+
+          const branchName = 'feature/missing-changelog';
+          await branchWorkflow.createWorkingBranch(project.id, { name: branchName });
+
+          const branchRow = await branchWorkflow.__testing.getSql(
+            'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+            [project.id, branchName]
+          );
+
+          await branchWorkflow.__testing.runSql('UPDATE branches SET status = ? WHERE id = ?', ['ready-for-merge', branchRow.id]);
+          await branchWorkflow.__testing.runSql(
+            `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+             VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+            [project.id, branchRow.id]
+          );
+
+          const result = await branchWorkflow.mergeBranch(project.id, branchName);
+          expect(result).toMatchObject({ mergedBranch: branchName, current: 'main' });
+
+          const versionAfter = (await fs.readFile(path.join(targetPath, 'VERSION'), 'utf8')).trim();
+          // Bump logic returns early before rewriting VERSION.
+          expect(versionAfter).toBe('not-a-version');
+
+          const bumpCommitAttempted = gitSpies.runGitCommand.mock.calls.some((call) => {
+            const [, args] = call;
+            return Array.isArray(args)
+              && args[0] === 'commit'
+              && args[1] === '-m'
+              && String(args[2] || '').includes('chore: bump version to');
+          });
+          expect(bumpCommitAttempted).toBe(false);
+        },
+        {
+          gitOverrides: {
+            runGitCommand: async (cwd, args = []) => {
+              if (cwd !== targetPath || !Array.isArray(args)) {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              // Make enforcement a no-op.
+              if (args[0] === 'show' && typeof args[1] === 'string' && /:CHANGELOG\.md$/.test(args[1])) {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'status' && args[1] === '--porcelain') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref' && args[2] === 'HEAD') {
+                return { stdout: 'main\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+                return { stdout: 'sha-main\n', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'show-ref' || args[0] === 'checkout' || args[0] === 'merge') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'add' || args[0] === 'commit' || args[0] === 'reset') {
+                return { stdout: '', stderr: '', code: 0 };
+              }
+
+              return { stdout: '', stderr: '', code: 0 };
+            }
+          }
+        }
+      );
+    } finally {
+      await fs.rm(targetPath, { recursive: true, force: true }).catch(() => null);
+      vi.useRealTimers();
+    }
   });
 
   it('exposes scheduled auto test handles via the testing helpers', async () => {

@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Navigation from '../components/Navigation';
 import { useAppState } from '../context/AppStateContext';
+import { VERSION } from '../../../shared/version.mjs';
 
 vi.mock('../context/AppStateContext', () => ({
   useAppState: vi.fn()
@@ -76,9 +77,9 @@ describe('Navigation Component', () => {
 
   test('renders version badge when provided', () => {
     useAppState.mockReturnValue(baseState());
-    render(<Navigation versionLabel="0.1.0" />);
+    render(<Navigation versionLabel={VERSION} />);
 
-    expect(screen.getByTestId('nav-version')).toHaveTextContent('v0.1.0');
+    expect(screen.getByTestId('nav-version')).toHaveTextContent(`v${VERSION}`);
   });
 
   test('shows disabled dropdowns when LLM not configured', () => {

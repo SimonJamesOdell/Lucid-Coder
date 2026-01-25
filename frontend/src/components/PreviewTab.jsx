@@ -8,6 +8,37 @@ const PORT_MAP = {
   angular: 4200
 };
 
+export const normalizeHostname = (value) => {
+  if (typeof value !== 'string') {
+    return 'localhost';
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 'localhost';
+  }
+
+  if (trimmed === '0.0.0.0') {
+    return 'localhost';
+  }
+
+  return trimmed;
+};
+
+export const getDevServerOriginFromWindow = ({ port, hostnameOverride } = {}) => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  if (!Number.isInteger(port) || port <= 0) {
+    return null;
+  }
+
+  const protocol = window.location?.protocol || 'http:';
+  const hostname = normalizeHostname(hostnameOverride || window.location?.hostname || 'localhost');
+  return `${protocol}//${hostname}:${port}`;
+};
+
 const PreviewTab = forwardRef(
   ({ project, processInfo, onRestartProject, autoStartOnNotRunning = true, isProjectStopped = false }, ref) => {
   const [iframeError, setIframeError] = useState(false);
@@ -16,6 +47,7 @@ const PreviewTab = forwardRef(
   const [hasConfirmedPreview, setHasConfirmedPreview] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
   const [restartStatus, setRestartStatus] = useState(null);
+  const [previewFailureDetails, setPreviewFailureDetails] = useState(null);
   const [startInFlight, setStartInFlight] = useState(false);
   const [hostnameOverride, setHostnameOverride] = useState(null);
   const [previewUrlOverride, setPreviewUrlOverride] = useState(null);
@@ -23,6 +55,8 @@ const PreviewTab = forwardRef(
   const loadTimeoutRef = useRef(null);
   const errorConfirmTimeoutRef = useRef(null);
   const errorGraceUntilRef = useRef(0);
+  const proxyPlaceholderFirstSeenRef = useRef(0);
+  const proxyPlaceholderLoadCountRef = useRef(0);
   const iframeRef = useRef(null);
 
   const guessBackendOrigin = () => {
@@ -161,23 +195,6 @@ const PreviewTab = forwardRef(
     );
   };
 
-  const normalizeHostname = (value) => {
-    if (typeof value !== 'string') {
-      return 'localhost';
-    }
-
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return 'localhost';
-    }
-
-    if (trimmed === '0.0.0.0') {
-      return 'localhost';
-    }
-
-    return trimmed;
-  };
-
   const getPreviewProxyUrl = () => {
     if (!project?.id) {
       return 'about:blank';
@@ -207,6 +224,44 @@ const PreviewTab = forwardRef(
       setHasConfirmedPreview(false);
     }
   }, [previewUrl]);
+
+  const getDevServerOrigin = () => getDevServerOriginFromWindow({
+    port: chooseFrontendPort(),
+    hostnameOverride
+  });
+
+  const toDevServerUrl = (href) => {
+    const origin = getDevServerOrigin();
+    if (!origin) {
+      return null;
+    }
+
+    if (!project?.id) {
+      return origin;
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(typeof href === 'string' && href ? href : previewUrlRef.current);
+    } catch {
+      return `${origin}/`;
+    }
+
+    const prefix = `/preview/${encodeURIComponent(project.id)}`;
+    const pathname = parsed.pathname || '/';
+    let strippedPath = pathname;
+    if (pathname.startsWith(prefix)) {
+      strippedPath = pathname.slice(prefix.length);
+    }
+    if (!strippedPath) {
+      strippedPath = '/';
+    }
+    if (!strippedPath.startsWith('/')) {
+      strippedPath = `/${strippedPath}`;
+    }
+
+    return `${origin}${strippedPath}${parsed.search || ''}${parsed.hash || ''}`;
+  };
 
   const clearLoadTimeout = () => {
     if (loadTimeoutRef.current) {
@@ -303,11 +358,18 @@ const PreviewTab = forwardRef(
       }
 
       const href = payload.href;
-      if (typeof href === 'string' && href && href !== displayedUrlRef.current) {
+      if (typeof href !== 'string' || !href) {
+        return;
+      }
+
+      if (href !== displayedUrlRef.current) {
         setDisplayedUrl(href);
       }
 
       setHasConfirmedPreview(true);
+      setIframeLoading(false);
+      setIframeError(false);
+      setPendingIframeError(false);
     };
 
     window.addEventListener('message', handleMessage);
@@ -376,6 +438,40 @@ const PreviewTab = forwardRef(
     // placeholder page that auto-reloads. Keep the loading overlay up so users don't
     // see error-page flashes while the dev server comes online.
     if (isLucidCoderProxyPlaceholderPage()) {
+      proxyPlaceholderLoadCountRef.current += 1;
+      if (!proxyPlaceholderFirstSeenRef.current) {
+        proxyPlaceholderFirstSeenRef.current = Date.now();
+      }
+
+      const placeholderAgeMs = Date.now() - (proxyPlaceholderFirstSeenRef.current || Date.now());
+      const shouldEscalate = placeholderAgeMs > 12000 || proxyPlaceholderLoadCountRef.current > 12;
+
+      if (shouldEscalate) {
+        let title = '';
+        let message = '';
+        try {
+          const doc = iframeRef.current?.contentDocument;
+          title = typeof doc?.title === 'string' ? doc.title : '';
+          const code = doc?.querySelector?.('code');
+          message = typeof code?.textContent === 'string' ? code.textContent.trim() : '';
+        } catch {
+          // ignore
+        }
+
+        setPreviewFailureDetails({
+          kind: 'proxy-placeholder',
+          title: title || 'Preview proxy error',
+          message: message || 'The preview proxy is returning an error and cannot reach the dev server.'
+        });
+
+        clearLoadTimeout();
+        clearErrorConfirmTimeout();
+        setPendingIframeError(false);
+        setIframeLoading(false);
+        setIframeError(true);
+        return;
+      }
+
       setIframeError(false);
       setIframeLoading(true);
       setPendingIframeError(false);
@@ -388,7 +484,11 @@ const PreviewTab = forwardRef(
     setIframeLoading(false);
     setIframeError(false);
     setPendingIframeError(false);
+    setHasConfirmedPreview(true);
     errorGraceUntilRef.current = 0;
+    proxyPlaceholderFirstSeenRef.current = 0;
+    proxyPlaceholderLoadCountRef.current = 0;
+    setPreviewFailureDetails(null);
     updateDisplayedUrlFromIframe();
   };
 
@@ -400,7 +500,69 @@ const PreviewTab = forwardRef(
     clearErrorConfirmTimeout();
     setErrorGracePeriod(4000);
     setHasConfirmedPreview(false);
+    proxyPlaceholderFirstSeenRef.current = 0;
+    proxyPlaceholderLoadCountRef.current = 0;
+    setPreviewFailureDetails(null);
     setIframeKey((prev) => prev + 1);
+  };
+
+  const buildPreviewHelpPrompt = () => {
+    const projectLabel = project?.name ? `${project.name} (${project.id})` : String(project?.id || 'unknown');
+    const frontend = processInfo?.processes?.frontend || null;
+    const backend = processInfo?.processes?.backend || null;
+
+    const formatLogs = (proc) => {
+      const logs = Array.isArray(proc?.logs) ? proc.logs : [];
+      const tail = logs.slice(-20);
+      return tail
+        .map((entry) => {
+          const ts = typeof entry?.timestamp === 'string' ? entry.timestamp : '';
+          const stream = typeof entry?.stream === 'string' ? entry.stream : '';
+          const msg = typeof entry?.message === 'string' ? entry.message : '';
+          const prefix = [ts, stream].filter(Boolean).join(' ');
+          return (prefix ? `${prefix} ` : '') + msg;
+        })
+        .filter(Boolean)
+        .join('\n');
+    };
+
+    const detailsTitle = previewFailureDetails?.title || (iframeError ? 'Failed to load preview' : 'Preview issue');
+    const detailsMessage = previewFailureDetails?.message || '';
+    const expected = previewUrlRef.current || previewUrl;
+    const displayed = displayedUrlRef.current || displayedUrl || expected;
+
+    return [
+      `The project preview is failing to load for project ${projectLabel}.`,
+      '',
+      `Observed: ${detailsTitle}${detailsMessage ? `\n${detailsMessage}` : ''}`,
+      '',
+      `Expected preview proxy URL: ${expected}`,
+      `Last displayed URL: ${displayed}`,
+      '',
+      `Process snapshot (from Processes tab):`,
+      `- Frontend: status=${frontend?.status || 'unknown'} port=${frontend?.port ?? 'unknown'} pid=${frontend?.pid ?? 'unknown'}`,
+      `- Backend: status=${backend?.status || 'unknown'} port=${backend?.port ?? 'unknown'} pid=${backend?.pid ?? 'unknown'}`,
+      '',
+      `Frontend logs (tail):`,
+      formatLogs(frontend) || '(no logs)',
+      '',
+      `Backend logs (tail):`,
+      formatLogs(backend) || '(no logs)',
+      '',
+      `Please diagnose why the preview proxy returns 502/Bad Gateway (or why the dev server is unreachable), and suggest a fix.`
+    ].join('\n');
+  };
+
+  const prefillChatWithPreviewHelp = () => {
+    if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') {
+      return;
+    }
+    const prompt = buildPreviewHelpPrompt();
+    try {
+      window.dispatchEvent(new CustomEvent('lucidcoder:prefill-chat', { detail: { prompt } }));
+    } catch {
+      // ignore
+    }
   };
 
   const applyHostnameOverride = (value) => {
@@ -472,6 +634,10 @@ const PreviewTab = forwardRef(
       setDisplayedUrlForTests: (url) => setDisplayedUrl(url),
       getDisplayedUrl: () => displayedUrlRef.current,
       setPreviewUrlOverride: (value) => setPreviewUrlOverride(value),
+      toDevServerUrlForTests: (href) => toDevServerUrl(href),
+      setPreviewFailureDetailsForTests: (value) => {
+        setPreviewFailureDetails(value);
+      },
       setIframeNodeForTests: (node) => {
         iframeRef.current = node;
       },
@@ -557,6 +723,11 @@ const PreviewTab = forwardRef(
         <div className="preview-error">
           <div className="error-content">
             <h3>Failed to load preview</h3>
+            {previewFailureDetails?.message && (
+              <p className="expected-url">
+                <strong>{previewFailureDetails.title || 'Details'}:</strong> {previewFailureDetails.message}
+              </p>
+            )}
             <p>
               The preview didn’t finish loading. This can happen if the dev server crashed, the URL is
               unreachable, or the app blocks embedding via security headers.
@@ -575,6 +746,9 @@ const PreviewTab = forwardRef(
                   Restart project
                 </button>
               )}
+              <button type="button" className="retry-button" onClick={prefillChatWithPreviewHelp}>
+                Ask AI to fix
+              </button>
               <button type="button" className="retry-button" onClick={reloadIframe}>
                 Retry
               </button>
@@ -597,6 +771,32 @@ const PreviewTab = forwardRef(
                 </button>
               )}
             </div>
+
+            {(Array.isArray(frontendProcess?.logs) && frontendProcess.logs.length > 0) && (
+              <details className="expected-url" style={{ marginTop: '0.75rem' }}>
+                <summary>Frontend logs</summary>
+                <pre style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem' }}>
+                  {frontendProcess.logs
+                    .slice(-20)
+                    .map((entry) => entry?.message)
+                    .filter(Boolean)
+                    .join('\n')}
+                </pre>
+              </details>
+            )}
+
+            {(Array.isArray(processInfo?.processes?.backend?.logs) && processInfo.processes.backend.logs.length > 0) && (
+              <details className="expected-url" style={{ marginTop: '0.5rem' }}>
+                <summary>Backend logs</summary>
+                <pre style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem' }}>
+                  {processInfo.processes.backend.logs
+                    .slice(-20)
+                    .map((entry) => entry?.message)
+                    .filter(Boolean)
+                    .join('\n')}
+                </pre>
+              </details>
+            )}
           </div>
         </div>
       </div>
@@ -619,7 +819,11 @@ const PreviewTab = forwardRef(
             URL: <code>{normalizedDisplayedUrl}</code>
           </p>
           <p className="expected-url">
-            <a href={normalizedDisplayedUrl} target="_blank" rel="noopener noreferrer">
+            <a
+              href={toDevServerUrl(normalizedDisplayedUrl) || normalizedDisplayedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               Open in a new tab
             </a>
           </p>
@@ -630,13 +834,23 @@ const PreviewTab = forwardRef(
 
   const renderUrlBar = () => (
     <div className="preview-url-bar" data-testid="preview-url-bar">
+      {(() => {
+        const normalized = normalizedDisplayedUrl;
+        const devUrl = hasConfirmedPreview && !iframeLoading && !pendingIframeError && !iframeError
+          ? (toDevServerUrl(normalized) || '')
+          : '';
+        const value = normalized === 'about:blank' ? 'about:blank' : devUrl;
+
+        return (
       <input
         aria-label="Preview URL"
         className="preview-url-input"
-        value={normalizedDisplayedUrl}
+        value={value}
         readOnly
         onFocus={(event) => event.target.select()}
       />
+        );
+      })()}
     </div>
   );
 

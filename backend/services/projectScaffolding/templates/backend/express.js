@@ -3,7 +3,7 @@ export default {
   javascript: {
     packageJson: (name) => ({
       name: `${name}-backend`,
-      version: "1.0.0",
+      version: "0.1.0",
       type: "module",
       main: "server.js",
       scripts: {
@@ -255,7 +255,7 @@ describe('${name} E2E (HTTP)', () => {
   typescript: {
     packageJson: (name) => ({
       name: `${name}-backend`,
-      version: "1.0.0",
+      version: "0.1.0",
       main: "dist/server.js",
       scripts: {
         build: "tsc",

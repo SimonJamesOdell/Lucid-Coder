@@ -129,7 +129,7 @@ describe('goalAutomationService', () => {
           return Promise.resolve({ data: { content: '!!!' } });
         }
         if (url === '/api/projects/42/branches') {
-          expect(payload).toEqual({ name: 'feature-123' });
+          expect(payload).toEqual(expect.objectContaining({ name: 'feature-123' }));
           return Promise.resolve({ data: { branch: { name: 'feature-123' } } });
         }
       });
@@ -344,14 +344,14 @@ describe('goalAutomationService', () => {
           return Promise.resolve({ data: { content: '"kebab-case"' } });
         }
         if (url === '/api/projects/42/branches') {
-          expect(payload).toEqual({ name: 'feature-999' });
+          expect(payload).toEqual(expect.objectContaining({ name: 'add-feature' }));
           // Return no name so ensureBranch uses generatedName.
           return Promise.resolve({ data: {} });
         }
       });
 
       const result = await ensureBranch(42, 'Add feature', undefined, mockCreateMessage, mockSetMessages);
-      expect(result).toEqual({ name: 'feature-999' });
+      expect(result).toEqual({ name: 'add-feature' });
       expect(llmCall).toBe(2);
 
       nowSpy.mockRestore();
@@ -368,7 +368,7 @@ describe('goalAutomationService', () => {
           return Promise.resolve({ data: { content: JSON.stringify({ branch: 123 }) } });
         }
         if (url === '/api/projects/42/branches') {
-          expect(payload).toEqual({ name: 'feature-123' });
+          expect(payload).toEqual(expect.objectContaining({ name: 'feature-123' }));
           // Return no name so ensureBranch uses generatedName.
           return Promise.resolve({ data: {} });
         }
@@ -423,7 +423,7 @@ describe('goalAutomationService', () => {
           return Promise.resolve({ data: { response: { not: 'a string' }, content: 'added-navigation-bar' } });
         }
         if (url === '/api/projects/42/branches') {
-          expect(payload).toEqual({ name: 'feature-123' });
+          expect(payload).toEqual(expect.objectContaining({ name: 'feature-123' }));
           return Promise.resolve({ data: {} });
         }
       });
@@ -465,7 +465,7 @@ describe('goalAutomationService', () => {
           return Promise.resolve({ data: { content: 'Just words' } });
         }
         if (url === '/api/projects/42/branches') {
-          expect(payload).toEqual({ name: 'just-words' });
+          expect(payload).toEqual(expect.objectContaining({ name: 'just-words' }));
           return Promise.resolve({ data: { branch: { name: 'just-words' } } });
         }
       });

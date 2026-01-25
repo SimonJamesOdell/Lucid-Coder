@@ -41,8 +41,18 @@ const CommitDetailsPanel = ({
   handleOpenFileFromCommit,
   canOpenFiles,
   branchReadyToCommit
-}) => (
-  <section className="commits-details-panel" data-testid="commit-details-panel">
+}) => {
+  const shouldShowBranchGate = Boolean(
+    hasStagedFiles ||
+    shouldShowCommitComposer ||
+    branchReadyToMerge ||
+    shouldShowTestingCta ||
+    mergeInFlight ||
+    commitInFlight
+  );
+
+  return (
+    <section className="commits-details-panel" data-testid="commit-details-panel">
     {statusMessage && (
       <div className="commits-status-message" role="status">
         {statusMessage}
@@ -66,7 +76,7 @@ const CommitDetailsPanel = ({
       </div>
     )}
 
-    {gateStatus && (
+    {shouldShowBranchGate && gateStatus && (
       <div className="commits-status-message" role="status" data-testid="commit-gate-status">
         <span data-testid="commit-gate-tests">Tests: {formatGateValue(gateStatus.tests)}</span>
         <span aria-hidden="true"> • </span>
@@ -82,7 +92,7 @@ const CommitDetailsPanel = ({
       </div>
     )}
 
-    {!mergeActionError && mergeBlockedBannerMessage && (
+    {!mergeActionError && shouldShowBranchGate && mergeBlockedBannerMessage && (
       <div className="commits-status-message" role="status" data-testid="commit-merge-blocked">
         Merge blocked: {mergeBlockedBannerMessage}
       </div>
@@ -232,7 +242,8 @@ const CommitDetailsPanel = ({
           : 'Select a commit to view details.'}
       </div>
     )}
-  </section>
-);
+    </section>
+  );
+};
 
 export default CommitDetailsPanel;

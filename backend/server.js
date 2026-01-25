@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'node:fs';
+import { VERSION } from '../shared/version.mjs';
 import { initializeDatabase } from './database.js';
 import { llmClient } from './llm-client.js';
 import llmRoutes from './routes/llm.js';
@@ -116,14 +117,13 @@ app.get('/api/health', (req, res) => {
 });
 
 const readJsonFile = (filePath) => JSON.parse(readFileSync(filePath, 'utf8'));
-const readTextFile = (filePath) => readFileSync(filePath, 'utf8');
 
 // Version info route
 app.get('/api/version', (req, res) => {
   try {
     const repoRoot = path.resolve(__dirname, '..');
 
-    const versionFile = readTextFile(path.join(repoRoot, 'VERSION')).trim();
+    const versionFile = VERSION;
     const rootPackage = readJsonFile(path.join(repoRoot, 'package.json'));
     const backendPackage = readJsonFile(path.join(__dirname, 'package.json'));
     const frontendPackage = readJsonFile(path.join(repoRoot, 'frontend', 'package.json'));

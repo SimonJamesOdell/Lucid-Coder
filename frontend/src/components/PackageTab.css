@@ -11,6 +11,41 @@
   line-height: 1.5;
 }
 
+.package-workspace-tabs {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.package-workspace-tab {
+  background: var(--background-secondary, #0f0f0f);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.72));
+  cursor: pointer;
+  padding: 0.4rem 0.9rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.package-workspace-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-primary, #ffffff);
+}
+
+.package-workspace-tab.is-active {
+  background: rgba(124, 58, 237, 0.18);
+  border-color: rgba(124, 58, 237, 0.6);
+  color: #ffffff;
+}
+
+.package-workspace-tab:focus-visible {
+  outline: 2px solid rgba(124, 58, 237, 0.85);
+  outline-offset: 2px;
+}
+
 .package-global-error {
   background: rgba(255, 99, 71, 0.12);
   border: 1px solid rgba(255, 99, 71, 0.35);
@@ -21,7 +56,7 @@
 
 .package-sections {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
   flex: 1;
   min-height: 0;
@@ -196,9 +231,19 @@
   border-radius: 0.5rem;
   color: inherit;
   cursor: pointer;
-  padding: 0.25rem 0.65rem;
-  font-size: 0.85rem;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: background 0.2s ease;
+}
+
+.package-remove-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .package-remove-btn:hover:not(:disabled) {

@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
+import { VERSION } from '../../shared/version.mjs';
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 vi.mock('node:fs', () => ({
@@ -168,19 +169,19 @@ describe('server bootstrap and middleware', () => {
       const normalized = String(filePath).replace(/\\/g, '/');
 
       if (normalized.endsWith('/VERSION')) {
-        return '0.1.0\n';
+        return `${VERSION}\n`;
       }
 
       if (normalized.endsWith('/frontend/package.json')) {
-        return JSON.stringify({ name: 'lucidcoder-frontend', version: '0.1.0' });
+        return JSON.stringify({ name: 'lucidcoder-frontend', version: VERSION });
       }
 
       if (normalized.endsWith('/backend/package.json')) {
-        return JSON.stringify({ name: 'lucidcoder-backend', version: '0.1.0' });
+        return JSON.stringify({ name: 'lucidcoder-backend', version: VERSION });
       }
 
       if (normalized.endsWith('/package.json')) {
-        return JSON.stringify({ name: 'lucidcoder', version: '0.1.0' });
+        return JSON.stringify({ name: 'lucidcoder', version: VERSION });
       }
 
       return '';
@@ -191,12 +192,12 @@ describe('server bootstrap and middleware', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual(expect.objectContaining({
       success: true,
-      version: '0.1.0',
-      versionFile: '0.1.0'
+      version: VERSION,
+      versionFile: VERSION
     }));
-    expect(response.body.root).toEqual({ name: 'lucidcoder', version: '0.1.0' });
-    expect(response.body.backend).toEqual({ name: 'lucidcoder-backend', version: '0.1.0' });
-    expect(response.body.frontend).toEqual({ name: 'lucidcoder-frontend', version: '0.1.0' });
+    expect(response.body.root).toEqual({ name: 'lucidcoder', version: VERSION });
+    expect(response.body.backend).toEqual({ name: 'lucidcoder-backend', version: VERSION });
+    expect(response.body.frontend).toEqual({ name: 'lucidcoder-frontend', version: VERSION });
   });
 
   test('version endpoint returns 500 when reading versions fails', async () => {

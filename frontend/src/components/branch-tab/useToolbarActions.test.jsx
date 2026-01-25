@@ -1,10 +1,9 @@
 import { describe, test, expect, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
-import useToolbarActions, { invokeCreateBranchAction } from './useToolbarActions';
+import useToolbarActions, { haveSameActions, invokeCreateBranchAction } from './useToolbarActions';
 
 const buildProps = (overrides = {}) => {
   const selectedBranchName = overrides.selectedBranchName ?? 'feature/login';
-  const selectedBranchRef = overrides.selectedBranchRef || { current: selectedBranchName };
 
   return {
     registerBranchActions: vi.fn(),
@@ -13,15 +12,11 @@ const buildProps = (overrides = {}) => {
     selectedStagedCount: 2,
     canBeginMerge: true,
     readyForMerge: true,
-    canDelete: true,
     isStoppingProject: false,
     mergeInFlight: null,
-    deleteInFlight: null,
     createBranchInFlight: false,
-    selectedBranchRef,
     handleCreateBranch: vi.fn(() => 'created'),
     handleMergeBranch: vi.fn(() => 'merge'),
-    handleDeleteBranch: vi.fn(() => 'delete'),
     ...overrides
   };
 };
@@ -53,8 +48,7 @@ describe('useToolbarActions', () => {
       hasSelectedWorkingBranch: false,
       selectedStagedCount: 0,
       canBeginMerge: false,
-      readyForMerge: false,
-      canDelete: false
+      readyForMerge: false
     });
     const { result } = renderHook((hookProps) => useToolbarActions(hookProps), {
       initialProps: props
@@ -72,41 +66,21 @@ describe('useToolbarActions', () => {
 
     await waitFor(() => expect(props.registerBranchActions).toHaveBeenCalledTimes(1));
 
-    expect(Object.keys(result.current)).toEqual(['createBranch', 'deleteBranch']);
+    expect(Object.keys(result.current)).toEqual(['createBranch']);
     expect(result.current.createBranch.label).toBe('New branch');
 
     result.current.createBranch.onClick();
-    result.current.deleteBranch.onClick();
 
     expect(props.handleCreateBranch).toHaveBeenCalled();
-    expect(props.handleDeleteBranch).toHaveBeenCalledWith('feature/login');
 
     rerender({
       ...props,
-      createBranchInFlight: true,
-      deleteInFlight: 'feature/login'
+      createBranchInFlight: true
     });
 
     await waitFor(() => expect(props.registerBranchActions).toHaveBeenCalledTimes(2));
     const updatedPayload = props.registerBranchActions.mock.calls.at(-1)[0];
     expect(updatedPayload.createBranch.label).toBe('Creating…');
-    expect(updatedPayload.deleteBranch.label).toBe('Deleting…');
-  });
-
-  test('action handlers bail out when the branch ref is empty', async () => {
-    const selectedBranchRef = { current: 'feature/login' };
-    const props = buildProps({ selectedBranchRef });
-    const { result } = renderHook((hookProps) => useToolbarActions(hookProps), {
-      initialProps: props
-    });
-
-    await waitFor(() => expect(props.registerBranchActions).toHaveBeenCalledTimes(1));
-
-    selectedBranchRef.current = '';
-    expect(result.current.deleteBranch.onClick()).toBeNull();
-
-    expect(props.handleMergeBranch).not.toHaveBeenCalled();
-    expect(props.handleDeleteBranch).not.toHaveBeenCalled();
   });
 
   test('re-registers only when payload changes and cleans up on unmount', async () => {
@@ -121,23 +95,18 @@ describe('useToolbarActions', () => {
     rerender({ ...props });
     await waitFor(() => expect(registerBranchActions).toHaveBeenCalledTimes(1));
 
-    rerender({ ...props, canDelete: false });
+    rerender({ ...props, createBranchInFlight: true });
     await waitFor(() => expect(registerBranchActions).toHaveBeenCalledTimes(2));
     const latestPayload = registerBranchActions.mock.calls.at(-1)[0];
-    expect(latestPayload.deleteBranch).toBeUndefined();
+    expect(latestPayload.createBranch.label).toBe('Creating…');
 
     unmount();
     expect(registerBranchActions).toHaveBeenCalledWith(null);
   });
 
-  test('treats same-length payloads with different keys as changed', async () => {
+  test('returns null payload when create action is removed after being present', async () => {
     const registerBranchActions = vi.fn();
-    const props = buildProps({
-      registerBranchActions,
-      canBeginMerge: false,
-      readyForMerge: false,
-      canDelete: false
-    });
+    const props = buildProps({ registerBranchActions });
 
     const { rerender } = renderHook((hookProps) => useToolbarActions(hookProps), {
       initialProps: props
@@ -148,12 +117,11 @@ describe('useToolbarActions', () => {
 
     rerender({
       ...props,
-      handleCreateBranch: null,
-      canDelete: true
+      handleCreateBranch: null
     });
 
     await waitFor(() => expect(registerBranchActions).toHaveBeenCalledTimes(2));
-    expect(Object.keys(registerBranchActions.mock.calls[1][0])).toEqual(['deleteBranch']);
+    expect(registerBranchActions.mock.calls[1][0]).toBeNull();
   });
 });
 
@@ -166,5 +134,22 @@ describe('invokeCreateBranchAction', () => {
     const handler = vi.fn(() => 'created');
     expect(invokeCreateBranchAction(handler)).toBe('created');
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('haveSameActions', () => {
+  test('returns false when action key counts differ', () => {
+    const handler = vi.fn();
+    expect(haveSameActions({ a: { label: 'A', disabled: false, variant: 'success', onClick: handler } }, {
+      a: { label: 'A', disabled: false, variant: 'success', onClick: handler },
+      b: { label: 'B', disabled: false, variant: 'success', onClick: handler }
+    })).toBe(false);
+  });
+
+  test('returns false when the next payload is missing an action value', () => {
+    const handler = vi.fn();
+    expect(haveSameActions({ a: { label: 'A', disabled: false, variant: 'success', onClick: handler } }, {
+      a: undefined
+    })).toBe(false);
   });
 });

@@ -97,6 +97,14 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
   const canBeginMerge = hasSelectedWorkingBranch;
   const canCheckout = Boolean(selectedSummary && !isCurrentBranch);
   const canDelete = Boolean(selectedSummary && selectedSummary.name !== 'main');
+  const isDeletingBranch = deleteInFlight === selectedBranchName;
+  const deleteLabel = isDeletingBranch ? 'Deleting…' : 'Delete branch';
+  const handleRequestDeleteBranch = useCallback(() => {
+    if (!canDelete || !selectedBranchName || !handleDeleteBranch || isStoppingProject) {
+      return;
+    }
+    void Promise.resolve(handleDeleteBranch(selectedBranchName)).catch(() => null);
+  }, [canDelete, selectedBranchName, handleDeleteBranch, isStoppingProject]);
   const selectedStatus = deriveDisplayStatus(selectedSummary, selectedWorkingBranch);
   const isMergedBranch = selectedStatus === 'merged';
   const lastTestStatus = selectedWorkingBranch?.lastTestStatus || null;
@@ -154,29 +162,22 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
     selectedStagedCount,
     canBeginMerge,
     readyForMerge,
-    canDelete,
     isStoppingProject,
     testInFlight,
     testMergeInFlight,
     mergeInFlight,
-    deleteInFlight,
     handleRunTests,
     handleTestAndMerge,
     handleMergeBranch,
-    handleDeleteBranch,
     handleCreateBranch: handleRequestCreateBranch,
-    selectedBranchRef,
     createBranchInFlight
   };
 
   useToolbarActions(toolbarState);
 
-  const projectName = project?.name || 'Active project';
-
   const layout = useMemo(() => (
     <div className="branch-layout">
       <BranchSidebar
-        projectName={projectName}
         branchSummaries={branchSummaries}
         sortedBranches={sortedBranches}
         workingBranchMap={workingBranchMap}
@@ -189,6 +190,10 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
         onCheckout={() => handleCheckoutBranch(selectedBranchName)}
         checkoutTestId={isMergedBranch ? 'branch-revert' : 'branch-checkout'}
         checkoutLabel={isMergedBranch ? 'Revert to this branch' : 'Switch to this branch'}
+        canDelete={canDelete}
+        onDeleteBranch={canDelete ? handleRequestDeleteBranch : null}
+        deleteLabel={deleteLabel}
+        isDeleting={isDeletingBranch}
         isStoppingProject={isStoppingProject}
         selectedFiles={selectedFiles}
         hasSelectedFiles={hasSelectedFiles}
@@ -212,7 +217,6 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
       />
     </div>
   ), [
-    projectName,
     branchSummaries,
     sortedBranches,
     workingBranchMap,

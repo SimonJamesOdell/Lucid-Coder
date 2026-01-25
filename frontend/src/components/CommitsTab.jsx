@@ -163,6 +163,8 @@ const CommitsTab = ({
     && (!testsStatus || testsStatus === 'pending')
   );
 
+  const shouldShowGateBanners = Boolean(!shouldShowTestingCta && !shouldShowCommitComposer);
+
   const handleStartTesting = useCallback(() => {
     if (typeof onRequestTestsTab !== 'function') {
       return;
@@ -325,7 +327,7 @@ const CommitsTab = ({
       setCommits([]);
       setSelectedCommitSha('');
       clearSquashSelection();
-      return;
+      return [];
     }
 
     setLoading(true);
@@ -338,7 +340,9 @@ const CommitsTab = ({
         if (response.data?.overview && typeof syncBranchOverview === 'function') {
           syncBranchOverview(projectId, response.data.overview);
         }
-        applyCommits(response.data.commits || []);
+        const nextCommits = response.data.commits || [];
+        applyCommits(nextCommits);
+        return nextCommits;
       } else {
         setError(response.data?.error || 'Failed to load commits');
       }
@@ -348,6 +352,8 @@ const CommitsTab = ({
     } finally {
       setLoading(false);
     }
+
+    return null;
   }, [projectId, applyCommits, syncBranchOverview]);
 
   const handleSquashSelectedCommits = useCallback(async (pairOverride = null) => {
@@ -438,7 +444,12 @@ const CommitsTab = ({
       }
 
       clearCommitMessageForBranch(activeBranchName);
-      await fetchCommits();
+      const nextCommits = await fetchCommits();
+      const headSha = Array.isArray(nextCommits) ? nextCommits[0]?.sha : null;
+      if (typeof headSha === 'string' && headSha.trim()) {
+        userSelectedRef.current = false;
+        setSelectedCommitSha(headSha.trim());
+      }
       setStatusMessage('Committed staged changes');
     } catch (err) {
       console.error('Error committing staged changes:', err);
@@ -505,6 +516,22 @@ const CommitsTab = ({
   useEffect(() => {
     fetchCommits();
   }, [fetchCommits]);
+
+  useEffect(() => {
+    if (!statusMessage) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setStatusMessage(null);
+    }, 2500);
+
+    timeoutId.unref?.();
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [statusMessage]);
 
   const handleSelectCommit = useCallback((sha) => {
     if (!sha) {
@@ -721,9 +748,9 @@ const CommitsTab = ({
           <CommitDetailsPanel
             projectId={projectId}
             statusMessage={statusMessage}
-            gateStatus={shouldShowTestingCta ? null : gateStatus}
+            gateStatus={shouldShowGateBanners ? gateStatus : null}
             mergeActionError={mergeActionError}
-            mergeBlockedBannerMessage={shouldShowTestingCta ? null : mergeBlockedBannerMessage}
+            mergeBlockedBannerMessage={shouldShowGateBanners ? mergeBlockedBannerMessage : null}
             branchReadyToMerge={branchReadyToMerge}
             shouldShowCommitComposer={shouldShowCommitComposer}
             activeBranchName={activeBranchName}

@@ -7,6 +7,9 @@ const WORKSPACES = [
   { key: 'backend', label: 'Backend', manifestPath: 'backend/package.json' }
 ];
 
+// Test-only export: allows branch coverage of WORKSPACES[0]?.key fallbacks.
+export const __testWorkspaces = WORKSPACES;
+
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
 export const resolveActionProjectId = (projectId, override) => (
@@ -29,6 +32,7 @@ const PackageTab = ({ project, forceProjectId }) => {
     backend: { name: '', version: '', dev: false }
   });
   const [globalError, setGlobalError] = useState('');
+  const [activeWorkspaceKey, setActiveWorkspaceKey] = useState(WORKSPACES[0]?.key || 'frontend');
   const completedJobsRef = useRef(new Map());
 
   const jobs = useMemo(() => getJobsForProject(projectId), [getJobsForProject, projectId]);
@@ -99,6 +103,7 @@ const PackageTab = ({ project, forceProjectId }) => {
     setErrors({ frontend: null, backend: null });
     setDrafts({ frontend: { name: '', version: '', dev: false }, backend: { name: '', version: '', dev: false } });
     setGlobalError('');
+    setActiveWorkspaceKey(WORKSPACES[0]?.key || 'frontend');
 
     if (!projectId) {
       return;
@@ -248,8 +253,53 @@ const PackageTab = ({ project, forceProjectId }) => {
               className="package-remove-btn"
               onClick={() => handleRemovePackage(workspaceKey, name, { dev: isDevGroup })}
               disabled={workspaceBusy[workspaceKey]}
+              title="Remove"
             >
-              Remove
+              <svg
+                className="package-remove-icon"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path
+                  d="M3 6H21"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M8 6V4C8 3.44772 8.44772 3 9 3H15C15.5523 3 16 3.44772 16 4V6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M19 6L18.2 20.2C18.155 21.046 17.457 21.7 16.61 21.7H7.39C6.543 21.7 5.845 21.046 5.8 20.2L5 6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M10 11V17"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M14 11V17"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span className="sr-only">Remove</span>
             </button>
           </li>
         ))}
@@ -264,8 +314,18 @@ const PackageTab = ({ project, forceProjectId }) => {
     const draft = drafts[workspace.key];
     const isLoading = loadingState[workspace.key];
 
+    const tabId = `package-workspace-tab-${workspace.key}`;
+    const panelId = `package-workspace-panel-${workspace.key}`;
+
     return (
-      <section key={workspace.key} className="package-section" aria-live="polite">
+      <section
+        key={workspace.key}
+        id={panelId}
+        className="package-section"
+        aria-live="polite"
+        role="tabpanel"
+        aria-labelledby={tabId}
+      >
         <header className="package-section-header">
           <div>
             <h3>{workspace.label}</h3>
@@ -353,15 +413,44 @@ const PackageTab = ({ project, forceProjectId }) => {
     );
   };
 
+  const activeWorkspace = WORKSPACES.find((workspace) => workspace.key === activeWorkspaceKey) || WORKSPACES[0];
+
   return (
     <div className="package-tab" data-testid="package-tab">
+      <div
+        className="package-workspace-tabs"
+        role="tablist"
+        aria-label="Package workspaces"
+      >
+        {WORKSPACES.map((workspace) => {
+          const tabId = `package-workspace-tab-${workspace.key}`;
+          const panelId = `package-workspace-panel-${workspace.key}`;
+          const isActive = workspace.key === activeWorkspace?.key;
+          return (
+            <button
+              key={workspace.key}
+              id={tabId}
+              type="button"
+              role="tab"
+              className={`package-workspace-tab ${isActive ? 'is-active' : ''}`.trim()}
+              aria-selected={isActive}
+              aria-controls={panelId}
+              data-testid={`package-workspace-tab-${workspace.key}`}
+              onClick={() => setActiveWorkspaceKey(workspace.key)}
+            >
+              {workspace.label}
+            </button>
+          );
+        })}
+      </div>
+
       {globalError && (
         <div className="package-global-error" role="alert">
           {globalError}
         </div>
       )}
       <div className="package-sections">
-        {WORKSPACES.map((workspace) => renderWorkspace(workspace))}
+        {activeWorkspace ? renderWorkspace(activeWorkspace) : null}
       </div>
     </div>
   );

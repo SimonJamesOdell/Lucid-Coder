@@ -68,3 +68,6 @@ tmp_*.json
 
 # Test debug artifacts (should not be committed)
 *-debug.json
+
+# Vitest JSON output artifacts
+vitest-*.json

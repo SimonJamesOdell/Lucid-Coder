@@ -40,6 +40,7 @@ import { createBranchWorkflowStaging } from './branchWorkflow/stagingApi.js';
 import { createBranchWorkflowCommits } from './branchWorkflow/commitsApi.js';
 import * as git from '../utils/git.js';
 import * as jobRunner from './jobRunner.js';
+import { llmClient } from '../llm-client.js';
 
 const JOB_STATUS_FALLBACK = {
   PENDING: 'pending',
@@ -539,16 +540,20 @@ const commitsApi = createBranchWorkflowCommits({
   ensureMainBranch,
   getProjectContext,
   runProjectGit,
+  llmClient,
   normalizeCommitLimit,
   parseGitLog,
   getBranchByName,
   cancelScheduledAutoTests,
   isCssOnlyBranchDiff,
+  listBranchChangedPaths,
   ensureGitBranchExists,
   checkoutGitBranch,
   run,
   get,
-  setCurrentBranch
+  setCurrentBranch,
+  fs,
+  path
 });
 
 export const getCommitHistory = commitsApi.getCommitHistory;

@@ -81,6 +81,48 @@ const parsePreviewPath = (url = '') => {
   };
 };
 
+const isLikelyPreviewDevAssetPath = (url = '') => {
+  const rawUrl = typeof url === 'string' ? url : '';
+  if (!rawUrl) {
+    return false;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl, 'http://localhost');
+  } catch {
+    return false;
+  }
+
+  const pathname = parsed.pathname || '';
+  return (
+    pathname.startsWith('/@vite/') ||
+    pathname.startsWith('/@react-refresh') ||
+    pathname.startsWith('/@id/') ||
+    pathname.startsWith('/@fs/') ||
+    pathname.startsWith('/src/') ||
+    pathname.startsWith('/node_modules/')
+  );
+};
+
+const isLikelyViteHmrWebSocketRequest = (req) => {
+  const upgrade = typeof req?.headers?.upgrade === 'string' ? req.headers.upgrade.toLowerCase() : '';
+  if (upgrade !== 'websocket') {
+    return false;
+  }
+
+  const proto = typeof req?.headers?.['sec-websocket-protocol'] === 'string'
+    ? req.headers['sec-websocket-protocol']
+    : '';
+  if (proto.toLowerCase().includes('vite-hmr')) {
+    return true;
+  }
+
+  // Fallback: some environments may omit the protocol but include a token.
+  const url = typeof req?.url === 'string' ? req.url : '';
+  return /[?&]token=/.test(url);
+};
+
 const getProjectIdFromRequest = (req) => {
   const parsed = parsePreviewPath(req.url);
   if (parsed?.projectId) {
@@ -89,6 +131,24 @@ const getProjectIdFromRequest = (req) => {
       projectId: parsed.projectId,
       forwardPath: parsed.forwardPath
     };
+  }
+
+  const dest = typeof req?.headers?.['sec-fetch-dest'] === 'string'
+    ? req.headers['sec-fetch-dest'].toLowerCase()
+    : '';
+  const referer = typeof req?.headers?.referer === 'string' ? req.headers.referer : '';
+  // Cookie-based routing is only safe when the request is clearly preview-origin.
+  // - iframe navigations set Sec-Fetch-Dest: iframe
+  // - subresource loads typically carry a Referer pointing at /preview/:id...
+  // - some dev-server module requests may omit Referer (varies by browser + sandbox),
+  //   but can be identified by their well-known dev asset paths.
+  const shouldAllowCookieRouting =
+    dest === 'iframe' ||
+    referer.includes('/preview/') ||
+    isLikelyPreviewDevAssetPath(req.url) ||
+    isLikelyViteHmrWebSocketRequest(req);
+  if (!shouldAllowCookieRouting) {
+    return null;
   }
 
   const cookies = parseCookieHeader(req.headers?.cookie);
@@ -113,8 +173,7 @@ const buildSetCookieHeader = (projectId) => {
 const buildPreviewBridgeScript = ({ previewPrefix }) => {
   const safePrefix = typeof previewPrefix === 'string' ? previewPrefix : '';
 
-  return `\n<script>\n(function(){\n  try {\n    var prefix = ${JSON.stringify(safePrefix)};\n    if (prefix && window.location && window.location.pathname && window.location.pathname.indexOf(prefix) === 0) {\n      var stripped = window.location.pathname.slice(prefix.length) || '/';\n      if (stripped.charAt(0) !== '/') stripped = '/' + stripped;\n      var nextUrl = stripped + (window.location.search || '') + (window.location.hash || '');\n      try {\n        window.history.replaceState(window.history.state, document.title, nextUrl);\n      } catch (e) {\n        // ignore\n      }\n    }\n\n    var lastHref = '';\n    var post = function(){\n      var href = window.location && window.location.href ? String(window.location.href) : '';\n      if (!href || href === lastHref) return;\n      lastHref = href;\n      try {\n        window.parent && window.parent.postMessage({\n          type: 'LUCIDCODER_PREVIEW_NAV',\n          href: href\n        }, '*');\n      } catch (e) {\n        // ignore\n      }\n    };\n\n    var wrapHistory = function(method){\n      var original = window.history && window.history[method];\n      if (!original) return;\n      window.history[method] = function(){\n        var result = original.apply(this, arguments);\n        post();\n        return result;\n      };\n    };\n\n    wrapHistory('pushState');\n    wrapHistory('replaceState');\n    window.addEventListener('popstate', post);\n    window.addEventListener('hashchange', post);\n\n    // Fall back: poll for safety (covers frameworks that bypass history wrappers).
-    window.setInterval(post, 300);\n\n    post();\n  } catch (e) {\n    // ignore\n  }\n})();\n</script>\n`;
+  return `\n<script>\n(function(){\n  try {\n    var prefix = ${JSON.stringify(safePrefix)};\n\n    var lastHref = '';\n    var post = function(){\n      var href = window.location && window.location.href ? String(window.location.href) : '';\n      if (!href || href === lastHref) return;\n      lastHref = href;\n      try {\n        window.parent && window.parent.postMessage({\n          type: 'LUCIDCODER_PREVIEW_NAV',\n          href: href,\n          prefix: prefix\n        }, '*');\n      } catch (e) {\n        // ignore\n      }\n    };\n\n    var wrapHistory = function(method){\n      var original = window.history && window.history[method];\n      if (!original) return;\n      window.history[method] = function(){\n        var result = original.apply(this, arguments);\n        post();\n        return result;\n      };\n    };\n\n    wrapHistory('pushState');\n    wrapHistory('replaceState');\n    window.addEventListener('popstate', post);\n    window.addEventListener('hashchange', post);\n\n    // Fall back: poll for safety (covers frameworks that bypass history wrappers).\n    window.setInterval(post, 500);\n\n    post();\n  } catch (e) {\n    // ignore\n  }\n})();\n</script>\n`;
 };
 
 const injectPreviewBridge = (html, { previewPrefix }) => {
@@ -166,6 +225,41 @@ const resolveFrontendPort = async (projectId) => {
   }
 
   return null;
+};
+
+const resolvePreviewTargetHost = (req) => {
+  const rawOverride = typeof process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST === 'string'
+    ? process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST
+    : '';
+  const override = rawOverride.trim();
+  if (override) {
+    return override === '0.0.0.0' ? 'localhost' : override;
+  }
+
+  // Default: target the same host the client used to reach the backend.
+  // This makes previews work automatically whether LucidCoder is accessed via
+  // localhost or via a LAN IP / hostname.
+  const forwardedHost = typeof req?.headers?.['x-forwarded-host'] === 'string'
+    ? req.headers['x-forwarded-host']
+    : '';
+  const hostHeader = forwardedHost || (typeof req?.headers?.host === 'string' ? req.headers.host : '');
+  const hostValue = String(hostHeader).split(',')[0].trim();
+  if (!hostValue) {
+    return 'localhost';
+  }
+
+  // host may include port; IPv6 may be in [::1]:5000 form.
+  const ipv6Match = hostValue.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (ipv6Match) {
+    const ipv6Host = ipv6Match[1]?.trim();
+    return ipv6Host || 'localhost';
+  }
+
+  const hostname = hostValue.replace(/:\d+$/, '').trim();
+  if (!hostname || hostname === '0.0.0.0') {
+    return 'localhost';
+  }
+  return hostname;
 };
 
 export const createPreviewProxy = ({ logger = console } = {}) => {
@@ -294,7 +388,8 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       return;
     }
 
-    const target = `http://127.0.0.1:${port}`;
+    const targetHost = resolvePreviewTargetHost(req);
+    const target = `http://${targetHost}:${port}`;
 
     if (setCookie) {
       res.setHeader('Set-Cookie', buildSetCookieHeader(projectId));
@@ -359,7 +454,8 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
             return;
           }
 
-          const target = `http://127.0.0.1:${port}`;
+          const targetHost = resolvePreviewTargetHost(req);
+          const target = `http://${targetHost}:${port}`;
           const originalUrl = req.url;
           try {
             req.url = info.forwardPath;
@@ -407,10 +503,13 @@ export const __testOnly = {
   PREVIEW_ROUTE_PREFIX,
   parseCookieHeader,
   parsePreviewPath,
+  isLikelyPreviewDevAssetPath,
+  isLikelyViteHmrWebSocketRequest,
   getProjectIdFromRequest,
   buildSetCookieHeader,
   buildPreviewBridgeScript,
   injectPreviewBridge,
   shouldBypassPreviewProxy,
+  resolvePreviewTargetHost,
   resolveFrontendPort
 };

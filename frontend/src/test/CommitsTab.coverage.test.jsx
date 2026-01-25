@@ -101,6 +101,132 @@ beforeEach(() => {
 });
 
 describe('CommitsTab coverage branches', () => {
+  test('commit handler assigns head sha after refresh (covers headSha line)', async () => {
+    const testApiRef = { current: null };
+
+    // Ensure commit is allowed.
+    workingBranchesValue = {
+      [project.id]: {
+        name: 'feature/coverage',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        testsRequired: false,
+        stagedFiles: [{ path: 'src/a.js' }]
+      }
+    };
+
+    const headCommit = {
+      sha: 'abc1234',
+      shortSha: 'abc1234',
+      message: 'Head commit',
+      author: { name: 'Alice' },
+      authoredAt: '2024-01-01T00:00:00.000Z'
+    };
+
+    let commitsFetchCount = 0;
+    axios.get.mockImplementation(async (url) => {
+      if (url === `/api/projects/${project.id}/commits`) {
+        commitsFetchCount += 1;
+        return {
+          data: {
+            success: true,
+            commits: commitsFetchCount === 1 ? [] : [headCommit]
+          }
+        };
+      }
+
+      if (url === `/api/projects/${project.id}/commits/${headCommit.sha}`) {
+        return {
+          data: {
+            success: true,
+            commit: {
+              ...headCommit,
+              files: []
+            }
+          }
+        };
+      }
+
+      return { data: { success: true } };
+    });
+
+    axios.post.mockResolvedValueOnce({
+      data: {
+        success: true,
+        overview: { branches: [], current: 'feature/coverage', workingBranches: [] }
+      }
+    });
+
+    await renderCommitsTab({ testApiRef });
+
+    await waitFor(() => {
+      expect(testApiRef.current).toBeTruthy();
+    });
+
+    await act(async () => {
+      await testApiRef.current.handleCommitStagedChanges();
+    });
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalled();
+      const commitsCalls = axios.get.mock.calls.filter(([url]) => url === `/api/projects/${project.id}/commits`);
+      expect(commitsCalls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  test('commit handler tolerates refresh failure (covers headSha null branch)', async () => {
+    const testApiRef = { current: null };
+
+    workingBranchesValue = {
+      [project.id]: {
+        name: 'feature/coverage',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        testsRequired: false,
+        stagedFiles: [{ path: 'src/a.js' }]
+      }
+    };
+
+    let commitsFetchCount = 0;
+    axios.get.mockImplementation(async (url) => {
+      if (url === `/api/projects/${project.id}/commits`) {
+        commitsFetchCount += 1;
+
+        // Initial load succeeds; post-commit refresh fails so fetchCommits() returns null.
+        if (commitsFetchCount === 1) {
+          return { data: { success: true, commits: [] } };
+        }
+
+        return { data: { success: false, error: 'Backend unavailable' } };
+      }
+
+      return { data: { success: true } };
+    });
+
+    axios.post.mockResolvedValueOnce({
+      data: {
+        success: true,
+        overview: { branches: [], current: 'feature/coverage', workingBranches: [] }
+      }
+    });
+
+    await renderCommitsTab({ testApiRef });
+
+    await waitFor(() => {
+      expect(testApiRef.current).toBeTruthy();
+    });
+
+    await act(async () => {
+      await testApiRef.current.handleCommitStagedChanges();
+    });
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalled();
+      const commitsCalls = axios.get.mock.calls.filter(([url]) => url === `/api/projects/${project.id}/commits`);
+      expect(commitsCalls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   test('shows the empty commits state when the backend returns no commits', async () => {
     axios.get.mockResolvedValueOnce({ data: { success: true, commits: [] } });
 
@@ -965,5 +1091,70 @@ describe('CommitsTab coverage branches', () => {
     expect(await screen.findByTestId('branch-commit-error')).toHaveTextContent(
       'Failed to commit staged changes'
     );
+  });
+
+  test('commit success syncs overview when backend returns one', async () => {
+    axios.get
+      .mockResolvedValueOnce({ data: { success: true, commits: [] } })
+      .mockResolvedValueOnce({
+        data: {
+          success: true,
+          commits: [
+            {
+              sha: 'abc1234',
+              shortSha: 'abc1234',
+              message: 'feat: commit',
+              author: { name: 'Alice' },
+              authoredAt: '2024-01-01T00:00:00.000Z'
+            }
+          ]
+        }
+      })
+      .mockResolvedValueOnce({
+        data: {
+          success: true,
+          commit: {
+            sha: 'abc1234',
+            shortSha: 'abc1234',
+            message: 'feat: commit',
+            files: []
+          }
+        }
+      });
+
+    axios.post.mockResolvedValueOnce({
+      data: {
+        success: true,
+        overview: { status: 'ready-for-merge' }
+      }
+    });
+
+    mockedCommitComposer.getCommitMessageForBranch.mockImplementation(() => '  feat: commit  ');
+
+    workingBranchesValue = {
+      [project.id]: {
+        name: 'feature/coverage',
+        stagedFiles: [{ path: 'src/styles.css' }],
+        lastTestStatus: 'passed',
+        status: 'ready-for-merge'
+      }
+    };
+    workspaceChangesValue = {
+      [project.id]: { stagedFiles: [{ path: 'src/styles.css' }] }
+    };
+
+    const testApiRef = { current: null };
+    await renderCommitsTab({ testApiRef });
+
+    await waitFor(() => {
+      expect(testApiRef.current?.handleCommitStagedChanges).toBeTypeOf('function');
+    });
+
+    await act(async () => {
+      await testApiRef.current.handleCommitStagedChanges();
+    });
+
+    expect(syncBranchOverviewValue).toHaveBeenCalledWith(project.id, { status: 'ready-for-merge' });
+    expect(mockedCommitComposer.clearCommitMessageForBranch).toHaveBeenCalledWith('feature/coverage');
   });
 });
