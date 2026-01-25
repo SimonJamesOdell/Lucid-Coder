@@ -1,14 +1,177 @@
 import httpProxy from 'http-proxy';
-import { getProject } from '../database.js';
+import { getPortSettings, getProject, updateProjectPorts } from '../database.js';
 import {
+  buildPortOverrideOptions,
+  extractProcessPorts,
   getProjectPortHints,
   getRunningProcessEntry,
   getStoredProjectPorts,
-  storeRunningProcesses
+  storeRunningProcesses,
+  terminateRunningProcesses
 } from './projects/processManager.js';
+import { startProject } from '../services/projectScaffolding.js';
 
 const COOKIE_NAME = 'lucidcoder_preview_project';
 const PREVIEW_ROUTE_PREFIX = '/preview/';
+
+const BAD_FRONTEND_PORT_TTL_MS = 5_000;
+const badFrontendPortsByProject = new Map();
+
+const AUTO_RESTART_FAILURE_WINDOW_MS = 5_000;
+const AUTO_RESTART_COOLDOWN_MS = 30_000;
+const autoRestartStateByProject = new Map();
+const autoRestartInFlightByProject = new Map();
+
+const isProxyConnectionFailure = (error) => {
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
+  if (
+    code === 'ECONNREFUSED' ||
+    code === 'ECONNRESET' ||
+    code === 'EPIPE' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EHOSTUNREACH' ||
+    code === 'ENOTFOUND'
+  ) {
+    return true;
+  }
+
+  const message = typeof error?.message === 'string' ? error.message : '';
+  return /(ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND)/i.test(message);
+};
+
+const rememberBadFrontendPort = (projectId, port) => {
+  const numericProjectId = projectId;
+  const numericPort = Number(port);
+  if (!numericProjectId || !Number.isInteger(numericPort) || numericPort <= 0) {
+    return;
+  }
+
+  badFrontendPortsByProject.set(numericProjectId, {
+    port: numericPort,
+    until: Date.now() + BAD_FRONTEND_PORT_TTL_MS
+  });
+};
+
+const isFrontendPortRememberedBad = (projectId, port) => {
+  const entry = badFrontendPortsByProject.get(projectId);
+  if (!entry) {
+    return false;
+  }
+
+  if (typeof entry.until !== 'number' || entry.until <= Date.now()) {
+    badFrontendPortsByProject.delete(projectId);
+    return false;
+  }
+
+  return entry.port === port;
+};
+
+const normalizeProjectKey = (projectId) => {
+  if (projectId === undefined || projectId === null) {
+    return null;
+  }
+
+  const raw = String(projectId).trim();
+  if (!raw) {
+    return null;
+  }
+  return raw;
+};
+
+const shouldAttemptAutoRestart = (projectKey) => {
+  const now = Date.now();
+  const previous = autoRestartStateByProject.get(projectKey);
+
+  if (!previous || typeof previous.firstFailureAt !== 'number' || now - previous.firstFailureAt > AUTO_RESTART_FAILURE_WINDOW_MS) {
+    autoRestartStateByProject.set(projectKey, {
+      firstFailureAt: now,
+      count: 1,
+      lastRestartAt: previous?.lastRestartAt || 0
+    });
+    return false;
+  }
+
+  const count = (previous.count || 0) + 1;
+  const lastRestartAt = Number(previous.lastRestartAt) || 0;
+  autoRestartStateByProject.set(projectKey, {
+    firstFailureAt: previous.firstFailureAt,
+    count,
+    lastRestartAt
+  });
+
+  return count >= 2 && now - lastRestartAt >= AUTO_RESTART_COOLDOWN_MS;
+};
+
+const markAutoRestartAttempted = (projectKey) => {
+  const now = Date.now();
+  const previous = autoRestartStateByProject.get(projectKey);
+  autoRestartStateByProject.set(projectKey, {
+    firstFailureAt: previous?.firstFailureAt || now,
+    count: previous?.count || 0,
+    lastRestartAt: now
+  });
+};
+
+const recordAutoRestartSuccess = async (projectId, processes) => {
+  storeRunningProcesses(projectId, processes, 'running', { launchType: 'auto' });
+  const nextPorts = extractProcessPorts(processes);
+  await updateProjectPorts(projectId, nextPorts);
+};
+
+const trackAutoRestartPromise = async (projectKey, restartPromise) => {
+  autoRestartInFlightByProject.set(projectKey, restartPromise);
+  await restartPromise;
+};
+
+const attemptAutoRestart = async (projectId, { logger } = {}) => {
+  const projectKey = normalizeProjectKey(projectId);
+  if (!projectKey) {
+    return;
+  }
+
+  const existingRestart = autoRestartInFlightByProject.get(projectKey);
+  if (existingRestart) {
+    await existingRestart;
+    return;
+  }
+
+  const restartPromise = (async () => {
+    try {
+      markAutoRestartAttempted(projectKey);
+      const project = await getProject(projectId);
+      if (!project?.path) {
+        return;
+      }
+
+      // Best-effort: restart the project to recover from stuck dev servers.
+      await terminateRunningProcesses(projectId, { project, waitForRelease: true, forcePorts: true });
+
+      const portHints = getProjectPortHints(project);
+      const portSettings = await getPortSettings();
+      const portOverrides = buildPortOverrideOptions(portSettings);
+      const startResult = await startProject(project.path, {
+        frontendPort: portHints.frontend,
+        backendPort: portHints.backend,
+        ...portOverrides
+      });
+
+      const restartSucceeded = Boolean(startResult && startResult.success);
+      if (!restartSucceeded) {
+        return;
+      }
+
+      await recordAutoRestartSuccess(projectId, startResult.processes);
+    } catch (error) {
+      if (logger?.warn) {
+        logger.warn('[preview-proxy] auto-restart failed', error?.message || error);
+      }
+    } finally {
+      autoRestartInFlightByProject.delete(projectKey);
+    }
+  })();
+
+  await trackAutoRestartPromise(projectKey, restartPromise);
+};
 
 const normalizeCookieValue = (value) => {
   if (value === undefined || value === null) {
@@ -205,7 +368,12 @@ const resolveFrontendPort = async (projectId) => {
   const { processes, state } = getRunningProcessEntry(projectId);
   const portCandidate = processes?.frontend?.port;
   const numericPort = Number(portCandidate);
-  if (state === 'running' && Number.isInteger(numericPort) && numericPort > 0) {
+  if (
+    state === 'running' &&
+    Number.isInteger(numericPort) &&
+    numericPort > 0 &&
+    !isFrontendPortRememberedBad(projectId, numericPort)
+  ) {
     return numericPort;
   }
 
@@ -277,7 +445,13 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
 
     const context = req?.__lucidcoderPreviewProxy;
     const contextProjectId = context?.projectId;
-    if (contextProjectId && /ECONNREFUSED/i.test(message)) {
+    const isConnectionFailure = Boolean(contextProjectId && isProxyConnectionFailure(error));
+
+    if (isConnectionFailure) {
+      if (context?.port) {
+        rememberBadFrontendPort(contextProjectId, context.port);
+      }
+
       const { processes } = getRunningProcessEntry(contextProjectId);
       if (processes?.frontend) {
         const nextProcesses = { ...processes, frontend: null };
@@ -288,20 +462,46 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
 
     const acceptHeader = typeof req?.headers?.accept === 'string' ? req.headers.accept : '';
     const wantsHtml = acceptHeader.toLowerCase().includes('text/html');
+    const fetchDest = typeof req?.headers?.['sec-fetch-dest'] === 'string' ? req.headers['sec-fetch-dest'].toLowerCase() : '';
+    const isIframeNavigation = fetchDest === 'iframe';
+
+    if (isConnectionFailure && (wantsHtml || isIframeNavigation)) {
+      const projectKey = normalizeProjectKey(contextProjectId);
+      if (projectKey && shouldAttemptAutoRestart(projectKey)) {
+        void attemptAutoRestart(contextProjectId, { logger });
+      }
+    }
 
     const htmlBody =
       '<!doctype html>' +
       '<html><head><meta charset="utf-8" />' +
       '<meta name="viewport" content="width=device-width, initial-scale=1" />' +
+      // Keep title stable so the frontend can detect this placeholder page.
       '<title>Preview proxy error</title>' +
-      '<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:20px;max-width:900px;margin:0 auto}code{background:#f3f3f3;padding:2px 6px;border-radius:6px}p{line-height:1.4}</style>' +
+      '<style>' +
+      'html,body{height:100%;margin:0;padding:0;}' +
+      'body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b0f1a;color:#e7eaf1;}' +
+      '.preview-loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;}' +
+      '.preview-loading-card{width:min(520px,100%);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);border-radius:14px;padding:18px 18px 14px 18px;box-shadow:0 10px 30px rgba(0,0,0,0.35);backdrop-filter:blur(10px);}' +
+      '.preview-loading-card h3{margin:0 0 12px 0;font-size:18px;letter-spacing:0.2px;}' +
+      '.preview-loading-bar{height:10px;border-radius:999px;overflow:hidden;background:rgba(255,255,255,0.12);position:relative;}' +
+      '.preview-loading-bar-swoosh{position:absolute;inset:0;width:45%;background:linear-gradient(90deg,rgba(125,155,255,0),rgba(125,155,255,0.85),rgba(125,155,255,0));transform:translateX(-60%);animation:swoosh 1.1s infinite;}' +
+      '@keyframes swoosh{0%{transform:translateX(-60%);}100%{transform:translateX(220%);}}' +
+      '.hint{margin:12px 0 0 0;opacity:0.9;line-height:1.4;font-size:13px;}' +
+      'details{margin-top:12px;opacity:0.9;}' +
+      'summary{cursor:pointer;}' +
+      'code{display:block;white-space:pre-wrap;word-break:break-word;margin-top:8px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.10);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;}' +
+      '</style>' +
       '</head><body>' +
-      '<h1>Preview proxy error</h1>' +
-      '<p>The preview server may still be starting or the preview port may be unavailable.</p>' +
-        '<p>Retrying automatically...</p>' +
-      '<p><code>' +
+      '<div class="preview-loading">' +
+      '<div class="preview-loading-card">' +
+      '<h3>Loading preview…</h3>' +
+      '<div class="preview-loading-bar" aria-hidden="true"><span class="preview-loading-bar-swoosh"></span></div>' +
+      '<p class="hint">Connecting to the preview server. Retrying automatically…</p>' +
+      '<details><summary>Details</summary><code>' +
       String(message).replace(/</g, '&lt;').replace(/>/g, '&gt;') +
-      '</code></p>' +
+      '</code></details>' +
+      '</div></div>' +
       '<script>setTimeout(function(){try{location.reload();}catch(e){}},900);</script>' +
       '</body></html>';
 
@@ -398,7 +598,8 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
     const originalUrl = req.url;
     req.__lucidcoderPreviewProxy = {
       previewPrefix: `${PREVIEW_ROUTE_PREFIX}${projectId}`.replace(/\/+$/, ''),
-      projectId
+      projectId,
+      port
     };
 
     try {
@@ -459,6 +660,11 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
           const originalUrl = req.url;
           try {
             req.url = info.forwardPath;
+            req.__lucidcoderPreviewProxy = {
+              previewPrefix: `${PREVIEW_ROUTE_PREFIX}${info.projectId}`.replace(/\/+$/, ''),
+              projectId: info.projectId,
+              port
+            };
             proxy.ws(req, socket, head, { target });
           } catch {
             try {
@@ -501,6 +707,10 @@ export const attachPreviewProxy = ({ app, server, logger = console } = {}) => {
 export const __testOnly = {
   COOKIE_NAME,
   PREVIEW_ROUTE_PREFIX,
+  normalizeProjectKey,
+  shouldAttemptAutoRestart,
+  markAutoRestartAttempted,
+  attemptAutoRestart,
   parseCookieHeader,
   parsePreviewPath,
   isLikelyPreviewDevAssetPath,
