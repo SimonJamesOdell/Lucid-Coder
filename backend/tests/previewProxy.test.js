@@ -4,16 +4,31 @@ const getRunningProcessEntryMock = vi.hoisted(() => vi.fn());
 const getStoredProjectPortsMock = vi.hoisted(() => vi.fn());
 const getProjectPortHintsMock = vi.hoisted(() => vi.fn());
 const storeRunningProcessesMock = vi.hoisted(() => vi.fn());
+const terminateRunningProcessesMock = vi.hoisted(() => vi.fn());
+const buildPortOverrideOptionsMock = vi.hoisted(() => vi.fn(() => ({})));
+const extractProcessPortsMock = vi.hoisted(() => vi.fn(() => ({})));
 vi.mock('../routes/projects/processManager.js', () => ({
   getRunningProcessEntry: getRunningProcessEntryMock,
   getStoredProjectPorts: getStoredProjectPortsMock,
   getProjectPortHints: getProjectPortHintsMock,
-  storeRunningProcesses: storeRunningProcessesMock
+  storeRunningProcesses: storeRunningProcessesMock,
+  terminateRunningProcesses: terminateRunningProcessesMock,
+  buildPortOverrideOptions: buildPortOverrideOptionsMock,
+  extractProcessPorts: extractProcessPortsMock
 }));
 
 const getProjectMock = vi.hoisted(() => vi.fn());
+const getPortSettingsMock = vi.hoisted(() => vi.fn());
+const updateProjectPortsMock = vi.hoisted(() => vi.fn());
 vi.mock('../database.js', () => ({
-  getProject: getProjectMock
+  getProject: getProjectMock,
+  getPortSettings: getPortSettingsMock,
+  updateProjectPorts: updateProjectPortsMock
+}));
+
+const startProjectMock = vi.hoisted(() => vi.fn());
+vi.mock('../services/projectScaffolding.js', () => ({
+  startProject: startProjectMock
 }));
 
 const proxyStub = vi.hoisted(() => ({
@@ -84,11 +99,400 @@ describe('previewProxy', () => {
     getStoredProjectPortsMock.mockReset();
     getProjectPortHintsMock.mockReset();
     storeRunningProcessesMock.mockReset();
+    terminateRunningProcessesMock.mockReset();
+    buildPortOverrideOptionsMock.mockReset();
+    extractProcessPortsMock.mockReset();
     getProjectMock.mockReset();
+    getPortSettingsMock.mockReset();
+    updateProjectPortsMock.mockReset();
+    startProjectMock.mockReset();
     proxyStub.on.mockReset();
     proxyStub.web.mockReset();
     proxyStub.ws.mockReset();
     createProxyServerMock.mockClear();
+  });
+
+  test('proxy error handler auto-restarts on repeated connection failures for iframe navigation', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } },
+      state: 'running'
+    });
+
+    getProjectMock.mockResolvedValue({ id: 12, path: 'C:/tmp/project-12' });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    getPortSettingsMock.mockResolvedValue({});
+    buildPortOverrideOptionsMock.mockReturnValue({});
+    terminateRunningProcessesMock.mockResolvedValue();
+    extractProcessPortsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    startProjectMock.mockResolvedValue({
+      success: true,
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } }
+    });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/', { 'sec-fetch-dest': 'iframe' });
+    req.__lucidcoderPreviewProxy = { projectId: 12, port: 5173 };
+    const res = createRes();
+
+    // First failure: records state but does not trigger restart yet.
+    errorHandler(new Error('connect ECONNREFUSED'), req, res);
+    await Promise.resolve();
+    expect(terminateRunningProcessesMock).not.toHaveBeenCalled();
+
+    // Second failure in the window: triggers background auto-restart.
+    errorHandler(new Error('ECONNREFUSED'), req, res);
+    for (let i = 0; i < 20 && startProjectMock.mock.calls.length === 0; i += 1) {
+      // attemptAutoRestart runs in the background (fire-and-forget).
+      await Promise.resolve();
+    }
+
+    for (let i = 0; i < 20 && updateProjectPortsMock.mock.calls.length === 0; i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(startProjectMock).toHaveBeenCalled();
+
+    expect(terminateRunningProcessesMock).toHaveBeenCalledWith(
+      12,
+      expect.objectContaining({
+        project: expect.objectContaining({ path: 'C:/tmp/project-12' }),
+        waitForRelease: true,
+        forcePorts: true
+      })
+    );
+    expect(startProjectMock).toHaveBeenCalledWith(
+      'C:/tmp/project-12',
+      expect.objectContaining({
+        frontendPort: 5173,
+        backendPort: 3000
+      })
+    );
+    expect(storeRunningProcessesMock).toHaveBeenCalledWith(
+      12,
+      { frontend: { port: 5173 }, backend: { port: 3000 } },
+      'running',
+      { launchType: 'auto' }
+    );
+    expect(updateProjectPortsMock).toHaveBeenCalledWith(12, { frontend: 5173, backend: 3000 });
+  });
+
+  test('__testOnly.attemptAutoRestart covers normalizeProjectKey and success path', async () => {
+    const warn = vi.fn();
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getProjectMock.mockResolvedValue({ id: 12, path: 'C:/tmp/project-12' });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    getPortSettingsMock.mockResolvedValue({});
+    buildPortOverrideOptionsMock.mockReturnValue({});
+    terminateRunningProcessesMock.mockResolvedValue();
+    extractProcessPortsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    startProjectMock.mockResolvedValue({
+      success: true,
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } }
+    });
+
+    await __testOnly.attemptAutoRestart(12, { logger: { warn } });
+
+    expect(terminateRunningProcessesMock).toHaveBeenCalledWith(
+      12,
+      expect.objectContaining({
+        project: expect.objectContaining({ path: 'C:/tmp/project-12' }),
+        waitForRelease: true,
+        forcePorts: true
+      })
+    );
+    expect(startProjectMock).toHaveBeenCalledWith(
+      'C:/tmp/project-12',
+      expect.objectContaining({ frontendPort: 5173, backendPort: 3000 })
+    );
+    expect(storeRunningProcessesMock).toHaveBeenCalledWith(
+      12,
+      { frontend: { port: 5173 }, backend: { port: 3000 } },
+      'running',
+      { launchType: 'auto' }
+    );
+    expect(updateProjectPortsMock).toHaveBeenCalledWith(12, { frontend: 5173, backend: 3000 });
+  });
+
+  test('__testOnly.normalizeProjectKey returns null for nullish and blank inputs', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    expect(__testOnly.normalizeProjectKey(undefined)).toBe(null);
+    expect(__testOnly.normalizeProjectKey(null)).toBe(null);
+    expect(__testOnly.normalizeProjectKey('   ')).toBe(null);
+  });
+
+  test('__testOnly.attemptAutoRestart no-ops when projectId is nullish', async () => {
+    const warn = vi.fn();
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    await __testOnly.attemptAutoRestart(null, { logger: { warn } });
+    expect(getProjectMock).not.toHaveBeenCalled();
+    expect(startProjectMock).not.toHaveBeenCalled();
+  });
+
+  test('__testOnly.attemptAutoRestart returns early when restart does not succeed', async () => {
+    const warn = vi.fn();
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getProjectMock.mockResolvedValue({ id: 12, path: 'C:/tmp/project-12' });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    getPortSettingsMock.mockResolvedValue({});
+    buildPortOverrideOptionsMock.mockReturnValue({});
+    terminateRunningProcessesMock.mockResolvedValue();
+    startProjectMock.mockResolvedValue({ success: false });
+
+    await __testOnly.attemptAutoRestart(12, { logger: { warn } });
+
+    expect(startProjectMock).toHaveBeenCalled();
+    expect(updateProjectPortsMock).not.toHaveBeenCalled();
+    expect(storeRunningProcessesMock).not.toHaveBeenCalledWith(
+      12,
+      expect.anything(),
+      'running',
+      expect.objectContaining({ launchType: 'auto' })
+    );
+  });
+
+  test('__testOnly.attemptAutoRestart logs a warning when auto-restart throws', async () => {
+    const warn = vi.fn();
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getProjectMock.mockResolvedValue({ id: 12, path: 'C:/tmp/project-12' });
+    terminateRunningProcessesMock.mockRejectedValue(new Error('terminate failed'));
+
+    await __testOnly.attemptAutoRestart(12, { logger: { warn } });
+
+    expect(warn).toHaveBeenCalled();
+  });
+
+  test('__testOnly.attemptAutoRestart logs the raw error when message is blank', async () => {
+    const warn = vi.fn();
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getProjectMock.mockResolvedValue({ id: 12, path: 'C:/tmp/project-12' });
+
+    const thrown = { message: '' };
+    terminateRunningProcessesMock.mockRejectedValue(thrown);
+
+    await __testOnly.attemptAutoRestart(12, { logger: { warn } });
+
+    expect(warn).toHaveBeenCalledWith('[preview-proxy] auto-restart failed', thrown);
+  });
+
+  test('__testOnly.attemptAutoRestart does not log when logger is missing', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getProjectMock.mockResolvedValue({ id: 12, path: 'C:/tmp/project-12' });
+    terminateRunningProcessesMock.mockRejectedValue(new Error('terminate failed'));
+
+    await expect(__testOnly.attemptAutoRestart(12)).resolves.toBeUndefined();
+  });
+
+  test('__testOnly.shouldAttemptAutoRestart preserves lastRestartAt when failure window expires', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    let now = 100_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    const projectKey = 'project-12';
+
+    // Seed state.
+    expect(__testOnly.shouldAttemptAutoRestart(projectKey)).toBe(false);
+
+    // Move beyond the failure window and record a restart attempt.
+    now += 10_000;
+    __testOnly.markAutoRestartAttempted(projectKey);
+
+    // Move beyond the window relative to the original firstFailureAt, forcing reset logic.
+    now += 10_000;
+    expect(__testOnly.shouldAttemptAutoRestart(projectKey)).toBe(false);
+
+    // Ensure the non-zero lastRestartAt survived the reset (so cooldown logic can use it).
+    now += 1;
+    expect(__testOnly.shouldAttemptAutoRestart(projectKey)).toBe(false);
+
+    nowSpy.mockRestore();
+  });
+
+  test('__testOnly.shouldAttemptAutoRestart increments within the failure window', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    let now = 100_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    const projectKey = 'project-shouldAttempt-in-window';
+
+    // First failure seeds state.
+    expect(__testOnly.shouldAttemptAutoRestart(projectKey)).toBe(false);
+
+    // Second failure within the window hits the increment path.
+    now += 1;
+    expect(__testOnly.shouldAttemptAutoRestart(projectKey)).toBe(true);
+
+    nowSpy.mockRestore();
+  });
+
+  test('__testOnly.shouldAttemptAutoRestart tolerates a zero count state', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    let now = 100_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    const projectKey = 'project-shouldAttempt-zero-count';
+
+    // Create a state shape with count=0 via markAutoRestartAttempted.
+    __testOnly.markAutoRestartAttempted(projectKey);
+
+    // Next failure within the window should take the increment path and handle count=0.
+    now += 1;
+    expect(__testOnly.shouldAttemptAutoRestart(projectKey)).toBe(false);
+
+    nowSpy.mockRestore();
+  });
+
+  test('__testOnly.attemptAutoRestart returns early when an auto-restart is already in-flight', async () => {
+    const warn = vi.fn();
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getProjectMock.mockResolvedValue({ id: 12, path: 'C:/tmp/project-12' });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    getPortSettingsMock.mockResolvedValue({});
+    buildPortOverrideOptionsMock.mockReturnValue({});
+    terminateRunningProcessesMock.mockResolvedValue();
+    extractProcessPortsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+
+    let resolveStart = null;
+    startProjectMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStart = resolve;
+        })
+    );
+
+    const first = __testOnly.attemptAutoRestart(12, { logger: { warn } });
+    const second = __testOnly.attemptAutoRestart(12, { logger: { warn } });
+
+    // Let the first restart reach the startProject await so we can finish it.
+    for (let i = 0; i < 20 && startProjectMock.mock.calls.length === 0; i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(startProjectMock).toHaveBeenCalledTimes(1);
+    expect(getProjectMock).toHaveBeenCalledTimes(1);
+
+    resolveStart?.({
+      success: true,
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } }
+    });
+
+    await Promise.all([first, second]);
+
+    expect(startProjectMock).toHaveBeenCalledTimes(1);
+    expect(getProjectMock).toHaveBeenCalledTimes(1);
+    expect(terminateRunningProcessesMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('proxy error handler does not auto-restart when project path is unavailable', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 12, path: null });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/', { accept: 'text/html' });
+    req.__lucidcoderPreviewProxy = { projectId: 12, port: 5173 };
+    const res = createRes();
+
+    errorHandler(new Error('ECONNREFUSED'), req, res);
+    errorHandler(new Error('ECONNREFUSED'), req, res);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(startProjectMock).not.toHaveBeenCalled();
+    expect(terminateRunningProcessesMock).not.toHaveBeenCalled();
+    expect(updateProjectPortsMock).not.toHaveBeenCalled();
+  });
+
+  test('proxy error handler does not start a second auto-restart while one is in-flight', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    let now = 100_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } },
+      state: 'running'
+    });
+
+    getProjectMock.mockResolvedValue({ id: 12, path: 'C:/tmp/project-12' });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    getPortSettingsMock.mockResolvedValue({});
+    buildPortOverrideOptionsMock.mockReturnValue({});
+    terminateRunningProcessesMock.mockResolvedValue();
+    extractProcessPortsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+
+    let resolveStart = null;
+    startProjectMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStart = resolve;
+        })
+    );
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/', { accept: 'text/html' });
+    req.__lucidcoderPreviewProxy = { projectId: 12, port: 5173 };
+    const res = createRes();
+
+    try {
+      // Prime the window.
+      errorHandler(new Error('ECONNREFUSED'), req, res);
+      // Triggers first restart.
+      errorHandler(new Error('ECONNREFUSED'), req, res);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(startProjectMock).toHaveBeenCalledTimes(1);
+
+      // Advance beyond cooldown while the restart is still pending, then send a new
+      // burst of failures inside the new window. The second failure would normally
+      // trigger another restart, but should be blocked by the in-flight guard.
+      now += 31_000;
+      errorHandler(new Error('ECONNREFUSED'), req, res);
+      errorHandler(new Error('ECONNREFUSED'), req, res);
+      await Promise.resolve();
+
+      expect(startProjectMock).toHaveBeenCalledTimes(1);
+
+      resolveStart?.({
+        success: true,
+        processes: { frontend: { port: 5173 }, backend: { port: 3000 } }
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   test('parsePreviewPath preserves query strings', async () => {

@@ -1,7 +1,9 @@
 # Changelog
 
-## 0.2.5 (Unreleased)
-- (No changes yet.)
+## 0.2.5 (2026-01-25)
+- Added best-effort preview auto-restart after repeated proxy connection failures (primarily iframe/HTML navigation).
+- Improved preview proxy error placeholder UX and stabilized detection via consistent page title.
+- Expanded backend tests around preview proxy auto-restart edge cases and tightened coverage mapping to keep the 100% coverage gate green.
 
 ## 0.2.4 (2026-01-25)
 - Hardened preview proxy routing (dev assets + Vite HMR websockets) and expanded coverage for those paths.
