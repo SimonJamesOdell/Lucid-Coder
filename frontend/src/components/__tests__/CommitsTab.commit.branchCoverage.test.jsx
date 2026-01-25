@@ -108,4 +108,84 @@ describe('CommitsTab commit message branch coverage', () => {
     const [, payload] = calls[calls.length - 1];
     expect(payload).toBeUndefined();
   });
+
+  it('selects the new head commit after committing and loads its details', async () => {
+    const project = { id: 1, name: 'Test Project' };
+    const apiRef = React.createRef();
+
+    const { findByTestId } = render(
+      <AppStateProvider>
+        <CommitsTab project={project} testApiRef={apiRef} />
+      </AppStateProvider>
+    );
+
+    const axios = (await import('axios')).default;
+
+    axios.get.mockImplementation(async (url) => {
+      if (/\/api\/projects\/1\/commits\/abcdef123$/.test(url)) {
+        return {
+          data: {
+            success: true,
+            commit: {
+              sha: 'abcdef123',
+              shortSha: 'abcdef1',
+              message: 'Head commit',
+              files: []
+            }
+          }
+        };
+      }
+
+      if (/\/api\/projects\/1\/commits$/.test(url)) {
+        return {
+          data: {
+            success: true,
+            commits: [
+              {
+                sha: '  abcdef123  ',
+                shortSha: 'abcdef1',
+                message: 'Head commit',
+                author: { name: 'Alice' },
+                authoredAt: '2024-01-01T00:00:00.000Z'
+              }
+            ]
+          }
+        };
+      }
+
+      return { data: { success: true, commits: [], overview: null } };
+    });
+
+    await act(async () => {
+      const applyOverview = __appStateTestHelpers.applyBranchOverview;
+      applyOverview(project.id, {
+        branches: [],
+        current: 'feature/test',
+        workingBranches: [
+          {
+            name: 'feature/test',
+            description: 'branch',
+            status: 'active',
+            lastTestStatus: 'failed',
+            testsRequired: false,
+            stagedFiles: [{ path: 'styles.css' }]
+          }
+        ]
+      });
+    });
+
+    await findByTestId('commits-tab-panel');
+
+    await waitFor(() => {
+      expect(apiRef.current).toBeTruthy();
+    });
+
+    await act(async () => {
+      await apiRef.current.handleCommitStagedChanges();
+    });
+
+    await waitFor(() => {
+      expect(axios.get).toHaveBeenCalledWith('/api/projects/1/commits/abcdef123');
+    });
+  });
 });

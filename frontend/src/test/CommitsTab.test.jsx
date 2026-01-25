@@ -1171,6 +1171,15 @@ describe('CommitsTab', () => {
   });
 
   test('commit composer posts to commit endpoint and refreshes', async () => {
+    const newCommit = {
+      sha: 'fed111122223333',
+      shortSha: 'fed1111',
+      message: 'feat: tidy login flows',
+      author: { name: 'Demo Dev' },
+      authoredAt: '2025-01-07T10:00:00Z',
+      canRevert: true
+    };
+
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-login',
@@ -1180,9 +1189,37 @@ describe('CommitsTab', () => {
       }
     };
 
-    axios.get
-      .mockResolvedValueOnce({ data: { success: true, commits: [] } })
-      .mockResolvedValueOnce({ data: { success: true, commits: [] } });
+    syncBranchOverviewValue = vi.fn(() => {
+      workingBranchesValue = {
+        [mockProject.id]: {
+          name: 'feature-login',
+          status: 'ready-for-merge',
+          lastTestStatus: 'passed',
+          stagedFiles: []
+        }
+      };
+    });
+
+    let commitsFetchCount = 0;
+    axios.get.mockImplementation((url) => {
+      if (url === `/api/projects/${mockProject.id}/commits`) {
+        commitsFetchCount += 1;
+        return Promise.resolve({
+          data: {
+            success: true,
+            commits: commitsFetchCount === 1 ? baseCommits : [newCommit, ...baseCommits]
+          }
+        });
+      }
+
+      if (url.startsWith(`/api/projects/${mockProject.id}/commits/`)) {
+        const sha = decodeURIComponent(url.split('/').pop() || '');
+        const commit = sha === newCommit.sha ? newCommit : baseCommits[0];
+        return Promise.resolve({ data: { success: true, commit: buildCommitDetail(commit) } });
+      }
+
+      return Promise.resolve({ data: { success: true } });
+    });
 
     axios.post.mockResolvedValueOnce({
       data: {
@@ -1213,8 +1250,31 @@ describe('CommitsTab', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId('branch-commit-subject')).toHaveValue('');
+      expect(screen.getByTestId('commit-fed1111')).toHaveClass('selected');
     });
+
+    expect(screen.queryByTestId('branch-commit-subject')).not.toBeInTheDocument();
+  });
+
+  test('does not show merge/test gate banners when simply viewing history with merge blocked', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-login',
+        status: 'needs-fix',
+        lastTestStatus: null,
+        testsRequired: true,
+        stagedFiles: []
+      }
+    };
+
+    axios.get
+      .mockResolvedValueOnce({ data: { success: true, commits: baseCommits } })
+      .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+
+    await renderCommitsTab();
+
+    expect(screen.queryByTestId('commit-gate-status')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('commit-merge-blocked')).not.toBeInTheDocument();
   });
 
   test('commit composer surfaces inline error when commit request fails', async () => {
@@ -1638,7 +1698,7 @@ describe('CommitsTab', () => {
     consoleError.mockRestore();
   });
 
-  test('surfaces a merge-blocked reason when merge CTA is unavailable', async () => {
+  test('hides merge-blocked banner when commit composer is shown (staged changes present)', async () => {
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-login',
@@ -1660,9 +1720,8 @@ describe('CommitsTab', () => {
 
     await renderCommitsTab();
 
-    expect(await screen.findByTestId('commit-merge-blocked')).toHaveTextContent(
-      'Commit staged changes before merging'
-    );
+    expect(await screen.findByTestId('branch-commit-subject')).toBeInTheDocument();
+    expect(screen.queryByTestId('commit-merge-blocked')).not.toBeInTheDocument();
   });
 
   test('surfaces tests, coverage, and merge gate status', async () => {
@@ -1952,7 +2011,7 @@ describe('CommitsTab', () => {
     expect(await screen.findByTestId('commit-gate-tests')).toHaveTextContent('Tests: Optional');
   });
 
-  test('gate status and merge blocker copy reflect CSS-only staged changes', async () => {
+  test('hides gate status + merge blocker banners when commit composer is shown for CSS-only staged changes', async () => {
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-css-only',
@@ -1975,10 +2034,14 @@ describe('CommitsTab', () => {
 
     await renderCommitsTab();
 
-    expect(await screen.findByTestId('commit-gate-tests')).toHaveTextContent('Tests: CSS-only (tests optional)');
-    expect(screen.getByTestId('commit-gate-coverage')).toHaveTextContent('Coverage: CSS-only (tests optional)');
-    expect(screen.getByTestId('commit-gate-merge')).toHaveTextContent('Merge: Blocked (Commit CSS-only changes before merging)');
-    expect(await screen.findByTestId('commit-merge-blocked')).toHaveTextContent('Commit CSS-only changes before merging');
+    // Commit composer should be visible in the pending state.
+    expect(await screen.findByTestId('branch-commit-subject')).toBeInTheDocument();
+
+    // Gate banners are redundant once the commit UI is visible.
+    expect(screen.queryByTestId('commit-gate-tests')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('commit-gate-coverage')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('commit-gate-merge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('commit-merge-blocked')).not.toBeInTheDocument();
   });
 
   test('merge gate falls back to generic blocked copy when blocker text is unavailable', async () => {

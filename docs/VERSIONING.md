@@ -4,8 +4,9 @@ LucidCoder follows Semantic Versioning.
 
 ## Current version
 
-0.1.0
 
+
+0.2.4
 ## Policy
 
 - MAJOR: incompatible API or workflow changes.
@@ -14,9 +15,8 @@ LucidCoder follows Semantic Versioning.
 
 ## Source of truth
 
-- Root version in [package.json](package.json)
-- Backend version in [backend/package.json](backend/package.json)
-- Frontend version in [frontend/package.json](frontend/package.json)
+- Canonical version in [shared/version.mjs](shared/version.mjs)
+- Synced versions in [package.json](package.json), [backend/package.json](backend/package.json), and [frontend/package.json](frontend/package.json)
 - Human-readable version in [VERSION](VERSION)
 
-Keep these in sync when preparing a release.
+Use the version bumper to keep these in sync.

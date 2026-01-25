@@ -2,6 +2,8 @@ import path from 'path';
 import { templates } from './templates.js';
 import { ensureDirectory, sanitizeProjectName, writeFile } from './files.js';
 
+const DEFAULT_PROJECT_VERSION = '0.1.0';
+
 export const generateMainProjectFiles = async (projectPath, config) => {
   const { name, description, frontend, backend } = config;
 
@@ -19,6 +21,8 @@ export const generateMainProjectFiles = async (projectPath, config) => {
   const readmeContent = `# ${name}
 
 ${description || 'A full-stack web application'}
+
+Version: ${DEFAULT_PROJECT_VERSION}
 
 ## Project Structure
 
@@ -125,6 +129,13 @@ ${backend.language === 'python' ? `### Backend (Flask)
   \`\`\`
 ` : ''}
 
+## Versioning & Changelog
+
+- Keep release notes in CHANGELOG.md (the workflow can create an "Unreleased" section automatically when needed).
+- The project version is tracked in the VERSION file and mirrored into frontend/backend package.json (when present).
+- You can manually bump + roll the changelog with:
+  \`node tools/bump-version.mjs ${DEFAULT_PROJECT_VERSION}\`
+
 ## Features
 
 - Modern ${frontend.framework} frontend
@@ -139,6 +150,124 @@ MIT
 `;
 
   await writeFile(path.join(projectPath, 'README.md'), readmeContent);
+
+  // VERSION
+  await writeFile(path.join(projectPath, 'VERSION'), `${DEFAULT_PROJECT_VERSION}\n`);
+
+  // CHANGELOG.md
+  const changelogContent = `# Changelog
+
+## ${DEFAULT_PROJECT_VERSION} (${new Date().toISOString().slice(0, 10)})
+
+- Project scaffold created.
+`;
+  await writeFile(path.join(projectPath, 'CHANGELOG.md'), changelogContent);
+
+  // tools/bump-version.mjs
+  await ensureDirectory(path.join(projectPath, 'tools'));
+  const bumpScript = `import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import path from 'node:path';
+
+const repoRoot = path.resolve(process.cwd());
+
+const usage = () => {
+  console.log('Usage: node tools/bump-version.mjs <newVersion> [--dry-run]');
+  console.log('Example: node tools/bump-version.mjs 0.1.1');
+};
+
+const args = process.argv.slice(2);
+const dryRun = args.includes('--dry-run');
+const newVersion = args.find((arg) => !arg.startsWith('-'));
+
+if (!newVersion || newVersion === '--help' || newVersion === '-h') {
+  usage();
+  process.exit(newVersion ? 0 : 1);
+}
+
+if (!/^\\d+\\.\\d+\\.\\d+$/.test(newVersion)) {
+  console.error('Invalid version:', newVersion);
+  console.error('Expected semver like 0.1.1');
+  process.exit(1);
+}
+
+const updates = [];
+const detectEol = (text) => (text.includes('\\r\\n') ? '\\r\\n' : '\\n');
+const withEol = (text, eol) => (eol === '\\r\\n' ? text.replace(/\\r?\\n/g, '\\r\\n') : text.replace(/\\r\\n/g, '\\n'));
+
+const updateFile = (relativePath, transform, { ensureTrailingNewline = false } = {}) => {
+  const absolutePath = path.join(repoRoot, relativePath);
+  if (!existsSync(absolutePath)) {
+    return;
+  }
+  const prev = readFileSync(absolutePath, 'utf8');
+  const eol = detectEol(prev);
+  const next = transform(prev);
+  if (next === prev) {
+    return;
+  }
+  const normalized = withEol(next, eol);
+  const finalText = ensureTrailingNewline && !normalized.endsWith(eol) ? normalized + eol : normalized;
+  if (!dryRun) {
+    writeFileSync(absolutePath, finalText, 'utf8');
+  }
+  updates.push(relativePath);
+};
+
+const updateJsonVersion = (relativePath) => {
+  updateFile(
+    relativePath,
+    (prev) => {
+      const eol = detectEol(prev);
+      const parsed = JSON.parse(prev);
+      const next = { ...parsed, version: newVersion };
+      return withEol(JSON.stringify(next, null, 2) + '\\n', eol);
+    },
+    { ensureTrailingNewline: true }
+  );
+};
+
+const rollChangelog = (text) => {
+  const eol = detectEol(text);
+  const normalized = withEol(text, '\\n');
+  const match = normalized.match(/^##\\s+Unreleased\\s*$/im);
+  if (!match || match.index == null) {
+    return text;
+  }
+  const start = match.index + match[0].length;
+  const rest = normalized.slice(start);
+  const nextHeading = rest.search(/^##\\s+/m);
+  const body = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).replace(/^\n+/, '');
+  const entries = body
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => /^-\\s+\\S+/.test(line.trim()));
+  if (!entries.length) {
+    return text;
+  }
+  const tail = nextHeading === -1 ? '' : rest.slice(nextHeading);
+  const date = new Date().toISOString().slice(0, 10);
+  const injected = '\n\n## ' + newVersion + ' (' + date + ')\n\n' + entries.join('\n') + '\n';
+  const clearedUnreleased = '\n\n- (Add notes for your next merge here)\n';
+  const rebuilt = normalized.slice(0, match.index) + match[0] + clearedUnreleased + injected + tail.replace(/^\n+/, '\n');
+  return withEol(rebuilt, eol);
+};
+
+updateFile('VERSION', () => newVersion + '\n', { ensureTrailingNewline: true });
+updateFile('CHANGELOG.md', (text) => rollChangelog(text), { ensureTrailingNewline: true });
+updateJsonVersion('frontend/package.json');
+updateJsonVersion('backend/package.json');
+
+console.log((dryRun ? 'Would bump' : 'Bumped') + ' version to ' + newVersion);
+if (updates.length) {
+  console.log((dryRun ? 'Would update' : 'Updated') + ':');
+  for (const file of updates) {
+    console.log('- ' + file);
+  }
+} else {
+  console.log('No files changed.');
+}
+`;
+  await writeFile(path.join(projectPath, 'tools', 'bump-version.mjs'), bumpScript);
 
   // .gitignore
   const gitignoreContent = `# Dependencies

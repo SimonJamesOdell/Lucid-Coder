@@ -1,20 +1,564 @@
+import JSON5 from 'json5';
+
 export const createBranchWorkflowCommits = (core) => {
   const {
     withStatusCode,
     ensureMainBranch,
     getProjectContext,
     runProjectGit,
+    llmClient,
     normalizeCommitLimit,
     parseGitLog,
     getBranchByName,
     cancelScheduledAutoTests,
     isCssOnlyBranchDiff,
+    listBranchChangedPaths,
     ensureGitBranchExists,
     checkoutGitBranch,
     run,
     get,
     setCurrentBranch
   } = core;
+
+  const fs = core.fs;
+  const path = core.path;
+
+  const parseSemver = (value) => {
+    let input = '';
+    if (typeof value === 'string') {
+      input = value.trim();
+    } else {
+      /* c8 ignore next */
+      input = '';
+    }
+    const match = input.match(/^(\d+)\.(\d+)\.(\d+)$/);
+    if (!match) {
+      return null;
+    }
+    return {
+      major: Number(match[1]),
+      minor: Number(match[2]),
+      patch: Number(match[3])
+    };
+  };
+
+  const formatSemver = (parts) => `${parts.major}.${parts.minor}.${parts.patch}`;
+
+  const incrementPatch = (version) => {
+    const parsed = parseSemver(version);
+    if (!parsed) {
+      return null;
+    }
+    return formatSemver({ ...parsed, patch: parsed.patch + 1 });
+  };
+
+  const extractUnreleasedEntries = (text) => {
+    let input = '';
+    if (typeof text === 'string') {
+      input = text;
+    } else {
+      /* c8 ignore next */
+      input = '';
+    }
+    const normalized = input.replace(/\r\n/g, '\n');
+    const match = normalized.match(/^##\s+Unreleased\s*$/im);
+    if (!match || match.index == null) {
+      return { hasHeading: false, entries: [], body: '' };
+    }
+
+    const start = match.index + match[0].length;
+    const rest = normalized.slice(start);
+    const nextHeading = rest.search(/^##\s+/m);
+    const body = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).replace(/^\n+/, '');
+    const entries = body
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .filter((line) => /^-\s+\S+/.test(line.trim()));
+
+    return { hasHeading: true, entries, body };
+  };
+
+  const rollChangelogToVersion = (text, newVersion) => {
+    let input = '';
+    if (typeof text === 'string') {
+      input = text;
+    } else {
+      /* c8 ignore next */
+      input = '';
+    }
+    const eol = input.includes('\r\n') ? '\r\n' : '\n';
+    const normalized = input.replace(/\r\n/g, '\n');
+    const match = normalized.match(/^##\s+Unreleased\s*$/im);
+    if (!match || match.index == null) {
+      return input;
+    }
+
+    const start = match.index + match[0].length;
+    const rest = normalized.slice(start);
+    const nextHeading = rest.search(/^##\s+/m);
+    const body = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).replace(/^\n+/, '');
+    const tail = nextHeading === -1 ? '' : rest.slice(nextHeading);
+
+    const extracted = extractUnreleasedEntries(normalized);
+    if (!extracted.entries.length) {
+      return input;
+    }
+
+    const date = new Date().toISOString().slice(0, 10);
+    const injected = `\n\n## ${newVersion} (${date})\n\n${extracted.entries.join('\n')}\n`;
+    const clearedUnreleased = '\n\n- (Add notes for your next merge here)\n';
+    const rebuilt = normalized.slice(0, match.index) + match[0] + clearedUnreleased + injected + tail.replace(/^\n+/, '\n');
+    return rebuilt.replace(/\n/g, eol);
+  };
+
+  const readJsonFile = async (absolutePath) => {
+    const raw = await fs.readFile(absolutePath, 'utf8');
+    return JSON.parse(raw);
+  };
+
+  const writeJsonFile = async (absolutePath, value) => {
+    let prev = null;
+    try {
+      prev = await fs.readFile(absolutePath, 'utf8');
+    } catch {
+      /* c8 ignore next */
+      prev = null;
+    }
+    const eol = typeof prev === 'string' && prev.includes('\r\n') ? '\r\n' : '\n';
+    const next = JSON.stringify(value, null, 2) + '\n';
+    await fs.writeFile(absolutePath, next.replace(/\n/g, eol), 'utf8');
+  };
+
+  const updatePackageVersionIfPresent = async (absolutePath, newVersion) => {
+    try {
+      const pkg = await readJsonFile(absolutePath);
+      await writeJsonFile(absolutePath, { ...pkg, version: newVersion });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const safeGitStdout = async (context, args, fallback = '') => {
+    try {
+      const result = await runProjectGit(context, args);
+      return typeof result?.stdout === 'string' ? result.stdout : String(result?.stdout || '');
+    } catch {
+      return fallback;
+    }
+  };
+
+  const extractFirstJsonObject = (text) => {
+    const input = typeof text === 'string' ? text.trim() : '';
+    if (!input) {
+      return null;
+    }
+
+    // Fast path: whole response is JSON.
+    if (input.startsWith('{') && input.endsWith('}')) {
+      return input;
+    }
+
+    // Best-effort: grab the first {...} block.
+    const match = input.match(/\{[\s\S]*\}/);
+    return match ? match[0] : null;
+  };
+
+  const parseChangelogEntryJson = (raw) => {
+    const candidate = extractFirstJsonObject(raw);
+    if (!candidate) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON5.parse(candidate);
+      const entry = parsed?.entry;
+      if (typeof entry !== 'string') {
+        return null;
+      }
+      const cleaned = entry
+        .trim()
+        .replace(/^[-*]\s+/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!cleaned || cleaned.length < 6) {
+        return null;
+      }
+      return cleaned.slice(0, 200);
+    } catch {
+      return null;
+    }
+  };
+
+  const buildChangelogEntryFromBranchChanges = async (context, branch) => {
+    const branchName = String(branch?.name || '').trim();
+    if (!context?.gitReady || !branchName) {
+      return null;
+    }
+
+    if (!llmClient || typeof llmClient.generateResponse !== 'function') {
+      return null;
+    }
+
+    // Summarize *committed* changes on the branch compared to main.
+    const commitSubjectsText = await safeGitStdout(
+      context,
+      ['log', '--no-merges', '--pretty=format:%s', `main..${branchName}`],
+      ''
+    );
+    const commitSubjects = commitSubjectsText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 12);
+
+    const fileStatusText = await safeGitStdout(context, ['diff', '--name-status', `main..${branchName}`], '');
+    const fileStatuses = fileStatusText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 40);
+
+    const assistantHint = String(branch?.description || '').replace(/\s+/g, ' ').trim();
+
+    const systemMessage = {
+      role: 'system',
+      content:
+        'You write release notes for a software project. ' +
+        'Return ONLY valid JSON with one key: {"entry":"..."}. No other keys, no markdown, no prose. ' +
+        'The entry must be ONE changelog bullet describing what changed (do NOT include a leading "-"). ' +
+        'Plain English, past tense, user-facing when possible. Max 140 chars. ' +
+        'Do not mention commit subjects, filenames, branch names, rules, tests, or version numbers.'
+    };
+
+    const userMessage = {
+      role: 'user',
+      content:
+        `Branch description (hint): ${assistantHint || '(none)'}\n` +
+        `Commit subjects (${commitSubjects.length}):\n` +
+        (commitSubjects.length ? commitSubjects.map((s) => `- ${s}`).join('\n') : '(none)') +
+        `\n\nChanged files (${fileStatuses.length}):\n` +
+        (fileStatuses.length ? fileStatuses.join('\n') : '(none)')
+    };
+
+    const callOptions = {
+      max_tokens: 120,
+      temperature: 0,
+      __lucidcoderDisableToolBridge: true,
+      __lucidcoderPhase: 'changelog',
+      __lucidcoderRequestType: 'changelog_entry'
+    };
+
+    try {
+      const raw = await llmClient.generateResponse([systemMessage, userMessage], callOptions);
+      const parsed = parseChangelogEntryJson(raw);
+      if (parsed) {
+        return parsed;
+      }
+
+      // One repair attempt: re-emit ONLY the expected JSON.
+      const repairSystem = {
+        role: 'system',
+        content:
+          'Your previous response was not valid for the required schema. ' +
+          'Return ONLY valid JSON of the exact form {"entry":"..."}. No prose, no markdown, no extra keys.'
+      };
+      const assistantDraft = { role: 'assistant', content: typeof raw === 'string' ? raw : String(raw || '') };
+      const repairUser = {
+        role: 'user',
+        content:
+          'Rewrite as a single JSON object with key "entry" containing one concise changelog bullet (no leading "-").'
+      };
+
+      const repaired = await llmClient.generateResponse(
+        [systemMessage, userMessage, repairSystem, assistantDraft, repairUser],
+        { ...callOptions, __lucidcoderRequestType: 'changelog_entry_repair' }
+      );
+
+      return parseChangelogEntryJson(repaired);
+    } catch (error) {
+      console.warn(`[BranchWorkflow] Failed to generate changelog entry via LLM: ${error?.message || error}`);
+      return null;
+    }
+  };
+
+  const ensureChangelogUnreleasedEntry = async (projectPath, entryText) => {
+    const basePath = typeof projectPath === 'string' ? projectPath.trim() : '';
+    if (!basePath) {
+      return { updated: false };
+    }
+
+    const cleaned = String(entryText || '').replace(/\s+/g, ' ').trim();
+    if (!cleaned) {
+      return { updated: false };
+    }
+
+    const changelogPath = path.join(basePath, 'CHANGELOG.md');
+    const bulletLine = `- ${cleaned}`;
+
+    const existing = await fs.readFile(changelogPath, 'utf8').catch(() => null);
+    if (typeof existing !== 'string') {
+      const fresh = `# Changelog\n\n## Unreleased\n\n${bulletLine}\n`;
+      await fs.writeFile(changelogPath, fresh, 'utf8');
+      return { updated: true };
+    }
+
+    const eol = existing.includes('\r\n') ? '\r\n' : '\n';
+    const normalized = existing.replace(/\r\n/g, '\n');
+
+    if (
+      normalized.includes(`\n${bulletLine}\n`) ||
+      normalized.startsWith(`${bulletLine}\n`) ||
+      normalized.endsWith(`\n${bulletLine}`) ||
+      normalized === bulletLine
+    ) {
+      return { updated: false };
+    }
+
+    let next = normalized;
+    const unreleasedHeadingRe = /^##\s+Unreleased\s*$/im;
+    const match = unreleasedHeadingRe.exec(next);
+
+    if (!match) {
+      const changelogTitleRe = /^#\s+Changelog\s*$/im;
+      const titleMatch = changelogTitleRe.exec(next);
+      if (titleMatch) {
+        const insertPos = titleMatch.index + titleMatch[0].length;
+        next = `${next.slice(0, insertPos)}\n\n## Unreleased\n\n${bulletLine}\n${next.slice(insertPos).replace(/^\n+/, '\n')}`;
+      } else {
+        next = `# Changelog\n\n## Unreleased\n\n${bulletLine}\n\n${next.replace(/^\n+/, '')}`;
+      }
+    } else {
+      let insertPos = match.index + match[0].length;
+      while (next[insertPos] === '\n') {
+        insertPos += 1;
+      }
+
+      if (next[insertPos] !== '-') {
+        next = `${next.slice(0, insertPos)}\n${bulletLine}\n${next.slice(insertPos)}`;
+      } else {
+        next = `${next.slice(0, insertPos)}${bulletLine}\n${next.slice(insertPos)}`;
+      }
+    }
+
+    if (!next.endsWith('\n')) {
+      next += '\n';
+    }
+
+    const finalText = eol === '\r\n' ? next.replace(/\n/g, '\r\n') : next;
+    const updated = finalText !== existing;
+    if (updated) {
+      await fs.writeFile(changelogPath, finalText, 'utf8');
+    }
+    return { updated };
+  };
+
+  const preMergeBumpVersionAndChangelog = async (context, branch, { changelogTracked }) => {
+    if (!context?.gitReady || !context.projectPath) {
+      return null;
+    }
+
+    const stat = await fs.stat(context.projectPath).catch(() => null);
+    if (!stat) {
+      return null;
+    }
+
+    const versionPath = path.join(context.projectPath, 'VERSION');
+    const changelogPath = path.join(context.projectPath, 'CHANGELOG.md');
+    const frontendPkgPath = path.join(context.projectPath, 'frontend', 'package.json');
+    const backendPkgPath = path.join(context.projectPath, 'backend', 'package.json');
+
+    const currentVersionRaw = await fs.readFile(versionPath, 'utf8').catch(() => '0.1.0\n');
+    const currentVersion = String(currentVersionRaw || '').trim() || '0.1.0';
+    const nextVersion = incrementPatch(currentVersion) || '0.1.0';
+
+    if (changelogTracked) {
+      const description = String(branch?.description || '').replace(/\s+/g, ' ').trim();
+      const defaultDescriptions = new Set(['ai generated feature branch', 'auto-generated feature branch']);
+
+      const llmEntry = await buildChangelogEntryFromBranchChanges(context, branch);
+      const entryText = llmEntry
+        ? llmEntry
+        : (description && !defaultDescriptions.has(description.toLowerCase())
+          ? description
+          : `Changes from ${branch?.name || 'feature branch'}`);
+
+      await ensureChangelogUnreleasedEntry(context.projectPath, entryText).catch(() => ({ updated: false }));
+
+      const changelogText = await fs.readFile(changelogPath, 'utf8').catch(() => null);
+      if (typeof changelogText === 'string') {
+        const rolled = rollChangelogToVersion(changelogText, nextVersion);
+        await fs.writeFile(changelogPath, rolled, 'utf8');
+      }
+    }
+
+    await fs.writeFile(versionPath, `${nextVersion}\n`, 'utf8');
+    await updatePackageVersionIfPresent(frontendPkgPath, nextVersion);
+    await updatePackageVersionIfPresent(backendPkgPath, nextVersion);
+
+    const addPaths = ['VERSION'];
+    if (changelogTracked && await fs.stat(changelogPath).catch(() => null)) {
+      addPaths.push('CHANGELOG.md');
+    }
+    if (await fs.stat(frontendPkgPath).catch(() => null)) {
+      addPaths.push('frontend/package.json');
+    }
+    if (await fs.stat(backendPkgPath).catch(() => null)) {
+      addPaths.push('backend/package.json');
+    }
+
+    await runProjectGit(context, ['add', ...addPaths]);
+    await runProjectGit(context, ['commit', '-m', `chore: bump version to ${nextVersion}`]);
+
+    return { previous: currentVersion, next: nextVersion };
+  };
+
+  const enforceChangelogForMerge = async (context, branchName) => {
+    if (!context?.gitReady) {
+      return;
+    }
+
+    // Only enforce when the project actually has a changelog tracked in git.
+    // (Older projects/tests may not have one yet.)
+    try {
+      const probe = await runProjectGit(context, ['show', `${branchName}:CHANGELOG.md`]);
+      const probed = typeof probe?.stdout === 'string' ? probe.stdout : String(probe?.stdout || '');
+      if (!probed.trim()) {
+        return;
+      }
+    } catch {
+      return;
+    }
+
+    let shouldEnforceVersion = true;
+    try {
+      const probe = await runProjectGit(context, ['show', `${branchName}:VERSION`]);
+      const probed = typeof probe?.stdout === 'string' ? probe.stdout : String(probe?.stdout || '');
+      if (!probed.trim()) {
+        shouldEnforceVersion = false;
+      }
+    } catch {
+      shouldEnforceVersion = false;
+    }
+
+    const changedPaths = await (typeof listBranchChangedPaths === 'function'
+      ? listBranchChangedPaths(context, { branchRef: branchName })
+      : Promise.resolve([]));
+
+    const touchedChangelog = changedPaths.some((p) => String(p || '').toLowerCase() === 'changelog.md');
+    if (!touchedChangelog) {
+      throw withStatusCode(new Error('CHANGELOG.md must be updated before merging'), 400);
+    }
+
+    const touchedVersion = changedPaths.some((p) => String(p || '').toLowerCase() === 'version');
+    if (shouldEnforceVersion && !touchedVersion) {
+      throw withStatusCode(new Error('VERSION must be bumped before merging'), 400);
+    }
+
+    const result = await runProjectGit(context, ['show', `${branchName}:CHANGELOG.md`]);
+    const changelogText = typeof result?.stdout === 'string' ? result.stdout : String(result?.stdout || '');
+
+    const extracted = extractUnreleasedEntries(changelogText);
+
+    // Accept either:
+    // 1) a traditional Unreleased section with entries, OR
+    // 2) a rolled changelog where Unreleased is empty but a new version section exists.
+    if (extracted.hasHeading && extracted.entries.length) {
+      return;
+    }
+
+    if (!shouldEnforceVersion) {
+      if (!extracted.hasHeading) {
+        throw withStatusCode(new Error('CHANGELOG.md must include an "Unreleased" section'), 400);
+      }
+      throw withStatusCode(new Error('CHANGELOG.md must include at least one entry under Unreleased before merging'), 400);
+    }
+
+    const versionResult = await runProjectGit(context, ['show', `${branchName}:VERSION`]);
+    const versionText = typeof versionResult?.stdout === 'string' ? versionResult.stdout : String(versionResult?.stdout || '');
+    const version = String(versionText || '').trim();
+    if (!version) {
+      throw withStatusCode(new Error('VERSION must be bumped before merging'), 400);
+    }
+
+    const lines = String(changelogText || '').replace(/\r\n/g, '\n').split('\n');
+    const headingRe = new RegExp(`^##\\s+${version.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}(?:\\s+\\(|\\s*$)`, 'i');
+    const startIndex = lines.findIndex((line) => headingRe.test(line.trim()));
+    if (startIndex === -1) {
+      throw withStatusCode(new Error(`CHANGELOG.md must include a ${version} section before merging`), 400);
+    }
+
+    const entries = [];
+    for (let index = startIndex + 1; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (/^##\s+/.test(line.trim())) {
+        break;
+      }
+      if (/^[-*]\s+/.test(line.trim())) {
+        entries.push(line.trim());
+      }
+    }
+
+    if (!entries.length) {
+      throw withStatusCode(
+        new Error(`CHANGELOG.md must include at least one entry under ${version} before merging`),
+        400
+      );
+    }
+  };
+
+  const bumpVersionAfterMerge = async (context, branchName) => {
+    if (!context?.gitReady || !context.projectPath) {
+      return null;
+    }
+
+    // If the project isn't on disk (unit tests often use fake paths), skip bumping.
+    const stat = await fs.stat(context.projectPath).catch(() => null);
+    if (!stat) {
+      return null;
+    }
+
+    const versionPath = path.join(context.projectPath, 'VERSION');
+    const changelogPath = path.join(context.projectPath, 'CHANGELOG.md');
+    const frontendPkgPath = path.join(context.projectPath, 'frontend', 'package.json');
+    const backendPkgPath = path.join(context.projectPath, 'backend', 'package.json');
+
+    const currentVersionRaw = await fs.readFile(versionPath, 'utf8').catch(() => '0.1.0\n');
+    const currentVersion = String(currentVersionRaw || '').trim();
+    const nextVersion = incrementPatch(currentVersion) || '0.1.0';
+
+    const changelogText = await fs.readFile(changelogPath, 'utf8').catch(() => null);
+    if (typeof changelogText !== 'string') {
+      return null;
+    }
+
+    // Roll Unreleased entries into the new version section.
+    const updatedChangelog = rollChangelogToVersion(changelogText, nextVersion);
+    await fs.writeFile(changelogPath, updatedChangelog, 'utf8');
+
+    // Update VERSION + package.json versions.
+    await fs.writeFile(versionPath, `${nextVersion}\n`, 'utf8');
+    await updatePackageVersionIfPresent(frontendPkgPath, nextVersion);
+    await updatePackageVersionIfPresent(backendPkgPath, nextVersion);
+
+    const addPaths = ['CHANGELOG.md', 'VERSION'];
+    if (await fs.stat(frontendPkgPath).catch(() => null)) {
+      addPaths.push('frontend/package.json');
+    }
+    if (await fs.stat(backendPkgPath).catch(() => null)) {
+      addPaths.push('backend/package.json');
+    }
+
+    try {
+      await runProjectGit(context, ['add', ...addPaths]);
+      await runProjectGit(context, ['commit', '-m', `chore: bump version to ${nextVersion}`]);
+    } catch (error) {
+      throw withStatusCode(new Error(`Failed to bump version after merge: ${error.message}`), 500);
+    }
+
+    return { previous: currentVersion, next: nextVersion, bumpedFromBranch: branchName };
+  };
 
   const resolveGitSha = async (context, sha, label) => {
     /* c8 ignore next */
@@ -388,26 +932,73 @@ export const createBranchWorkflowCommits = (core) => {
       }
     }
 
+    let enforcementError = null;
+    try {
+      await enforceChangelogForMerge(context, branch.name);
+    } catch (error) {
+      enforcementError = error;
+    }
+
     if (context.gitReady) {
       // Require a clean working tree before attempting any merge operations.
       // This keeps merges deterministic and avoids implicitly stashing changes.
-      let porcelain = '';
+      await ensureCleanWorkingTree(context, 'Working tree must be clean before merging');
+
+      // Auto-bump is only safe when we can reliably inspect changed paths.
+      const canAutoBump = typeof listBranchChangedPaths === 'function';
+
+      // Determine whether the branch tracks CHANGELOG.md in git.
+      // This intentionally does NOT treat on-disk files as "tracked".
+      let changelogTracked = false;
+      let changelogProbeFailed = false;
       try {
-        const statusResult = await runProjectGit(context, ['status', '--porcelain']);
-        porcelain = typeof statusResult?.stdout === 'string' ? statusResult.stdout.trim() : '';
+        const probe = await runProjectGit(context, ['show', `${branch.name}:CHANGELOG.md`]);
+        const probed = typeof probe?.stdout === 'string' ? probe.stdout : String(probe?.stdout || '');
+        changelogTracked = Boolean(probed.trim());
       } catch {
-        throw withStatusCode(new Error('Unable to verify git working tree status'), 500);
+        changelogTracked = false;
+        changelogProbeFailed = true;
       }
 
-      if (porcelain) {
-        throw withStatusCode(new Error('Working tree must be clean before merging'), 400);
+      const shouldAutoBumpBeforeMerge = Boolean(
+        context.projectPath
+        && canAutoBump
+        && (
+          (enforcementError && enforcementError?.statusCode === 400)
+          || changelogProbeFailed
+        )
+      );
+
+      let preMergeBumpPerformed = false;
+
+      if (shouldAutoBumpBeforeMerge) {
+        try {
+          await ensureGitBranchExists(context, branch.name);
+          await runProjectGit(context, ['checkout', branch.name]);
+          await preMergeBumpVersionAndChangelog(context, branch, { changelogTracked });
+          preMergeBumpPerformed = true;
+        } catch (error) {
+          throw withStatusCode(new Error(`Failed to update changelog/version before merge: ${error.message}`), 500);
+        } finally {
+          await runProjectGit(context, ['checkout', 'main']).catch(() => null);
+        }
+
+        if (enforcementError && enforcementError?.statusCode === 400) {
+          // Re-validate after bump so merges remain deterministic.
+          await enforceChangelogForMerge(context, branch.name);
+        }
+      } else if (enforcementError) {
+        throw enforcementError;
       }
 
       try {
         const resolveCurrentGitBranch = async () => {
           try {
             const result = await runProjectGit(context, ['rev-parse', '--abbrev-ref', 'HEAD']);
-            const name = typeof result?.stdout === 'string' ? result.stdout.trim() : '';
+            let name = '';
+            if (typeof result?.stdout === 'string') {
+              name = result.stdout.trim();
+            }
             return name || null;
           } catch {
             return null;
@@ -418,8 +1009,35 @@ export const createBranchWorkflowCommits = (core) => {
         await ensureGitBranchExists(context, branch.name);
         await runProjectGit(context, ['checkout', branch.name]);
         await runProjectGit(context, ['checkout', 'main']);
+
+        let preMergeSha = '';
+        try {
+          const preMerge = await runProjectGit(context, ['rev-parse', 'HEAD']);
+          preMergeSha = '';
+          if (typeof preMerge?.stdout === 'string') {
+            preMergeSha = preMerge.stdout.trim();
+          }
+        } catch {
+          preMergeSha = '';
+        }
+
         await runProjectGit(context, ['merge', '--no-ff', branch.name]);
+
+        if (!preMergeBumpPerformed) {
+          try {
+            await bumpVersionAfterMerge(context, branch.name);
+          } catch (error) {
+            if (preMergeSha) {
+              await runProjectGit(context, ['reset', '--hard', preMergeSha]).catch(() => null);
+            }
+            throw error;
+          }
+        }
       } catch (error) {
+        if (error?.statusCode) {
+          throw error;
+        }
+
         console.warn(`[BranchWorkflow] Git merge failed for ${branch.name}: ${error.message}`);
         throw withStatusCode(new Error(`Git merge failed: ${error.message}`), 500);
       }
@@ -461,6 +1079,19 @@ export const createBranchWorkflowCommits = (core) => {
     getCommitFileDiffContent,
     revertCommit,
     squashCommits,
-    mergeBranch
+    mergeBranch,
+    __testOnly: {
+      parseSemver,
+      incrementPatch,
+      extractUnreleasedEntries,
+      rollChangelogToVersion,
+      extractFirstJsonObject,
+      parseChangelogEntryJson,
+      buildChangelogEntryFromBranchChanges,
+      ensureChangelogUnreleasedEntry,
+      preMergeBumpVersionAndChangelog,
+      enforceChangelogForMerge,
+      bumpVersionAfterMerge
+    }
   };
 };

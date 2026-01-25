@@ -6,7 +6,6 @@ import BranchSidebar from './BranchSidebar';
 
 const renderSidebar = (props = {}) => {
   const defaultProps = {
-    projectName: 'Demo Project',
     branchSummaries: [],
     sortedBranches: [],
     workingBranchMap: new Map(),
@@ -17,10 +16,10 @@ const renderSidebar = (props = {}) => {
 };
 
 describe('BranchSidebar', () => {
-  test('shows fallback header and empty state when no branches exist', () => {
-    renderSidebar({ projectName: null });
+  test('shows header and empty state when no branches exist', () => {
+    renderSidebar();
 
-    expect(screen.getByText('Active project')).toBeInTheDocument();
+    expect(screen.getByText('Branches')).toBeInTheDocument();
     expect(screen.getByText('0 total')).toBeInTheDocument();
     expect(screen.getByTestId('branch-empty')).toHaveTextContent('No branches yet');
   });

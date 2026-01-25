@@ -4,7 +4,7 @@ export default {
     packageJson: (name) => ({
       name: `${name}-frontend`,
       private: true,
-      version: "0.0.0",
+      version: "0.1.0",
       type: "module",
       scripts: {
         dev: "vite",
@@ -298,7 +298,7 @@ describe('Utility helpers', () => {
     packageJson: (name) => ({
       name: `${name}-frontend`,
       private: true,
-      version: "0.0.0",
+      version: "0.1.0",
       type: "module",
       scripts: {
         dev: "vite",

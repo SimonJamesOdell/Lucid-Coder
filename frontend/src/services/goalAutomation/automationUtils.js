@@ -120,6 +120,89 @@ export const isValidBranchName = (name) => {
   return parts.length >= 2 && parts.length <= 5;
 };
 
+export const buildFallbackBranchNameFromPrompt = (prompt, fallbackName) => {
+  const fallback = String(fallbackName || '').trim();
+  const raw = String(prompt || '').toLowerCase();
+  if (!raw.trim()) {
+    return fallback;
+  }
+
+  const stopwords = new Set([
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by',
+    'can', 'could', 'do', 'does', 'for', 'from', 'have', 'has', 'had',
+    'how', 'i', 'if', 'in', 'into', 'is', 'it', "it's", 'its',
+    'let', "let's", 'make', 'of', 'on', 'or', 'our', 'please',
+    'should', 'so', 'some', 'that', 'the', 'their', 'then', 'there',
+    'this', 'to', 'up', 'we', 'with', 'would', 'you', 'your'
+  ]);
+
+  const words = raw
+    .replace(/[^a-z0-9\s-]+/g, ' ')
+    .split(/[\s-]+/)
+    .map((w) => w.trim())
+    .filter(Boolean)
+    .filter((w) => !stopwords.has(w))
+    .filter((w) => !/^\d+$/.test(w));
+
+  const picked = [];
+  for (const word of words) {
+    picked.push(word);
+    if (picked.length >= 4) {
+      break;
+    }
+  }
+
+  if (picked.length < 2) {
+    return fallback;
+  }
+
+  const candidate = picked.join('-');
+  return extractBranchName(candidate, fallback);
+};
+
+export const isBranchNameRelevantToPrompt = (branchName, prompt) => {
+  const normalize = (value) => String(value || '')
+    .toLowerCase()
+    .replace(/\//g, ' ')
+    .replace(/[^a-z0-9\s-]+/g, ' ');
+
+  const stopwords = new Set([
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by',
+    'can', 'could', 'do', 'does', 'for', 'from', 'have', 'has', 'had',
+    'how', 'i', 'if', 'in', 'into', 'is', 'it', "it's", 'its',
+    'let', "let's", 'make', 'of', 'on', 'or', 'our', 'please',
+    'should', 'so', 'some', 'that', 'the', 'their', 'then', 'there',
+    'this', 'to', 'up', 'we', 'with', 'would', 'you', 'your'
+  ]);
+
+  const tokenize = (value) => normalize(value)
+    .split(/[\s-]+/)
+    .map((w) => w.trim())
+    .filter(Boolean)
+    .filter((w) => !stopwords.has(w))
+    .filter((w) => !/^\d+$/.test(w));
+
+  const promptTokens = new Set(tokenize(prompt));
+  const branchTokens = new Set(tokenize(branchName));
+
+  if (promptTokens.size === 0 || branchTokens.size === 0) {
+    return true;
+  }
+
+  // If the prompt is too short (e.g. just "test" or "refactor"), we don't have
+  // enough signal to reliably judge relevance.
+  if (promptTokens.size < 2) {
+    return true;
+  }
+
+  for (const token of branchTokens) {
+    if (promptTokens.has(token)) {
+      return true;
+    }
+  }
+  return false;
+};
+
 export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
   const buildMessages = (attempt) => {
     if (attempt === 2) {
@@ -128,8 +211,9 @@ export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
           role: 'system',
           content:
             'Return ONLY valid JSON with a single key "branch". Example: {"branch":"added-navigation-bar"}. ' +
-            'The value must be a concise past-tense action + object (2-5 words), lowercase, words separated by hyphens, max 40 chars. ' +
-            'Do not include any explanation or formatting description.'
+            'The value must be a concise change description using a verb like "added", "changed", "fixed", or "updated" (two to five words), lowercase, hyphen-separated, max 40 chars. ' +
+            'Do NOT mention rules/constraints, do NOT output examples, and do NOT echo any numbers from the prompt (invalid: {"branch":"2-5"}). ' +
+            'Each hyphen-separated word must contain at least one letter a-z.'
         },
         { role: 'user', content: `User request: "${prompt}"` }
       ];
@@ -140,9 +224,10 @@ export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
         role: 'system',
         content:
           'Return ONLY valid JSON with a single key "branch". ' +
-          'The value must be a concise past-tense action + object. ' +
+          'The value must be a concise change description using a verb like "added", "changed", "fixed", or "updated". ' +
           'Examples: {"branch":"added-navigation-bar"}, {"branch":"changed-background-color"}, {"branch":"refactoring-simplification"}. ' +
-          'Rules: 2-5 words, lowercase, words separated by hyphens, max 40 chars.'
+          'Rules: two to five words, lowercase, words separated by hyphens, max 40 chars. ' +
+          'Do NOT output the rules themselves (invalid: {"branch":"2-5"}). Each word must contain at least one letter a-z.'
       },
       { role: 'user', content: `User request: "${prompt}"` }
     ];

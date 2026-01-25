@@ -21,6 +21,10 @@ const StagedFilesCard = ({
   onOpenFile,
   onClearFile,
   onClearAll,
+  canDelete,
+  onDeleteBranch,
+  deleteLabel,
+  isDeleting,
   isStoppingProject,
   isCurrentBranch
 }) => (
@@ -34,16 +38,31 @@ const StagedFilesCard = ({
             : (isCurrentBranch ? 'No staged changes' : 'No files staged')}
         </h4>
       </div>
-      {hasSelectedFiles && (
-        <button
-          type="button"
-          className="branch-action ghost"
-          onClick={onClearAll}
-          disabled={isStoppingProject}
-          data-testid="clear-staged-inline"
-        >
-          Clear all
-        </button>
+      {(hasSelectedFiles || canDelete) && (
+        <div className="branch-actions-row">
+          {hasSelectedFiles && (
+            <button
+              type="button"
+              className="branch-action ghost"
+              onClick={onClearAll}
+              disabled={isStoppingProject}
+              data-testid="clear-staged-inline"
+            >
+              Clear all
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              className="branch-action destructive"
+              onClick={onDeleteBranch}
+              disabled={isStoppingProject || !onDeleteBranch || isDeleting}
+              data-testid="branch-delete"
+            >
+              {deleteLabel || (isDeleting ? 'Deleting…' : 'Delete branch')}
+            </button>
+          )}
+        </div>
       )}
     </div>
 

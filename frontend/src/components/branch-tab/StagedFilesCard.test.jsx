@@ -10,6 +10,10 @@ const baseProps = {
   onOpenFile: vi.fn(),
   onClearFile: vi.fn(),
   onClearAll: vi.fn(),
+  canDelete: false,
+  onDeleteBranch: null,
+  deleteLabel: null,
+  isDeleting: false,
   isStoppingProject: false,
   isCurrentBranch: true
 };
@@ -88,5 +92,56 @@ describe('StagedFilesCard', () => {
 
     expect(screen.getByTestId('clear-staged-inline')).toBeDisabled();
     expect(screen.getByTestId('branch-file-clear-src-app-jsx')).toBeDisabled();
+  });
+
+  test('renders delete branch button next to clear all when enabled', async () => {
+    const user = userEvent.setup();
+    const onDeleteBranch = vi.fn();
+
+    renderCard({
+      selectedFiles: [{ path: 'src/App.jsx', source: 'ai', timestamp: null }],
+      hasSelectedFiles: true,
+      canDelete: true,
+      onDeleteBranch,
+      deleteLabel: 'Delete branch'
+    });
+
+    expect(screen.getByTestId('clear-staged-inline')).toBeInTheDocument();
+    const deleteButton = screen.getByTestId('branch-delete');
+    expect(deleteButton).toBeEnabled();
+    await user.click(deleteButton);
+    expect(onDeleteBranch).toHaveBeenCalledTimes(1);
+  });
+
+  test('disables delete branch button while deleting', () => {
+    renderCard({
+      canDelete: true,
+      onDeleteBranch: vi.fn(),
+      isDeleting: true,
+      deleteLabel: 'Deleting…'
+    });
+
+    expect(screen.getByTestId('branch-delete')).toBeDisabled();
+  });
+
+  test('falls back to default delete labels when deleteLabel is missing', () => {
+    const { rerender } = renderCard({
+      canDelete: true,
+      onDeleteBranch: vi.fn(),
+      deleteLabel: null,
+      isDeleting: false
+    });
+    expect(screen.getByTestId('branch-delete')).toHaveTextContent('Delete branch');
+
+    rerender(
+      <StagedFilesCard
+        {...baseProps}
+        canDelete
+        onDeleteBranch={vi.fn()}
+        deleteLabel={null}
+        isDeleting
+      />
+    );
+    expect(screen.getByTestId('branch-delete')).toHaveTextContent('Deleting…');
   });
 });

@@ -686,7 +686,6 @@ const PreviewPanel = () => {
           {isBranchActive && (
             <>
               {renderBranchActionButton(branchActions?.createBranch, 'branch-create')}
-              {renderBranchActionButton(branchActions?.deleteBranch, 'branch-delete')}
             </>
           )}
         </div>
@@ -714,7 +713,5 @@ const PreviewPanel = () => {
     </div>
   );
 };
-
-PreviewPanel.__testHooks = PreviewPanel.__testHooks || {};
 
 export default PreviewPanel;

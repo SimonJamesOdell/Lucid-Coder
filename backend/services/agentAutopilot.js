@@ -36,6 +36,12 @@ import {
   updateToPrompt
 } from './agentAutopilot/helpers.js';
 
+const buildChangelogEntryFromPrompt = (prompt) => {
+  const firstLine = typeof prompt === 'string' ? prompt.split(/\r?\n/)[0] : '';
+  const trimmed = (firstLine || '').trim();
+  return trimmed || 'autopilot updates';
+};
+
 export const __testing = {
   consumeUpdatesAsPrompts,
   drainUserUpdates,
@@ -48,7 +54,8 @@ export const __testing = {
   appendEditPatchEvent,
   appendRollbackEvents,
   updateToPrompt,
-  formatPlanSummary
+  formatPlanSummary,
+  buildChangelogEntryFromPrompt
 };
 
 export const autopilotFeatureRequest = async ({ projectId, prompt, options = {}, deps = {} }) => {
@@ -771,8 +778,13 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
     }
 
     const commitMessage = `feat(autopilot): ${prompt}`;
+    const changelogEntry = buildChangelogEntryFromPrompt(prompt);
+
     const commitResult = await commit(projectId, branchName, {
-      message: commitMessage
+      message: commitMessage,
+      autoChangelog: true,
+      autoVersionBump: true,
+      changelogEntry
     });
 
     safeAppendEvent(appendEvent, {

@@ -670,19 +670,13 @@ describe('BranchTab', () => {
   test('delete branch removes it and refreshes overview', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
-    let latestBranchActions = null;
-    const registerBranchActions = vi.fn((payload) => {
-      latestBranchActions = payload;
-      return () => {};
-    });
-
     axios.get.mockResolvedValue({ data: { success: true, ...baseOverview } });
     axios.delete.mockResolvedValue({ data: { success: true, overview: baseOverview } });
 
-    await renderBranchTab({ props: { registerBranchActions } });
+    await renderBranchTab();
     await userEvent.click(screen.getByTestId('branch-list-item-feature-login'));
-    await waitFor(() => expect(latestBranchActions?.deleteBranch).toBeTruthy());
-    await latestBranchActions.deleteBranch.onClick();
+    const deleteButton = await screen.findByTestId('branch-delete');
+    await userEvent.click(deleteButton);
 
     await waitFor(() => {
       expect(axios.delete).toHaveBeenCalledWith(
@@ -696,12 +690,6 @@ describe('BranchTab', () => {
 
   test('deleting the current branch checks out main', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-    let latestBranchActions = null;
-    const registerBranchActions = vi.fn((payload) => {
-      latestBranchActions = payload;
-      return () => {};
-    });
 
     const currentBranchOverview = {
       branches: [
@@ -731,10 +719,10 @@ describe('BranchTab', () => {
     axios.delete.mockResolvedValue({ data: { success: true, overview: postDeleteOverview } });
     axios.post.mockResolvedValue({ data: { success: true, overview: postDeleteOverview } });
 
-  await renderBranchTab({ overview: currentBranchOverview, props: { registerBranchActions } });
+  await renderBranchTab({ overview: currentBranchOverview });
     await userEvent.click(screen.getByTestId('branch-list-item-feature-login'));
-  await waitFor(() => expect(latestBranchActions?.deleteBranch).toBeTruthy());
-  await latestBranchActions.deleteBranch.onClick();
+  const deleteButton = await screen.findByTestId('branch-delete');
+  await userEvent.click(deleteButton);
 
     await waitFor(() => {
       expect(axios.post).toHaveBeenCalledWith(

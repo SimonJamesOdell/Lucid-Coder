@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4 (2026-01-25)
+- Hardened preview proxy routing (dev assets + Vite HMR websockets) and expanded coverage for those paths.
+- Improved branch workflow automation and scaffolding behavior with additional backend test coverage.
+- Refined Branch/Commits/Preview UI flows and added frontend tests to keep coverage at 100%.
+
 ## 0.2.3 (2026-01-23)
 - Increased AI assistant header height to align with address bar.
 - Repositioned scroll-to-bottom button inside chat panel with downward arrow icon.

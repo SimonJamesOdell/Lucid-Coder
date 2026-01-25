@@ -19,6 +19,7 @@ let provideReloadPreview = true;
 const restartProjectMock = vi.fn();
 const getPreviewUrlMock = vi.fn(() => 'http://localhost:5173');
 const getDisplayedUrlMock = vi.fn(() => null);
+const previewTabPropsRef = { current: null };
 const filesTabControls = {
   onFileSaved: null,
   registerSaveHandler: null
@@ -44,6 +45,7 @@ const createAppState = (overrides = {}) => ({
 vi.mock('../components/PreviewTab', () => ({
   __esModule: true,
   default: forwardRef((props, ref) => {
+    previewTabPropsRef.current = props;
     useImperativeHandle(ref, () => ({
       reloadPreview: provideReloadPreview ? reloadPreviewMock : null,
       restartProject: restartProjectMock,
@@ -149,10 +151,28 @@ describe('PreviewPanel', () => {
     getPreviewUrlMock.mockReturnValue('http://localhost:5173');
     getDisplayedUrlMock.mockClear();
     getDisplayedUrlMock.mockReturnValue(null);
+    previewTabPropsRef.current = null;
     filesTabControls.onFileSaved = null;
     filesTabControls.registerSaveHandler = null;
     testTabControls.register = null;
     branchTabPropsRef.current = null;
+  });
+
+  test('passes isProjectStopped=true to PreviewTab when current project is marked stopped', async () => {
+    useAppState.mockReturnValue(
+      createAppState({
+        currentProject: { id: 303, name: 'Stopped Project' },
+        stoppedProjects: { 303: true }
+      })
+    );
+
+    render(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(previewTabPropsRef.current).not.toBeNull();
+    });
+
+    expect(previewTabPropsRef.current.isProjectStopped).toBe(true);
   });
 
   test('agent UI bridge does not start when no project is selected', async () => {
@@ -316,6 +336,19 @@ describe('PreviewPanel', () => {
     const goalsTab = screen.getByTestId('mock-goals-tab');
     expect(goalsTab).toBeInTheDocument();
     expect(goalsTab.closest('.tab-pane')).toHaveClass('is-hidden');
+  });
+
+  test('renders packages tab content when activeTab is packages', () => {
+    useAppState.mockReturnValue(createAppState({ currentProject: { id: 20, name: 'Packages' } }));
+
+    PreviewPanel.__testHooks = {};
+    render(<PreviewPanel />);
+
+    act(() => {
+      PreviewPanel.__testHooks.setActiveTab('packages');
+    });
+
+    expect(screen.getByTestId('mock-packages-tab')).toBeInTheDocument();
   });
 
   test('ignores agent executeCommand when followAutomation is disabled by user selecting Goals', async () => {
@@ -1504,13 +1537,12 @@ describe('PreviewPanel', () => {
     await user.click(screen.getByTestId('branch-tab'));
 
     const createBranch = vi.fn();
-    const deleteBranch = vi.fn();
     let cleanup;
 
     act(() => {
       cleanup = branchTabPropsRef.current?.registerBranchActions?.({
         createBranch: { label: 'Create', onClick: createBranch, testId: 'branch-create', variant: 'success' },
-        deleteBranch: { label: 'Delete', onClick: deleteBranch, disabled: true }
+        deleteBranch: { label: 'Delete', onClick: vi.fn(), disabled: true }
       });
     });
 
@@ -1519,14 +1551,36 @@ describe('PreviewPanel', () => {
     await user.click(createButton);
     expect(createBranch).toHaveBeenCalledTimes(1);
 
-    const deleteButton = screen.getByTestId('branch-delete');
-    expect(deleteButton).toBeDisabled();
+    expect(screen.queryByTestId('branch-delete')).toBeNull();
 
     act(() => cleanup?.());
     expect(screen.queryByTestId('branch-create')).toBeNull();
 
     branchTabPropsRef.current?.onRequestTestsTab?.();
     await waitFor(() => expect(screen.getByTestId('mock-test-tab')).toBeInTheDocument());
+  });
+
+  test('branch action buttons fall back to default test id when action has none', async () => {
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 133, name: 'Branch Actions Fallback TestId' } })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('branch-tab'));
+
+    const createBranch = vi.fn();
+    act(() => {
+      branchTabPropsRef.current?.registerBranchActions?.({
+        createBranch: { label: 'Create', onClick: createBranch }
+      });
+    });
+
+    const createButton = screen.getByTestId('branch-create');
+    expect(createButton).toBeEnabled();
+    await user.click(createButton);
+    expect(createBranch).toHaveBeenCalledTimes(1);
   });
 
   test('branch action registration clears buttons when payload is null', async () => {

@@ -190,6 +190,199 @@ describe('previewProxy', () => {
     expect(__testOnly.shouldBypassPreviewProxy(null)).toBe(false);
   });
 
+  test('isLikelyPreviewDevAssetPath detects known dev asset paths and handles blank/invalid URLs', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    expect(__testOnly.isLikelyPreviewDevAssetPath('')).toBe(false);
+    expect(__testOnly.isLikelyPreviewDevAssetPath(null)).toBe(false);
+    expect(__testOnly.isLikelyPreviewDevAssetPath('/@vite/client')).toBe(true);
+    expect(__testOnly.isLikelyPreviewDevAssetPath('/@react-refresh')).toBe(true);
+    expect(__testOnly.isLikelyPreviewDevAssetPath('/@id/some-module')).toBe(true);
+    expect(__testOnly.isLikelyPreviewDevAssetPath('/@fs/C:/tmp/file.js')).toBe(true);
+    expect(__testOnly.isLikelyPreviewDevAssetPath('/src/main.jsx')).toBe(true);
+    expect(__testOnly.isLikelyPreviewDevAssetPath('/node_modules/react/index.js')).toBe(true);
+
+    const originalUrl = globalThis.URL;
+    try {
+      globalThis.URL = class FakeURL {
+        constructor() {
+          throw new Error('boom');
+        }
+      };
+
+      expect(__testOnly.isLikelyPreviewDevAssetPath('/@vite/client')).toBe(false);
+    } finally {
+      globalThis.URL = originalUrl;
+    }
+  });
+
+  test('isLikelyPreviewDevAssetPath falls back when URL pathname is falsy', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const originalUrl = globalThis.URL;
+    try {
+      globalThis.URL = class FakeURL {
+        constructor() {
+          this.pathname = '';
+        }
+      };
+
+      expect(__testOnly.isLikelyPreviewDevAssetPath('/@vite/client')).toBe(false);
+    } finally {
+      globalThis.URL = originalUrl;
+    }
+  });
+
+  test('isLikelyViteHmrWebSocketRequest detects vite-hmr protocol and token fallback', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    expect(__testOnly.isLikelyViteHmrWebSocketRequest(createReq('/ws', { upgrade: 'h2c' }))).toBe(false);
+
+    expect(
+      __testOnly.isLikelyViteHmrWebSocketRequest(createReq('/ws', { upgrade: 'websocket', 'sec-websocket-protocol': 'vite-hmr' }))
+    ).toBe(true);
+
+    expect(
+      __testOnly.isLikelyViteHmrWebSocketRequest(createReq('/ws?token=abc', { upgrade: 'websocket' }))
+    ).toBe(true);
+
+    expect(
+      __testOnly.isLikelyViteHmrWebSocketRequest(createReq('/ws', { upgrade: 'websocket' }))
+    ).toBe(false);
+
+    expect(
+      __testOnly.isLikelyViteHmrWebSocketRequest(createReq(null, { upgrade: 'websocket' }))
+    ).toBe(false);
+  });
+
+  test('getProjectIdFromRequest denies cookie routing without preview-origin hints', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const req = createReq('/assets/app.js', {
+      cookie: 'lucidcoder_preview_project=55'
+    });
+
+    expect(__testOnly.getProjectIdFromRequest(req)).toBe(null);
+  });
+
+  test('getProjectIdFromRequest routes via cookie for iframe preview navigations', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const req = createReq('/index.html', {
+      'sec-fetch-dest': 'iframe',
+      cookie: 'lucidcoder_preview_project=55'
+    });
+
+    expect(__testOnly.getProjectIdFromRequest(req)).toEqual({
+      source: 'cookie',
+      projectId: '55',
+      forwardPath: '/index.html'
+    });
+  });
+
+  test('getProjectIdFromRequest tolerates non-string sec-fetch-dest when referer indicates preview origin', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const req = createReq('/index.html', {
+      'sec-fetch-dest': 123,
+      referer: 'http://localhost/preview/55/',
+      cookie: 'lucidcoder_preview_project=55'
+    });
+
+    expect(__testOnly.getProjectIdFromRequest(req)).toEqual({
+      source: 'cookie',
+      projectId: '55',
+      forwardPath: '/index.html'
+    });
+  });
+
+  test('getProjectIdFromRequest returns null when cookie routing is allowed but cookie is missing', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const req = createReq('/index.html', {
+      'sec-fetch-dest': 'iframe'
+    });
+
+    expect(__testOnly.getProjectIdFromRequest(req)).toBe(null);
+  });
+
+  test('getProjectIdFromRequest allows cookie routing for Vite HMR websocket token requests', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const req = createReq('/@vite/client?token=abc', {
+      upgrade: 'websocket',
+      cookie: 'lucidcoder_preview_project=55'
+    });
+
+    expect(__testOnly.getProjectIdFromRequest(req)).toEqual({
+      source: 'cookie',
+      projectId: '55',
+      forwardPath: '/@vite/client?token=abc'
+    });
+  });
+
+  test('resolvePreviewTargetHost uses env override (and maps 0.0.0.0 to localhost)', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+    const original = process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+    try {
+      process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST = '  example.com  ';
+      expect(__testOnly.resolvePreviewTargetHost(createReq('/preview/1'))).toBe('example.com');
+
+      process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST = '0.0.0.0';
+      expect(__testOnly.resolvePreviewTargetHost(createReq('/preview/1'))).toBe('localhost');
+    } finally {
+      if (typeof original === 'undefined') {
+        delete process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+      } else {
+        process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST = original;
+      }
+    }
+  });
+
+  test('resolvePreviewTargetHost prefers x-forwarded-host, strips ports, and handles IPv6 bracket hosts', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+    const original = process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+    try {
+      delete process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+
+      expect(
+        __testOnly.resolvePreviewTargetHost(createReq('/preview/1', { 'x-forwarded-host': 'myhost:5173, proxy:1234' }))
+      ).toBe('myhost');
+
+      expect(
+        __testOnly.resolvePreviewTargetHost(createReq('/preview/1', { host: '[::1]:5000' }))
+      ).toBe('::1');
+
+      expect(
+        __testOnly.resolvePreviewTargetHost(createReq('/preview/1', { host: '[   ]:5000' }))
+      ).toBe('localhost');
+    } finally {
+      if (typeof original === 'undefined') {
+        delete process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+      } else {
+        process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST = original;
+      }
+    }
+  });
+
+  test('resolvePreviewTargetHost falls back to localhost for missing/0.0.0.0 hosts', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+    const original = process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+    try {
+      delete process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+
+      expect(__testOnly.resolvePreviewTargetHost(createReq('/preview/1', {}))).toBe('localhost');
+      expect(__testOnly.resolvePreviewTargetHost(createReq('/preview/1', { host: '' }))).toBe('localhost');
+      expect(__testOnly.resolvePreviewTargetHost(createReq('/preview/1', { host: '0.0.0.0:5173' }))).toBe('localhost');
+    } finally {
+      if (typeof original === 'undefined') {
+        delete process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+      } else {
+        process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST = original;
+      }
+    }
+  });
+
   test('middleware bypasses /api routes', async () => {
     const { createPreviewProxy } = await import('../routes/previewProxy.js');
     const instance = createPreviewProxy({ logger: null });
@@ -243,7 +436,7 @@ describe('previewProxy', () => {
     expect(next).not.toHaveBeenCalled();
     expect(proxyStub.web).toHaveBeenCalledTimes(1);
     expect(proxyOptions).toEqual(expect.objectContaining({
-      target: 'http://127.0.0.1:5173',
+      target: 'http://localhost:5173',
       selfHandleResponse: true
     }));
     expect(proxiedUrl).toBe('/');
@@ -255,6 +448,32 @@ describe('previewProxy', () => {
 
     // Ensure the incoming URL is restored after proxying.
     expect(req.url).toBe('/preview/12/');
+  });
+
+  test('middleware targets the incoming host when accessed over the network', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 6100 } },
+      state: 'running'
+    });
+
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    proxyStub.web.mockImplementation(() => {});
+
+    const req = createReq('/preview/12/', {
+      host: '192.168.0.60:5000'
+    });
+    const res = createRes();
+    const next = vi.fn();
+
+    await instance.middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(proxyStub.web).toHaveBeenCalledTimes(1);
+    expect(proxyStub.web.mock.calls[0][2]).toMatchObject({
+      target: 'http://192.168.0.60:6100'
+    });
   });
 
   test('middleware forwards errors to next when proxy resolution fails', async () => {
@@ -292,7 +511,8 @@ describe('previewProxy', () => {
     });
 
     const req = createReq('/about', {
-      cookie: `${__testOnly.COOKIE_NAME}=99`
+      cookie: `${__testOnly.COOKIE_NAME}=99`,
+      referer: 'http://localhost/preview/12/'
     });
     const res = createRes();
     const next = vi.fn();
@@ -303,6 +523,54 @@ describe('previewProxy', () => {
     expect(proxyStub.web).toHaveBeenCalledTimes(1);
     expect(proxiedUrl).toBe('/about');
     expect(res.setHeader).not.toHaveBeenCalled();
+  });
+
+  test('middleware does not hijack host app routes when only preview cookie is present', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 6100 } },
+      state: 'running'
+    });
+
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    const req = createReq('/', {
+      cookie: `${__testOnly.COOKIE_NAME}=99`
+    });
+    const res = createRes();
+    const next = vi.fn();
+
+    await instance.middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(proxyStub.web).not.toHaveBeenCalled();
+  });
+
+  test('middleware proxies Vite dev asset requests when cookie is present even without referer', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 6100 } },
+      state: 'running'
+    });
+
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    let proxiedUrl = null;
+    proxyStub.web.mockImplementation((req) => {
+      proxiedUrl = req.url;
+    });
+
+    const req = createReq('/src/App.jsx', {
+      cookie: `${__testOnly.COOKIE_NAME}=99`
+    });
+    const res = createRes();
+    const next = vi.fn();
+
+    await instance.middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(proxyStub.web).toHaveBeenCalledTimes(1);
+    expect(proxiedUrl).toBe('/src/App.jsx');
   });
 
   test('middleware returns 409 html when project is not running', async () => {
@@ -758,7 +1026,8 @@ describe('previewProxy', () => {
     expect(typeof upgradeHandler).toBe('function');
 
     const req = createReq('/ws', {
-      cookie: `${__testOnly.COOKIE_NAME}=12`
+      cookie: `${__testOnly.COOKIE_NAME}=12`,
+      referer: 'http://localhost/preview/12/'
     });
     const socket = { destroy: vi.fn() };
     const head = Buffer.from('');
@@ -767,7 +1036,38 @@ describe('previewProxy', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(proxyStub.ws).toHaveBeenCalledTimes(1);
-    expect(proxyStub.ws.mock.calls[0][3]).toEqual({ target: 'http://127.0.0.1:5173' });
+    expect(proxyStub.ws.mock.calls[0][3]).toEqual({ target: 'http://localhost:5173' });
+  });
+
+  test('upgrade handler proxies Vite HMR websocket on root when cookie is present', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 } },
+      state: 'running'
+    });
+
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    const server = { on: vi.fn() };
+    instance.registerUpgradeHandler(server);
+
+    const upgradeHandler = server.on.mock.calls.find(([event]) => event === 'upgrade')?.[1];
+    expect(typeof upgradeHandler).toBe('function');
+
+    const req = createReq('/?token=dev', {
+      cookie: `${__testOnly.COOKIE_NAME}=12`,
+      'sec-websocket-protocol': 'vite-hmr'
+    });
+    req.headers.upgrade = 'websocket';
+
+    const socket = { destroy: vi.fn() };
+    const head = Buffer.from('');
+
+    upgradeHandler(req, socket, head);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(proxyStub.ws).toHaveBeenCalledTimes(1);
+    expect(proxyStub.ws.mock.calls[0][3]).toEqual({ target: 'http://localhost:5173' });
   });
 
   test('upgrade handler bypasses non-preview paths', async () => {
@@ -825,7 +1125,7 @@ describe('previewProxy', () => {
     const upgradeHandler = server.on.mock.calls.find(([event]) => event === 'upgrade')?.[1];
     expect(typeof upgradeHandler).toBe('function');
 
-    const req = createReq('/ws', { cookie: `${__testOnly.COOKIE_NAME}=12` });
+    const req = createReq('/ws', { cookie: `${__testOnly.COOKIE_NAME}=12`, referer: 'http://localhost/preview/12/' });
     upgradeHandler(req, { destroy: vi.fn() }, Buffer.from(''));
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -848,7 +1148,7 @@ describe('previewProxy', () => {
     const upgradeHandler = server.on.mock.calls.find(([event]) => event === 'upgrade')?.[1];
     expect(typeof upgradeHandler).toBe('function');
 
-    const req = createReq('/ws', { cookie: `${__testOnly.COOKIE_NAME}=12` });
+    const req = createReq('/ws', { cookie: `${__testOnly.COOKIE_NAME}=12`, referer: 'http://localhost/preview/12/' });
     const socket = { destroy: vi.fn() };
 
     upgradeHandler(req, socket, Buffer.from(''));
@@ -876,7 +1176,7 @@ describe('previewProxy', () => {
     const upgradeHandler = server.on.mock.calls.find(([event]) => event === 'upgrade')?.[1];
     expect(typeof upgradeHandler).toBe('function');
 
-    const req = createReq('/ws', { cookie: `${__testOnly.COOKIE_NAME}=12` });
+    const req = createReq('/ws', { cookie: `${__testOnly.COOKIE_NAME}=12`, referer: 'http://localhost/preview/12/' });
     const socket = {
       destroy: vi.fn(() => {
         throw new Error('destroy explode');

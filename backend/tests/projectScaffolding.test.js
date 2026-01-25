@@ -121,14 +121,33 @@ describe('generateProjectFiles', () => {
 
     const readme = await fs.readFile(path.join(config.path, 'README.md'), 'utf8');
     expect(readme).toContain('# Super App');
+    expect(readme).toMatch(/Version:\s*0\.1\.0/);
+
+    const versionFile = await fs.readFile(path.join(config.path, 'VERSION'), 'utf8');
+    expect(versionFile.trim()).toBe('0.1.0');
+
+    const changelog = await fs.readFile(path.join(config.path, 'CHANGELOG.md'), 'utf8');
+    expect(changelog).toContain('# Changelog');
+    expect(changelog).toMatch(/##\s+0\.1\.0\s+\(\d{4}-\d{2}-\d{2}\)/);
+    expect(changelog).toMatch(/-\s+Project scaffold created\./);
+    expect(changelog).not.toMatch(/##\s+Unreleased/);
+
+    const bumpTool = await fs.readFile(path.join(config.path, 'tools', 'bump-version.mjs'), 'utf8');
+    expect(bumpTool).toContain('node tools/bump-version.mjs');
 
     const frontendPackage = JSON.parse(
       await fs.readFile(path.join(config.path, 'frontend', 'package.json'), 'utf8')
     );
     expect(frontendPackage.name).toBe('super-app-frontend');
+    expect(frontendPackage.version).toBe('0.1.0');
 
     const backendServer = await fs.readFile(path.join(config.path, 'backend', 'server.js'), 'utf8');
     expect(backendServer).toContain('express');
+
+    const backendPackage = JSON.parse(
+      await fs.readFile(path.join(config.path, 'backend', 'package.json'), 'utf8')
+    );
+    expect(backendPackage.version).toBe('0.1.0');
     const backendServerTest = await fs.readFile(
       path.join(config.path, 'backend', '__tests__', 'server.test.js'),
       'utf8'

@@ -29,6 +29,13 @@ vi.mock('./BranchDetails', () => ({
     branchDetailsSpy(props);
     return (
       <div data-testid="branch-details" data-warning={props.warningMessage || ''}>
+        <button
+          type="button"
+          data-testid="mock-delete-branch"
+          onClick={() => props.onDeleteBranch?.()}
+        >
+          Delete
+        </button>
         BranchDetails
       </div>
     );
@@ -138,6 +145,39 @@ describe('BranchTabRoot', () => {
     expect(latestToolbarState.readyForMerge).toBe(true);
     expect(latestToolbarState.selectedStagedCount).toBe(0);
     expect(latestToolbarState.canBeginMerge).toBe(true);
+  });
+
+  test('delete branch handler swallows failures from delete callback', async () => {
+    const handleDeleteBranch = vi.fn().mockRejectedValue(new Error('nope'));
+    useBranchTabState.mockReturnValue(buildBranchState({ handleDeleteBranch }));
+
+    const user = userEvent.setup();
+    renderComponent();
+
+    await act(async () => {
+      await user.click(screen.getByTestId('mock-delete-branch'));
+      await Promise.resolve();
+    });
+
+    expect(handleDeleteBranch).toHaveBeenCalledWith('feature/login');
+  });
+
+  test('delete branch handler no-ops while project is stopping', async () => {
+    const handleDeleteBranch = vi.fn();
+    useBranchTabState.mockReturnValue(buildBranchState({
+      isStoppingProject: true,
+      handleDeleteBranch
+    }));
+
+    const user = userEvent.setup();
+    renderComponent();
+
+    await act(async () => {
+      await user.click(screen.getByTestId('mock-delete-branch'));
+      await Promise.resolve();
+    });
+
+    expect(handleDeleteBranch).not.toHaveBeenCalled();
   });
 
   test('prefers invalidation warning over merge blocker text', () => {

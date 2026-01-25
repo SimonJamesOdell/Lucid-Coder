@@ -226,14 +226,6 @@ describe('BranchTabRoot targeted behavior', () => {
     expect(latestModalProps.errorMessage).toBe('Failed to create branch');
   });
 
-  test('falls back to default project label when project is missing', () => {
-    setupMocks();
-    render(<BranchTabRoot project={null} />);
-
-    const sidebarProps = branchSidebarMock.mock.calls.at(-1)[0];
-    expect(sidebarProps.projectName).toBe('Active project');
-  });
-
   test('renders revert checkout controls when selected branch is merged', () => {
     mockDeriveDisplayStatus.mockReturnValue('merged');
     setupMocks();

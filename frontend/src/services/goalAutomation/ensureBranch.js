@@ -1,5 +1,10 @@
 import axios from 'axios';
-import { automationLog, requestBranchNameFromLLM } from './automationUtils';
+import {
+  automationLog,
+  buildFallbackBranchNameFromPrompt,
+  isBranchNameRelevantToPrompt,
+  requestBranchNameFromLLM
+} from './automationUtils';
 
 export async function ensureBranch(projectId, prompt, setPreviewPanelTab, createMessage, setMessages, options = {}) {
   try {
@@ -10,13 +15,18 @@ export async function ensureBranch(projectId, prompt, setPreviewPanelTab, create
     const existingBranch = workingBranches[0] || null;
 
     if (!existingBranch) {
-      const fallbackName = `feature-${Date.now()}`;
-      const generatedName = await requestBranchNameFromLLM({ prompt, fallbackName });
+      const timeFallback = `feature-${Date.now()}`;
+      const fallbackName = buildFallbackBranchNameFromPrompt(prompt, timeFallback);
+      const generatedNameRaw = await requestBranchNameFromLLM({ prompt, fallbackName });
+      const generatedName = (generatedNameRaw && isBranchNameRelevantToPrompt(generatedNameRaw, prompt))
+        ? generatedNameRaw
+        : fallbackName;
 
       automationLog('ensureBranch:generatedName', { generatedName });
 
       const createResponse = await axios.post(`/api/projects/${projectId}/branches`, {
-        name: generatedName
+        name: generatedName,
+        description: String(prompt || '').trim().slice(0, 200) || undefined
       });
 
       const branchName = createResponse.data?.branch?.name || generatedName;

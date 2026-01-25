@@ -2,6 +2,7 @@ import React from 'react'
 import { describe, test, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import App from '../App'
+import { VERSION } from '../../../shared/version.mjs'
 
 const useAppStateMock = vi.fn()
 
@@ -43,7 +44,7 @@ describe('App coverage branches', () => {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
       }
       if (url === '/api/version') {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: VERSION }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -89,7 +90,7 @@ describe('App coverage branches', () => {
         return Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false }) })
       }
       if (url === '/api/version') {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: VERSION }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -108,7 +109,7 @@ describe('App coverage branches', () => {
         return Promise.resolve({ ok: true, status: 200, json: async () => 'not-an-object' })
       }
       if (url === '/api/version') {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: VERSION }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -126,7 +127,7 @@ describe('App coverage branches', () => {
         return Promise.reject(abortError)
       }
       if (url === '/api/version') {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: VERSION }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -143,7 +144,7 @@ describe('App coverage branches', () => {
         return Promise.reject({})
       }
       if (url === '/api/version') {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: VERSION }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -256,7 +257,7 @@ describe('App coverage branches', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', '0.1.0')
+      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', VERSION)
     })
 
     expect(global.fetch).toHaveBeenCalledWith('/api/version', expect.any(Object))
@@ -268,7 +269,7 @@ describe('App coverage branches', () => {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
       }
       if (url === '/api/version') {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ versionFile: '0.1.0' }) })
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ versionFile: VERSION }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -276,7 +277,7 @@ describe('App coverage branches', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', '0.1.0')
+      expect(screen.getByTestId('nav')).toHaveAttribute('data-version', VERSION)
     })
   })
 
@@ -366,7 +367,7 @@ describe('App coverage branches', () => {
         return healthResponses.shift()
       }
       if (url === '/api/version') {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: VERSION }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })
@@ -405,7 +406,7 @@ describe('App coverage branches', () => {
         return pendingHealth
       }
       if (url === '/api/version') {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: '0.1.0' }) })
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: VERSION }) })
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     })

@@ -7,6 +7,10 @@ const BranchDetails = ({
   onCheckout,
   checkoutTestId,
   checkoutLabel,
+  canDelete,
+  onDeleteBranch,
+  deleteLabel,
+  isDeleting,
   isStoppingProject,
   selectedFiles,
   hasSelectedFiles,
@@ -51,6 +55,10 @@ const BranchDetails = ({
           onOpenFile={onOpenFile}
           onClearFile={onClearFile}
           onClearAll={onClearAll}
+          canDelete={canDelete}
+          onDeleteBranch={onDeleteBranch}
+          deleteLabel={deleteLabel}
+          isDeleting={isDeleting}
           isStoppingProject={isStoppingProject}
           isCurrentBranch={isCurrentBranch}
         />

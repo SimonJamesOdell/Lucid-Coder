@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, beforeEach, afterEach, test, expect, vi } from 'vitest';
 import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import PackageTab, { resolveActionProjectId } from '../components/PackageTab';
+import PackageTab, { resolveActionProjectId, __testWorkspaces } from '../components/PackageTab';
 import { useAppState } from '../context/AppStateContext';
 
 vi.mock('../context/AppStateContext', () => ({
@@ -80,12 +80,33 @@ describe('PackageTab', () => {
   test('renders dependency information for each workspace', async () => {
     useAppState.mockReturnValue(createAppState());
     render(<PackageTab project={{ id: 42, name: 'Demo' }} />);
+    const user = userEvent.setup();
 
     await waitFor(() => expect(screen.getByTestId('package-list-frontend-dependencies')).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByTestId('package-list-backend-dependencies')).toBeInTheDocument());
-
     expect(screen.getByText('react')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('package-workspace-tab-backend'));
+    await waitFor(() => expect(screen.getByTestId('package-list-backend-dependencies')).toBeInTheDocument());
     expect(screen.getByText('express')).toBeInTheDocument();
+  });
+
+  test('handles missing workspaces by falling back safely (branch coverage)', () => {
+    useAppState.mockReturnValue(createAppState());
+
+    const original = __testWorkspaces.slice();
+    try {
+      __testWorkspaces.length = 0;
+
+      render(<PackageTab project={{ id: 909, name: 'No Workspaces' }} />);
+
+      expect(screen.getByTestId('package-tab')).toBeInTheDocument();
+      expect(screen.queryAllByRole('tab')).toHaveLength(0);
+      expect(screen.queryByRole('heading', { name: 'Frontend' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Backend' })).toBeNull();
+    } finally {
+      __testWorkspaces.length = 0;
+      __testWorkspaces.push(...original);
+    }
   });
 
   test('starts add-package job with provided metadata', async () => {
@@ -243,9 +264,11 @@ describe('PackageTab', () => {
     });
     const context = createAppState();
     useAppState.mockReturnValue(context);
+    const user = userEvent.setup();
 
     render(<PackageTab project={{ id: 5, name: 'Packages' }} />);
 
+    await user.click(screen.getByTestId('package-workspace-tab-backend'));
     const errorMessage = await screen.findByTestId('package-error-backend');
     expect(errorMessage).toHaveTextContent('Backend offline');
   });
@@ -269,9 +292,11 @@ describe('PackageTab', () => {
     });
     const context = createAppState();
     useAppState.mockReturnValue(context);
+    const user = userEvent.setup();
 
     render(<PackageTab project={{ id: 55, name: 'Packages' }} />);
 
+    await user.click(screen.getByTestId('package-workspace-tab-backend'));
     await screen.findByTestId('package-form-backend');
 
     expect(screen.getByTestId('package-empty-backend-dependencies')).toHaveTextContent('No dependencies defined');
@@ -283,9 +308,11 @@ describe('PackageTab', () => {
       backend: { name: '', version: '2.5.0', dependencies: {}, devDependencies: {} }
     });
     useAppState.mockReturnValue(createAppState());
+    const user = userEvent.setup();
 
     render(<PackageTab project={{ id: 56, name: 'Packages' }} />);
 
+    await user.click(screen.getByTestId('package-workspace-tab-backend'));
     const backendHeading = await screen.findByRole('heading', { name: 'Backend' });
     const backendSection = backendHeading.closest('section');
     expect(within(backendSection).getByText('Unnamed workspace · v2.5.0')).toBeInTheDocument();
@@ -297,6 +324,8 @@ describe('PackageTab', () => {
     const user = userEvent.setup();
 
     render(<PackageTab project={{ id: 63, name: 'Packages' }} />);
+
+    await user.click(screen.getByTestId('package-workspace-tab-backend'));
 
     const backendHeading = await screen.findByRole('heading', { name: 'Backend' });
     const backendSection = backendHeading.closest('section');
@@ -531,8 +560,11 @@ describe('PackageTab', () => {
     });
     const context = createAppState();
     useAppState.mockReturnValue(context);
+    const user = userEvent.setup();
 
     render(<PackageTab project={{ id: 303, name: 'Packages' }} />);
+
+    await user.click(screen.getByTestId('package-workspace-tab-backend'));
 
     const backendHeading = await screen.findByRole('heading', { name: 'Backend' });
     const backendSection = backendHeading.closest('section');
