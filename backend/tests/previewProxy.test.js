@@ -857,6 +857,61 @@ describe('previewProxy', () => {
     );
   });
 
+  test('proxy error handler clears frontend process for other connection failures via error.code', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } },
+      state: 'running'
+    });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/');
+    req.__lucidcoderPreviewProxy = { projectId: 12, port: 5173 };
+    const res = createRes();
+
+    const err = new Error('socket hang up');
+    err.code = 'ECONNRESET';
+    errorHandler(err, req, res);
+
+    expect(storeRunningProcessesMock).toHaveBeenCalledWith(
+      12,
+      { frontend: null, backend: { port: 3000 } },
+      'running',
+      { exposeSnapshot: true }
+    );
+  });
+
+  test('resolveFrontendPort falls back when running port is remembered bad', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } },
+      state: 'running'
+    });
+
+    getProjectMock.mockResolvedValue({ id: 12 });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 5174 });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5175 });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/');
+    req.__lucidcoderPreviewProxy = { projectId: 12, port: 5173 };
+    const res = createRes();
+
+    errorHandler(new Error('connect ECONNREFUSED'), req, res);
+
+    await expect(__testOnly.resolveFrontendPort(12)).resolves.toBe(5174);
+  });
+
   test('proxy error handler marks preview stopped when backend is absent', async () => {
     const warn = vi.fn();
     const { createPreviewProxy } = await import('../routes/previewProxy.js');

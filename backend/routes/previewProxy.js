@@ -10,6 +10,53 @@ import {
 const COOKIE_NAME = 'lucidcoder_preview_project';
 const PREVIEW_ROUTE_PREFIX = '/preview/';
 
+const BAD_FRONTEND_PORT_TTL_MS = 5_000;
+const badFrontendPortsByProject = new Map();
+
+const isProxyConnectionFailure = (error) => {
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
+  if (
+    code === 'ECONNREFUSED' ||
+    code === 'ECONNRESET' ||
+    code === 'EPIPE' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EHOSTUNREACH' ||
+    code === 'ENOTFOUND'
+  ) {
+    return true;
+  }
+
+  const message = typeof error?.message === 'string' ? error.message : '';
+  return /(ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND)/i.test(message);
+};
+
+const rememberBadFrontendPort = (projectId, port) => {
+  const numericProjectId = projectId;
+  const numericPort = Number(port);
+  if (!numericProjectId || !Number.isInteger(numericPort) || numericPort <= 0) {
+    return;
+  }
+
+  badFrontendPortsByProject.set(numericProjectId, {
+    port: numericPort,
+    until: Date.now() + BAD_FRONTEND_PORT_TTL_MS
+  });
+};
+
+const isFrontendPortRememberedBad = (projectId, port) => {
+  const entry = badFrontendPortsByProject.get(projectId);
+  if (!entry) {
+    return false;
+  }
+
+  if (typeof entry.until !== 'number' || entry.until <= Date.now()) {
+    badFrontendPortsByProject.delete(projectId);
+    return false;
+  }
+
+  return entry.port === port;
+};
+
 const normalizeCookieValue = (value) => {
   if (value === undefined || value === null) {
     return '';
@@ -205,7 +252,12 @@ const resolveFrontendPort = async (projectId) => {
   const { processes, state } = getRunningProcessEntry(projectId);
   const portCandidate = processes?.frontend?.port;
   const numericPort = Number(portCandidate);
-  if (state === 'running' && Number.isInteger(numericPort) && numericPort > 0) {
+  if (
+    state === 'running' &&
+    Number.isInteger(numericPort) &&
+    numericPort > 0 &&
+    !isFrontendPortRememberedBad(projectId, numericPort)
+  ) {
     return numericPort;
   }
 
@@ -277,7 +329,11 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
 
     const context = req?.__lucidcoderPreviewProxy;
     const contextProjectId = context?.projectId;
-    if (contextProjectId && /ECONNREFUSED/i.test(message)) {
+    if (contextProjectId && isProxyConnectionFailure(error)) {
+      if (context?.port) {
+        rememberBadFrontendPort(contextProjectId, context.port);
+      }
+
       const { processes } = getRunningProcessEntry(contextProjectId);
       if (processes?.frontend) {
         const nextProcesses = { ...processes, frontend: null };
@@ -398,7 +454,8 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
     const originalUrl = req.url;
     req.__lucidcoderPreviewProxy = {
       previewPrefix: `${PREVIEW_ROUTE_PREFIX}${projectId}`.replace(/\/+$/, ''),
-      projectId
+      projectId,
+      port
     };
 
     try {
