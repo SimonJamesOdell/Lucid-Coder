@@ -886,6 +886,51 @@ describe('previewProxy', () => {
     );
   });
 
+  test('proxy error handler tolerates invalid context.port when remembering a bad port', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: null, backend: { port: 3000 } },
+      state: 'running'
+    });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/');
+    req.__lucidcoderPreviewProxy = { projectId: 12, port: 'not-a-number' };
+    const res = createRes();
+
+    expect(() => errorHandler(new Error('connect ECONNREFUSED'), req, res)).not.toThrow();
+    expect(storeRunningProcessesMock).not.toHaveBeenCalled();
+  });
+
+  test('proxy error handler ignores non-connection errors even when error.message is not a string', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 }, backend: { port: 3000 } },
+      state: 'running'
+    });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/');
+    req.__lucidcoderPreviewProxy = { projectId: 12, port: 5173 };
+    const res = createRes();
+
+    const err = new Error('');
+    err.message = 123;
+    errorHandler(err, req, res);
+
+    expect(storeRunningProcessesMock).not.toHaveBeenCalled();
+  });
+
   test('resolveFrontendPort falls back when running port is remembered bad', async () => {
     const warn = vi.fn();
     const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
@@ -910,6 +955,42 @@ describe('previewProxy', () => {
     errorHandler(new Error('connect ECONNREFUSED'), req, res);
 
     await expect(__testOnly.resolveFrontendPort(12)).resolves.toBe(5174);
+  });
+
+  test('resolveFrontendPort forgets expired remembered-bad entries', async () => {
+    const warn = vi.fn();
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1_000);
+
+    try {
+      const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+      createPreviewProxy({ logger: { warn } });
+
+      // First: record a bad port while no frontend process is currently tracked.
+      getRunningProcessEntryMock.mockReturnValueOnce({
+        processes: { frontend: null, backend: { port: 3000 } },
+        state: 'running'
+      });
+
+      const errorHandler = getProxyHandler('error');
+      expect(typeof errorHandler).toBe('function');
+
+      const req = createReq('/preview/12/');
+      req.__lucidcoderPreviewProxy = { projectId: 12, port: 5173 };
+      const res = createRes();
+      errorHandler(new Error('ECONNREFUSED'), req, res);
+
+      // After TTL: the remembered entry is purged and the running port can be used.
+      nowSpy.mockReturnValue(10_000);
+      getRunningProcessEntryMock.mockReturnValueOnce({
+        processes: { frontend: { port: 5173 }, backend: { port: 3000 } },
+        state: 'running'
+      });
+
+      await expect(__testOnly.resolveFrontendPort(12)).resolves.toBe(5173);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   test('proxy error handler marks preview stopped when backend is absent', async () => {
