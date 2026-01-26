@@ -71,6 +71,42 @@ const computeGoalProgress = (goal) => {
   return { ...leafProgress, ratio };
 };
 
+const normalizeLifecycleState = (value) => String(value || '').trim().toLowerCase();
+
+const isPastGoalGroup = (goal) => {
+  const lifecycle = normalizeLifecycleState(goal?.lifecycleState);
+  if (lifecycle === 'ready-to-merge' || lifecycle === 'merged' || lifecycle === 'cancelled') {
+    return true;
+  }
+
+  const progress = computeGoalProgress(goal);
+  const hasProgress = progress.total > 0;
+  const groupDone = hasProgress ? progress.done === progress.total : isGoalDone(goal);
+  if (groupDone) {
+    return true;
+  }
+
+  const phase = normalizePhase(goal?.status);
+  return phase === 'failed' || phase === 'ready';
+};
+
+const splitGoalTreeForTabs = (roots = []) => {
+  const rootGoals = Array.isArray(roots) ? roots : [];
+  const current = [];
+  const past = [];
+
+  for (const root of rootGoals) {
+    if (!root) continue;
+    if (isPastGoalGroup(root)) {
+      past.push(root);
+    } else {
+      current.push(root);
+    }
+  }
+
+  return { current, past };
+};
+
 const buildGoalTree = (goals = []) => {
   const map = new Map();
   goals.forEach((goal) => {
@@ -130,14 +166,26 @@ const GoalsPanel = ({
   const isModal = mode === 'modal';
   const isVisible = isModal ? Boolean(isOpen) : true;
 
+  const isTabMode = !isModal;
+
   const { currentProject, jobState } = useAppState();
   const [goals, setGoals] = useState([]);
+  const [activeList, setActiveList] = useState('current');
+  const [expandedPastGoalIds, setExpandedPastGoalIds] = useState(() => new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isClearing, setIsClearing] = useState(false);
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false);
 
-  const goalTree = useMemo(() => buildGoalTree(goals), [goals]);
+  const fullGoalTree = useMemo(() => buildGoalTree(goals), [goals]);
+  const goalTabs = useMemo(() => splitGoalTreeForTabs(fullGoalTree), [fullGoalTree]);
+  const displayGoalTree = useMemo(() => {
+    if (!isTabMode) {
+      return fullGoalTree;
+    }
+
+    return activeList === 'past' ? goalTabs.past : goalTabs.current;
+  }, [activeList, fullGoalTree, goalTabs.current, goalTabs.past, isTabMode]);
 
   const loadGoals = async (projectId, { silent = false } = {}) => {
     if (!projectId) {
@@ -166,6 +214,47 @@ const GoalsPanel = ({
   };
 
   const projectId = currentProject?.id;
+
+  useEffect(() => {
+    if (!isTabMode) {
+      return;
+    }
+    setActiveList('current');
+    setExpandedPastGoalIds(new Set());
+  }, [isTabMode, projectId]);
+
+  useEffect(() => {
+    if (!isTabMode) {
+      return;
+    }
+    if (activeList !== 'past') {
+      return;
+    }
+
+    // Past lists are collapsed by default each time you switch into them.
+    setExpandedPastGoalIds(new Set());
+  }, [activeList, isTabMode]);
+
+  const togglePastGoalExpanded = (goalId) => {
+    const numericId = Number(goalId);
+    if (!numericId) {
+      return;
+    }
+
+    setExpandedPastGoalIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(numericId)) {
+        next.delete(numericId);
+      } else {
+        next.add(numericId);
+      }
+      return next;
+    });
+  };
+
+  if (GoalsPanel.__testHooks) {
+    GoalsPanel.__testHooks.latestTogglePastGoalExpanded = togglePastGoalExpanded;
+  }
 
   const activeJob = useMemo(() => {
     if (!projectId) {
@@ -321,7 +410,7 @@ const GoalsPanel = ({
     }
     /* c8 ignore stop */
 
-    const rootIds = goalTree.map((goal) => goal?.id).filter(Boolean);
+    const rootIds = fullGoalTree.map((goal) => goal?.id).filter(Boolean);
     /* c8 ignore start */
     if (rootIds.length === 0) {
       return;
@@ -383,7 +472,34 @@ const GoalsPanel = ({
         ) : (
           <>
             <div className="goals-modal-sidebar">
-              <div className="goals-modal-section-title">Goals</div>
+              {isTabMode ? (
+                <div className="goals-tab-filterbar" role="tablist" aria-label="Goals list">
+                  <button
+                    type="button"
+                    className={`goals-tab-filter${activeList === 'current' ? ' is-active' : ''}`}
+                    onClick={() => setActiveList('current')}
+                    role="tab"
+                    aria-selected={activeList === 'current'}
+                    data-testid="goals-tab-filter-current"
+                  >
+                    Current
+                    <span className="goals-tab-filter-count">{goalTabs.current.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`goals-tab-filter${activeList === 'past' ? ' is-active' : ''}`}
+                    onClick={() => setActiveList('past')}
+                    role="tab"
+                    aria-selected={activeList === 'past'}
+                    data-testid="goals-tab-filter-past"
+                  >
+                    Past
+                    <span className="goals-tab-filter-count">{goalTabs.past.length}</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="goals-modal-section-title">Goals</div>
+              )}
               {isLoading && <div className="goals-modal-muted">Loading…</div>}
               {error && (
                 <div className="goals-modal-error" role="alert">
@@ -392,13 +508,22 @@ const GoalsPanel = ({
               )}
 
               <div className="goals-modal-goal-list" data-testid="goals-modal-goal-list">
-                {goalTree.map((goal) => {
+                {displayGoalTree.length === 0 && !isLoading && !error && (
+                  <div className="goals-modal-muted" data-testid="goals-tab-empty">
+                    {activeList === 'past' ? 'No past goals yet.' : 'No current goals yet.'}
+                  </div>
+                )}
+                {displayGoalTree.map((goal) => {
                   const renderGoalNode = (node, depth = 0) => {
                     const children = Array.isArray(node.children) ? node.children : [];
                     const progress = computeGoalProgress(node);
                     const groupDone = progress.total > 0 ? progress.done === progress.total : isGoalDone(node);
-                    const goalPhase = normalizePhase(node.status) || '';
+                    const goalPhase = normalizePhase(node.status);
                     const isChild = depth > 0;
+                    const isPastRoot = isTabMode && activeList === 'past' && depth === 0;
+                    const rootId = Number(node.id);
+                    const isExpanded = isPastRoot && expandedPastGoalIds.has(rootId);
+                    const canToggle = isPastRoot && rootId && children.length > 0;
 
                     return (
                       <div key={node.id} className="goals-modal-goal-group">
@@ -419,6 +544,17 @@ const GoalsPanel = ({
                                 {progress.done}/{progress.total}
                               </span>
                             )}
+                            {canToggle && (
+                              <button
+                                type="button"
+                                className="goals-past-toggle"
+                                onClick={() => togglePastGoalExpanded(rootId)}
+                                aria-expanded={isExpanded}
+                                data-testid={`goals-past-toggle-${rootId}`}
+                              >
+                                {isExpanded ? 'Collapse' : 'Expand'}
+                              </button>
+                            )}
                           </div>
                           {progress.total > 0 && (
                             <div className="goals-modal-progressbar" aria-hidden="true">
@@ -430,7 +566,7 @@ const GoalsPanel = ({
                           )}
                         </div>
 
-                        {children.length > 0 && (
+                        {children.length > 0 && (!isPastRoot || isExpanded) && (
                           <div className="goals-modal-children">
                             {children.map((child) => renderGoalNode(child, depth + 1))}
                           </div>
@@ -503,6 +639,8 @@ GoalsPanel.__testHooks = GoalsPanel.__testHooks || {};
 Object.assign(GoalsPanel.__testHooks, {
   normalizePhase,
   getGoalTitle,
+  isPastGoalGroup,
+  splitGoalTreeForTabs,
   computeGoalProgress,
   formatPhaseLabel
 });

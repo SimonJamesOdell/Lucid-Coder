@@ -2396,7 +2396,8 @@ describe('useBranchTabState targeted guards', () => {
     });
 
     await waitFor(() => {
-      expect(getState().branchSummaries.some((branch) => branch.name === 'archived-branch')).toBe(false);
+      expect(getState().branchSummaries.some((branch) => branch.name === 'archived-branch')).toBe(true);
+      expect(getState().sortedBranches.some((branch) => branch.name === 'archived-branch')).toBe(false);
       expect(getState().workingBranches).toEqual([]);
       expect(getState().selectedBranchName).toBe('main');
     });

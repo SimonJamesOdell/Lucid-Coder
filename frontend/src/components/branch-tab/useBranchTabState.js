@@ -20,6 +20,8 @@ import { normalizeRepoPath } from './repoPathUtils';
 
 const TEST_JOB_TYPES = ['frontend:test', 'backend:test'];
 
+const OPEN_BRANCH_STATUSES = new Set(['active', 'ready-for-merge', 'needs-fix', 'ready']);
+
 const useBranchTabState = ({
   project,
   onRequestTestsTab,
@@ -32,6 +34,7 @@ const useBranchTabState = ({
   const [currentBranch, setCurrentBranch] = useState(null);
   const [branchSummaries, setBranchSummaries] = useState([]);
   const [selectedBranch, setSelectedBranchState] = useState(() => loadStoredBranchSelection(projectId));
+  const [branchListMode, setBranchListMode] = useState('open');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [workingBranches, setWorkingBranches] = useState([]);
@@ -170,9 +173,8 @@ const useBranchTabState = ({
     }
 
     const normalizedOverview = mergeOverviewWithLocalStaged(overview);
-    const allowedStatuses = new Set(['active', 'ready-for-merge', 'needs-fix', 'ready']);
     const mappedBranches = (normalizedOverview.branches || [])
-      .filter((branch) => branch.name === 'main' || allowedStatuses.has(branch.status))
+      .filter((branch) => branch && typeof branch.name === 'string' && branch.name.trim())
       .map((branch, index) => ({
         ...branch,
         order: index
@@ -237,14 +239,41 @@ const useBranchTabState = ({
       return [];
     }
 
-    const list = [...branchSummaries];
+    const filtered = branchSummaries.filter((branch) => {
+      if (!branch || typeof branch.name !== 'string') {
+        return false;
+      }
+      if (branchListMode === 'past') {
+        return branch.name !== 'main' && !OPEN_BRANCH_STATUSES.has(branch.status);
+      }
+      return branch.name === 'main' || OPEN_BRANCH_STATUSES.has(branch.status);
+    });
+
+    const list = [...filtered];
     list.sort((a, b) => {
       if (a.isCurrent) return -1;
       if (b.isCurrent) return 1;
       return (b.order ?? 0) - (a.order ?? 0);
     });
     return list;
-  }, [branchSummaries]);
+  }, [branchSummaries, branchListMode]);
+
+  const openBranchCount = useMemo(() => (
+    branchSummaries.filter((branch) => (
+      branch
+      && typeof branch.name === 'string'
+      && (branch.name === 'main' || OPEN_BRANCH_STATUSES.has(branch.status))
+    )).length
+  ), [branchSummaries]);
+
+  const pastBranchCount = useMemo(() => (
+    branchSummaries.filter((branch) => (
+      branch
+      && typeof branch.name === 'string'
+      && branch.name !== 'main'
+      && !OPEN_BRANCH_STATUSES.has(branch.status)
+    )).length
+  ), [branchSummaries]);
 
   useEffect(() => {
     if (!selectedBranch || !branchSummaries.length) {
@@ -256,8 +285,16 @@ const useBranchTabState = ({
     }
   }, [branchSummaries, selectedBranch, setSelectedBranch]);
 
-  const selectedBranchName = selectedBranch || sortedBranches[0]?.name || currentBranch || getBranchFallbackName();
-  const selectedSummary = sortedBranches.find((branch) => branch.name === selectedBranchName) || null;
+  const displayedBranchNames = useMemo(() => new Set(sortedBranches.map((branch) => branch.name)), [sortedBranches]);
+  const selectedBranchName = (
+    selectedBranch
+    && displayedBranchNames.has(selectedBranch)
+      ? selectedBranch
+      : (sortedBranches[0]?.name || currentBranch || getBranchFallbackName())
+  );
+  const selectedSummary = branchSummaries.find((branch) => branch.name === selectedBranchName)
+    || sortedBranches.find((branch) => branch.name === selectedBranchName)
+    || null;
   const selectedWorkingBranch = workingBranchMap.get(selectedBranchName)
     || workingBranches.find((branch) => branch.name === selectedBranchName)
     || null;
@@ -877,6 +914,10 @@ const useBranchTabState = ({
     showShutdownBanner,
     shutdownError,
     isStoppingProject,
+    branchListMode,
+    setBranchListMode,
+    openBranchCount,
+    pastBranchCount,
     branchSummaries,
     sortedBranches,
     selectedBranchName,

@@ -102,6 +102,40 @@ describe('useBranchTabState', () => {
     expect(localStorage.getItem(storageKey)).toBe('feature/login');
   });
 
+  test('sortedBranches filters out invalid branch summary entries', async () => {
+    useBranchTabState.__testHooks = {};
+
+    mockedAxios.get.mockResolvedValue({
+      data: createOverview({
+        branches: [{ name: 'main', status: 'active', isCurrent: true }],
+        workingBranches: []
+      })
+    });
+
+    const { result } = renderHook(() => useBranchTabState(defaultProps));
+
+    await waitFor(() => {
+      expect(result.current.branchSummaries.length).toBeGreaterThan(0);
+    });
+
+    await waitFor(() => {
+      expect(useBranchTabState.__testHooks.latestInstance).toBeTruthy();
+    });
+
+    act(() => {
+      useBranchTabState.__testHooks.latestInstance.setBranchSummaries([
+        {},
+        { name: 'main', status: 'active', isCurrent: true },
+        { name: 123, status: 'active', isCurrent: false },
+        { name: 'feature/login', status: 'ready-for-merge', isCurrent: false }
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(result.current.sortedBranches.map((b) => b.name)).toEqual(['main', 'feature/login']);
+    });
+  });
+
   test('uses local workspace staged files when server data is empty', async () => {
     replaceAppState(createAppState({
       workspaceChanges: {
