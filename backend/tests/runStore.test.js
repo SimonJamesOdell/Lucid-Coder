@@ -184,6 +184,64 @@ describe('runStore', () => {
     expect(limited).toHaveLength(1);
   });
 
+  test('listRunEvents supports afterId pagination and type filtering', async () => {
+    const created = await createRun({ projectId: 100, kind: 'autopilot', sessionId: 'evt-filter' });
+
+    const evt1 = await appendRunEvent(created.id, { type: 'tool_call', message: 'one' });
+    const evt2 = await appendRunEvent(created.id, { type: 'tool_result', message: 'two' });
+    const evt3 = await appendRunEvent(created.id, { type: 'note', message: 'three' });
+
+    const after = await listRunEvents(created.id, { afterId: evt1.id, limit: 500 });
+    expect(after.map((e) => e.id)).toEqual([evt2.id, evt3.id]);
+
+    const filtered = await listRunEvents(created.id, { types: 'tool_call, tool_result', limit: 500 });
+    expect(filtered.map((e) => e.type)).toEqual(['tool_call', 'tool_result']);
+  });
+
+  test('listRunEvents option normalization covers branch edges', async () => {
+    const created = await createRun({ projectId: 101, kind: 'job', sessionId: 'evt-edges' });
+    const evt1 = await appendRunEvent(created.id, { type: 'note', message: 'one' });
+    const evt2 = await appendRunEvent(created.id, { type: 'tool_call', message: 'two' });
+
+    // afterId non-numeric -> ignored; limit <= 0 -> defaults to 500
+    const defaulted = await listRunEvents(created.id, { afterId: 'nope', limit: 0, types: null });
+    expect(defaulted.map((e) => e.id)).toEqual([evt1.id, evt2.id]);
+
+    // afterId = 0 -> ignored (branch: normalizedAfterId not > 0)
+    const ignoredAfterZero = await listRunEvents(created.id, { afterId: 0, limit: 500 });
+    expect(ignoredAfterZero).toHaveLength(2);
+
+    // types as array with trimming + non-string members -> filters to ['tool_call']
+    const arrayTypes = await listRunEvents(created.id, { types: [' tool_call ', null, '   '], limit: 500 });
+    expect(arrayTypes.map((e) => e.type)).toEqual(['tool_call']);
+  });
+
+  test('appendRunEvent accepts correlation_id fallback + trims level/source', async () => {
+    const created = await createRun({ projectId: 102, kind: 'job', sessionId: 'evt-trace-fields' });
+
+    const evt = await appendRunEvent(created.id, {
+      type: 'tool_call',
+      message: 'hi',
+      level: '  info  ',
+      source: '  jobRunner  ',
+      correlation_id: '  corr-1  '
+    });
+
+    expect(evt).toMatchObject({
+      type: 'tool_call',
+      level: 'info',
+      source: 'jobRunner',
+      correlationId: 'corr-1'
+    });
+
+    const evt2 = await appendRunEvent(created.id, {
+      type: 'tool_call',
+      message: 'hi2',
+      correlationId: 'corr-2'
+    });
+    expect(evt2.correlationId).toBe('corr-2');
+  });
+
   test('__testing helpers cover JSON + ISO branches', () => {
     expect(__testing.parseJson(null)).toBeNull();
     expect(__testing.parseJson(123)).toBeNull();
