@@ -295,7 +295,9 @@ export const syncCurrentBranchStagedFilesFromGit = async (projectId, context) =>
   const shouldInvalidateReadyBranch =
     branchRow.status === 'ready-for-merge' && stagedPathsChanged && nextFiles.length > 0;
   const nextStatus = shouldInvalidateReadyBranch ? 'active' : branchRow.status;
-  const shouldInvalidateTestRun = stagedPathsChanged && nextFiles.length > 0;
+  const isCssOnlyStaged = nextFiles.length > 0
+    && nextFiles.every((entry) => String(entry?.path || '').trim().toLowerCase().endsWith('.css'));
+  const shouldInvalidateTestRun = stagedPathsChanged && nextFiles.length > 0 && !isCssOnlyStaged;
 
   if (existingSignature === nextSignature && !shouldInvalidateReadyBranch) {
     return;

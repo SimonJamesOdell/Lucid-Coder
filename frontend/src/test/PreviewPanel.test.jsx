@@ -118,6 +118,11 @@ vi.mock('../components/PackageTab', () => ({
   default: () => <div data-testid="mock-packages-tab" />
 }));
 
+vi.mock('../components/RunsTab', () => ({
+  __esModule: true,
+  default: () => <div data-testid="mock-runs-tab" />
+}));
+
 vi.mock('../components/LLMUsageTab', () => ({
   __esModule: true,
   default: () => <div data-testid="mock-llm-usage-tab" />
@@ -1087,6 +1092,19 @@ describe('PreviewPanel', () => {
     await user.click(screen.getByTestId('packages-tab'));
 
     expect(screen.getByTestId('mock-packages-tab')).toBeInTheDocument();
+  });
+
+  test('shows runs tab content when selected', async () => {
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 19, name: 'Runs Project' } })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('runs-tab'));
+
+    expect(screen.getByTestId('mock-runs-tab')).toBeInTheDocument();
   });
 
   test('can render LLM usage tab content when selected programmatically', async () => {
