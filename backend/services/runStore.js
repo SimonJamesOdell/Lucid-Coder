@@ -284,5 +284,10 @@ export const listRunEvents = async (runId, { limit = 500 } = {}) => {
 export const __testing = {
   run,
   get,
-  all
+  all,
+  parseJson,
+  toIsoOrNull,
+  serializeJson,
+  normalizeRunRow,
+  normalizeEventRow
 };

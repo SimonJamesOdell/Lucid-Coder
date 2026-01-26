@@ -5,8 +5,8 @@ const router = express.Router({ mergeParams: true });
 
 router.get('/', async (req, res) => {
   try {
-    const { projectId } = req.params || {};
-    const limit = req.query?.limit ? Number(req.query.limit) : undefined;
+    const { projectId } = req.params;
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
 
     if (!projectId) {
       return res.status(400).json({ success: false, error: 'projectId is required' });
@@ -22,8 +22,10 @@ router.get('/', async (req, res) => {
 
 router.get('/:runId', async (req, res) => {
   try {
-    const { projectId, runId } = req.params || {};
-    const includeEvents = String(req.query?.includeEvents || '').toLowerCase() === 'true' || String(req.query?.includeEvents || '') === '1';
+    const { projectId, runId } = req.params;
+    const includeEventsValue = req.query.includeEvents;
+    const includeEvents = String(includeEventsValue || '').toLowerCase() === 'true'
+      || String(includeEventsValue || '') === '1';
 
     if (!projectId) {
       return res.status(400).json({ success: false, error: 'projectId is required' });

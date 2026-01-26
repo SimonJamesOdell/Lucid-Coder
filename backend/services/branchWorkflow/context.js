@@ -276,16 +276,18 @@ export const syncCurrentBranchStagedFilesFromGit = async (projectId, context) =>
     return;
   }
 
-  const existingFiles = parseStagedFiles(branchRow.staged_files);
-  const nextFiles = buildStagedFilesSnapshot(existingFiles, stagedEntries);
+  const normalizeStagedFiles = (files = []) => files
+    .filter((entry) => entry && typeof entry.path === 'string')
+    .map((entry) => ({
+      ...entry,
+      gitToken: typeof entry.gitToken === 'string' ? entry.gitToken : ''
+    }));
+
+  const existingFiles = normalizeStagedFiles(parseStagedFiles(branchRow.staged_files));
+  const nextFiles = normalizeStagedFiles(buildStagedFilesSnapshot(existingFiles, stagedEntries));
 
   const signatureFor = (files = []) => files
-    .map((entry) => {
-      const pathValue = entry?.path || '';
-      const token = typeof entry?.gitToken === 'string' ? entry.gitToken : '';
-      return `${pathValue}\0${token}`;
-    })
-    .filter(Boolean)
+    .map((entry) => `${entry.path}\0${entry.gitToken}`)
     .join('\n');
 
   const existingSignature = signatureFor(existingFiles);
@@ -296,7 +298,7 @@ export const syncCurrentBranchStagedFilesFromGit = async (projectId, context) =>
     branchRow.status === 'ready-for-merge' && stagedPathsChanged && nextFiles.length > 0;
   const nextStatus = shouldInvalidateReadyBranch ? 'active' : branchRow.status;
   const isCssOnlyStaged = nextFiles.length > 0
-    && nextFiles.every((entry) => String(entry?.path || '').trim().toLowerCase().endsWith('.css'));
+    && nextFiles.every((entry) => entry.path.trim().toLowerCase().endsWith('.css'));
   const shouldInvalidateTestRun = stagedPathsChanged && nextFiles.length > 0 && !isCssOnlyStaged;
 
   if (existingSignature === nextSignature && !shouldInvalidateReadyBranch) {
