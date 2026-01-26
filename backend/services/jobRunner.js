@@ -350,7 +350,12 @@ export const startJob = (config) => {
   }
 
   child.on('error', (error) => {
-    pushLog(job, 'stderr', Buffer.from(error.message));
+    const errorMessage =
+      error && typeof error.message === 'string' && error.message.length > 0
+        ? error.message
+        : 'Job failed';
+
+    pushLog(job, 'stderr', Buffer.from(errorMessage));
     job.status = JOB_STATUS.FAILED;
     job.completedAt = now();
     delete job.process;
@@ -358,13 +363,13 @@ export const startJob = (config) => {
     enqueueRunUpdate(job, {
       status: mapJobStatusToRunStatus(job.status),
       statusMessage: 'Job failed',
-      error: error?.message || 'Job failed',
+      error: errorMessage,
       finishedAt: job.completedAt
     });
     enqueueRunEvent(job, {
       type: 'job:failed',
       timestamp: job.completedAt,
-      message: error?.message || 'Job failed',
+      message: errorMessage,
       payload: { status: mapJobStatusToRunStatus(job.status) }
     });
 
@@ -421,7 +426,11 @@ export const cancelJob = (jobId) => {
       // just the shell pid often leaves the child process tree running.
       terminatePid(pid, process.platform, { spawn, kill: process.kill });
     } catch (error) {
-      pushLog(job, 'stderr', Buffer.from(error.message));
+      const errorMessage =
+        error && typeof error.message === 'string' && error.message.length > 0
+          ? error.message
+          : 'Job failed';
+      pushLog(job, 'stderr', Buffer.from(errorMessage));
     }
   }
 
@@ -452,5 +461,9 @@ export const getAllJobs = () => [...jobs.values()].map(sanitizeJob);
 export const __testing = {
   clearJobs: () => jobs.clear(),
   resetJobEvents: () => jobEvents.removeAllListeners(),
-  terminatePid
+  terminatePid,
+  mapJobStatusToRunStatus,
+  enqueueRunEvent,
+  enqueueRunUpdate,
+  flushPendingRunWork
 };
