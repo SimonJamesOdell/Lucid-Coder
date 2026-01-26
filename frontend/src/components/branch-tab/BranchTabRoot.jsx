@@ -25,6 +25,10 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
     showShutdownBanner,
     shutdownError,
     isStoppingProject,
+    branchListMode,
+    setBranchListMode,
+    openBranchCount,
+    pastBranchCount,
     branchSummaries,
     sortedBranches,
     selectedBranchName,
@@ -179,6 +183,10 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
     <div className="branch-layout">
       <BranchSidebar
         branchSummaries={branchSummaries}
+        branchListMode={branchListMode}
+        onChangeBranchListMode={setBranchListMode}
+        openBranchCount={openBranchCount}
+        pastBranchCount={pastBranchCount}
         sortedBranches={sortedBranches}
         workingBranchMap={workingBranchMap}
         selectedBranchName={selectedBranchName}
@@ -218,6 +226,10 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
     </div>
   ), [
     branchSummaries,
+    branchListMode,
+    setBranchListMode,
+    openBranchCount,
+    pastBranchCount,
     sortedBranches,
     workingBranchMap,
     selectedBranchName,

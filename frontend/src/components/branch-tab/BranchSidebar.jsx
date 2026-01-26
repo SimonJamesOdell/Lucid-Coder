@@ -3,6 +3,10 @@ import { formatStatus, safeTestId, deriveDisplayStatus } from './utils';
 
 const BranchSidebar = ({
   branchSummaries,
+  branchListMode,
+  onChangeBranchListMode,
+  openBranchCount,
+  pastBranchCount,
   sortedBranches,
   workingBranchMap,
   selectedBranchName,
@@ -14,6 +18,26 @@ const BranchSidebar = ({
         <p className="panel-eyebrow">Branches</p>
       </div>
       <span className="panel-count">{branchSummaries.length} total</span>
+    </div>
+    <div className="branch-filter-bar" data-testid="branch-filter-bar">
+      <button
+        type="button"
+        className={`branch-filter-pill${branchListMode === 'open' ? ' selected' : ''}`}
+        onClick={() => onChangeBranchListMode?.('open')}
+        data-testid="branch-filter-open"
+      >
+        Open
+        <span className="branch-filter-count" aria-label="Open branches count">{openBranchCount ?? 0}</span>
+      </button>
+      <button
+        type="button"
+        className={`branch-filter-pill${branchListMode === 'past' ? ' selected' : ''}`}
+        onClick={() => onChangeBranchListMode?.('past')}
+        data-testid="branch-filter-past"
+      >
+        Past
+        <span className="branch-filter-count" aria-label="Past branches count">{pastBranchCount ?? 0}</span>
+      </button>
     </div>
     <div className="branch-list" data-testid="branch-list">
       {sortedBranches.map((branch) => {
@@ -50,7 +74,9 @@ const BranchSidebar = ({
       })}
       {!sortedBranches.length && (
         <div className="branch-empty" data-testid="branch-empty">
-          No branches yet. Start coding to create your first working branch.
+          {branchListMode === 'past'
+            ? 'No past branches yet.'
+            : 'No branches yet. Start coding to create your first working branch.'}
         </div>
       )}
     </div>

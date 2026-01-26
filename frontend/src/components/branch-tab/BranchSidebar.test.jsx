@@ -7,6 +7,10 @@ import BranchSidebar from './BranchSidebar';
 const renderSidebar = (props = {}) => {
   const defaultProps = {
     branchSummaries: [],
+    branchListMode: 'open',
+    onChangeBranchListMode: vi.fn(),
+    openBranchCount: 0,
+    pastBranchCount: 0,
     sortedBranches: [],
     workingBranchMap: new Map(),
     selectedBranchName: null,
@@ -21,7 +25,52 @@ describe('BranchSidebar', () => {
 
     expect(screen.getByText('Branches')).toBeInTheDocument();
     expect(screen.getByText('0 total')).toBeInTheDocument();
+    expect(screen.getByTestId('branch-filter-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('branch-filter-open')).toBeInTheDocument();
+    expect(screen.getByTestId('branch-filter-past')).toBeInTheDocument();
     expect(screen.getByTestId('branch-empty')).toHaveTextContent('No branches yet');
+  });
+
+  test('clicking Open filter calls onChangeBranchListMode', async () => {
+    const onChangeBranchListMode = vi.fn();
+    const user = userEvent.setup();
+
+    renderSidebar({ branchListMode: 'past', onChangeBranchListMode });
+
+    await user.click(screen.getByTestId('branch-filter-open'));
+    expect(onChangeBranchListMode).toHaveBeenCalledWith('open');
+  });
+
+  test('clicking Past filter calls onChangeBranchListMode', async () => {
+    const onChangeBranchListMode = vi.fn();
+    const user = userEvent.setup();
+
+    renderSidebar({ branchListMode: 'open', onChangeBranchListMode });
+
+    await user.click(screen.getByTestId('branch-filter-past'));
+    expect(onChangeBranchListMode).toHaveBeenCalledWith('past');
+  });
+
+  test('clicking filters is safe when handler missing', async () => {
+    const user = userEvent.setup();
+
+    renderSidebar({ onChangeBranchListMode: undefined });
+
+    await user.click(screen.getByTestId('branch-filter-open'));
+    await user.click(screen.getByTestId('branch-filter-past'));
+  });
+
+  test('defaults Open/Past branch counts to 0 when missing', () => {
+    renderSidebar({ openBranchCount: undefined, pastBranchCount: undefined });
+
+    expect(screen.getByLabelText('Open branches count')).toHaveTextContent('0');
+    expect(screen.getByLabelText('Past branches count')).toHaveTextContent('0');
+  });
+
+  test('shows past empty state when no past branches exist', () => {
+    renderSidebar({ branchListMode: 'past' });
+
+    expect(screen.getByTestId('branch-empty')).toHaveTextContent('No past branches yet');
   });
 
   test('renders branch rows, chips, and trigger selection', async () => {
@@ -38,6 +87,9 @@ describe('BranchSidebar', () => {
 
     renderSidebar({
       branchSummaries,
+      branchListMode: 'open',
+      openBranchCount: 1,
+      pastBranchCount: 1,
       sortedBranches: branches,
       workingBranchMap,
       selectedBranchName: branches[0].name,
@@ -69,6 +121,9 @@ describe('BranchSidebar', () => {
 
     renderSidebar({
       branchSummaries,
+      branchListMode: 'open',
+      openBranchCount: 1,
+      pastBranchCount: 0,
       sortedBranches: branches,
       workingBranchMap,
       selectedBranchName: branches[0].name
@@ -83,6 +138,9 @@ describe('BranchSidebar', () => {
 
     renderSidebar({
       branchSummaries,
+      branchListMode: 'open',
+      openBranchCount: 1,
+      pastBranchCount: 0,
       sortedBranches: branches,
       selectedBranchName: branches[0].name
     });
@@ -99,6 +157,9 @@ describe('BranchSidebar', () => {
 
     renderSidebar({
       branchSummaries,
+      branchListMode: 'open',
+      openBranchCount: 2,
+      pastBranchCount: 0,
       sortedBranches: branches,
       selectedBranchName: 'main'
     });

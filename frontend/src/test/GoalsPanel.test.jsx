@@ -53,6 +53,156 @@ describe('GoalsPanel', () => {
     });
   });
 
+  it('shows empty copy for current and past when there are no goals', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    // Exercise the non-array fallback path in loadGoals.
+    goalsApi.fetchGoals.mockResolvedValueOnce(null);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    expect(await screen.findByTestId('goals-tab-filter-current')).toBeInTheDocument();
+    expect(await screen.findByTestId('goals-tab-empty')).toHaveTextContent('No current goals yet.');
+
+    await user.click(screen.getByTestId('goals-tab-filter-past'));
+    expect(await screen.findByTestId('goals-tab-empty')).toHaveTextContent('No past goals yet.');
+
+    await user.click(screen.getByTestId('goals-tab-filter-current'));
+    expect(await screen.findByTestId('goals-tab-empty')).toHaveTextContent('No current goals yet.');
+  });
+
+  it('renders Unknown status without an extra phase class when status is missing', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 50, prompt: 'Mystery goal', parentGoalId: null }
+    ]);
+
+    render(<GoalsPanel mode="tab" />);
+
+    await screen.findByTestId('goals-modal-goal-50');
+    const status = screen.getByLabelText('Status: Unknown');
+    expect(status.className).toBe('goals-modal-goal-status');
+  });
+
+  it('shows an error when goals fail to load', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockRejectedValueOnce(new Error('network down'));
+
+    render(<GoalsPanel mode="tab" />);
+
+    expect(await screen.findByTestId('goals-tab-filter-current')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load goals');
+  });
+
+  it('shows current/past tabs and filters completed goal groups', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 1, prompt: 'Current goal', status: 'planning', parentGoalId: null },
+      { id: 2, prompt: 'Past goal', status: 'ready', parentGoalId: null }
+    ]);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    expect(await screen.findByTestId('goals-tab-filter-current')).toBeInTheDocument();
+    expect(screen.getByText('Current goal')).toBeInTheDocument();
+    expect(screen.queryByText('Past goal')).toBeNull();
+
+    await user.click(screen.getByTestId('goals-tab-filter-past'));
+    await waitFor(() => {
+      expect(screen.getByText('Past goal')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Current goal')).toBeNull();
+  });
+
+  it('treats merged lifecycle goals as past even when status is not ready', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 10, prompt: 'Still working', status: 'planning', parentGoalId: null },
+      { id: 11, prompt: 'Merged lifecycle', status: 'planning', lifecycleState: 'merged', parentGoalId: null }
+    ]);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    expect(await screen.findByTestId('goals-tab-filter-current')).toBeInTheDocument();
+    expect(screen.getByText('Still working')).toBeInTheDocument();
+    expect(screen.queryByText('Merged lifecycle')).toBeNull();
+
+    await user.click(screen.getByTestId('goals-tab-filter-past'));
+    await waitFor(() => {
+      expect(screen.getByText('Merged lifecycle')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Still working')).toBeNull();
+  });
+
+  it('past goal groups are collapsed by default and can be expanded/collapsed', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 30, prompt: 'Past parent', status: 'ready', parentGoalId: null },
+      { id: 31, prompt: 'Past child', status: 'ready', parentGoalId: 30 }
+    ]);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-tab-filter-past'));
+
+    expect(screen.getByText('Past parent')).toBeInTheDocument();
+    expect(screen.queryByText('Past child')).toBeNull();
+
+    await user.click(await screen.findByTestId('goals-past-toggle-30'));
+    expect(await screen.findByText('Past child')).toBeInTheDocument();
+
+    await user.click(await screen.findByTestId('goals-past-toggle-30'));
+    await waitFor(() => {
+      expect(screen.queryByText('Past child')).toBeNull();
+    });
+  });
+
+  it('ignores past toggle requests for invalid goal ids', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 40, prompt: 'Past root', status: 'ready', parentGoalId: null },
+      { id: 41, prompt: 'Past nested', status: 'ready', parentGoalId: 40 }
+    ]);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+    await user.click(await screen.findByTestId('goals-tab-filter-past'));
+
+    expect(screen.queryByText('Past nested')).toBeNull();
+
+    const toggleFn = GoalsPanel.__testHooks?.latestTogglePastGoalExpanded;
+    expect(typeof toggleFn).toBe('function');
+
+    toggleFn('not-a-number');
+    await Promise.resolve();
+    expect(screen.queryByText('Past nested')).toBeNull();
+  });
+
+  it('modal mode does not render tab filters (covers tab-mode guards)', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([]);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="modal" isOpen onRequestClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalledWith(project.id, { includeArchived: true });
+    });
+
+    await user.click(screen.getByTestId('goals-modal-refresh'));
+    await waitFor(() => {
+      expect(goalsApi.fetchGoals).toHaveBeenCalledTimes(2);
+    });
+
+    expect(screen.getByTestId('goals-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('goals-tab-filter-current')).toBeNull();
+    expect(screen.queryByTestId('goals-tab-filter-past')).toBeNull();
+    expect(screen.getByText('Goals', { exact: true })).toBeInTheDocument();
+  });
+
   it('refreshes goals when the automation flow signals goals were updated', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
 
@@ -73,6 +223,12 @@ describe('GoalsPanel', () => {
     expect(within(childButton).getByText('Verifying')).toBeInTheDocument();
 
     window.dispatchEvent(new CustomEvent('lucidcoder:goals-updated', { detail: { projectId: 1 } }));
+
+    // The goal group transitions to "past" once completed.
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('goals-tab-filter-past'));
+
+    await user.click(await screen.findByTestId('goals-past-toggle-100'));
 
     await waitFor(() => {
       expect(within(screen.getByTestId('goals-modal-goal-101')).getByText('Completed')).toBeInTheDocument();
@@ -143,7 +299,10 @@ describe('GoalsPanel', () => {
       { id: 10, prompt: 'Ship it', status: 'done', parentGoalId: null }
     ]);
 
+    const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-tab-filter-past'));
 
     await waitFor(() => {
       expect(screen.getByText('Ship it')).toBeInTheDocument();
@@ -162,7 +321,10 @@ describe('GoalsPanel', () => {
       { id: 11, prompt: 'Investigate bug', status: 'failed', parentGoalId: null }
     ]);
 
+    const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-tab-filter-past'));
 
     await waitFor(() => {
       expect(screen.getByText('Investigate bug')).toBeInTheDocument();
@@ -307,7 +469,12 @@ describe('GoalsPanel', () => {
       { id: 32, prompt: 'Grandchild', status: 'ready', parentGoalId: 31 }
     ]);
 
+    const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-tab-filter-past'));
+
+    await user.click(await screen.findByTestId('goals-past-toggle-30'));
 
     await waitFor(() => {
       expect(screen.getByText('Root')).toBeInTheDocument();
@@ -704,5 +871,12 @@ describe('GoalsPanel helper hooks', () => {
   it('computeGoalProgress ignores non-array children and reports zero progress', () => {
     const result = hooks.computeGoalProgress({ id: 9, status: 'planning', children: 'nope' });
     expect(result).toEqual({ done: 0, total: 0, ratio: 0 });
+  });
+
+  it('splitGoalTreeForTabs skips null roots', () => {
+    const result = hooks.splitGoalTreeForTabs([null, { id: 1, status: 'ready' }]);
+    expect(result.current).toEqual([]);
+    expect(result.past).toHaveLength(1);
+    expect(result.past[0].id).toBe(1);
   });
 });

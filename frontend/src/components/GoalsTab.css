@@ -12,6 +12,70 @@
   box-shadow: none;
 }
 
+.goals-tab-root .goals-tab-filterbar {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  margin-bottom: 0.6rem;
+}
+
+.goals-tab-root .goals-tab-filter {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary, #b3b3b3);
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+}
+
+.goals-tab-root .goals-tab-filter:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary, #fff);
+}
+
+.goals-tab-root .goals-tab-filter.is-active {
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--text-primary, #fff);
+}
+
+.goals-tab-root .goals-tab-filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.2rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.18);
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.goals-tab-root .goals-past-toggle {
+  margin-left: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary, #b3b3b3);
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.goals-tab-root .goals-past-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, #fff);
+}
+
 @media (max-width: 860px) {
   .goals-tab-root .goals-modal-panel.goals-tab-panel {
     border-radius: 0.5rem;

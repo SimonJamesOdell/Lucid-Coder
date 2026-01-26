@@ -736,7 +736,9 @@ describe('BranchTab', () => {
       ...baseOverview,
       branches: [
         { name: 'main', status: 'protected', isCurrent: true, stagedFileCount: 1 },
-        { name: 'feature-old', status: 'merged', isCurrent: false, stagedFileCount: 0 }
+        { name: 'feature-old', status: 'merged', isCurrent: false, stagedFileCount: 0 },
+        { name: 'feature-archived', status: 'archived', isCurrent: false, stagedFileCount: 0 },
+        { name: 'feature-paused', status: 'paused', isCurrent: false, stagedFileCount: 0 }
       ],
       workingBranches: []
     };
@@ -745,6 +747,13 @@ describe('BranchTab', () => {
 
     expect(screen.getByTestId('branch-list-item-main')).toBeInTheDocument();
     expect(screen.queryByTestId('branch-list-item-feature-old')).toBeNull();
+    expect(screen.queryByTestId('branch-list-item-feature-archived')).toBeNull();
+    expect(screen.queryByTestId('branch-list-item-feature-paused')).toBeNull();
+
+    await userEvent.click(screen.getByTestId('branch-filter-past'));
+    expect(await screen.findByTestId('branch-list-item-feature-old')).toBeInTheDocument();
+    expect(await screen.findByTestId('branch-list-item-feature-archived')).toBeInTheDocument();
+    expect(await screen.findByTestId('branch-list-item-feature-paused')).toBeInTheDocument();
   });
 
   test('selecting a non-current branch does not show staged files from another branch', async () => {

@@ -1,7 +1,9 @@
 # Changelog
 
-## 0.2.6 (Unreleased)
-- (No changes yet.)
+## 0.2.6 (2026-01-26)
+- Added Current/Past goal views, with Past goals grouped and collapsible for easier scanning.
+- Added Open/Past branch filtering in the sidebar with per-tab counts (Past = any non-open status, excluding `main`).
+- Expanded frontend tests and closed remaining coverage gaps to keep the 100% coverage gate green.
 
 ## 0.2.5 (2026-01-25)
 - Added best-effort preview auto-restart after repeated proxy connection failures (primarily iframe/HTML navigation).
