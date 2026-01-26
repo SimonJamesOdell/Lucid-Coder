@@ -1,6 +1,6 @@
 {
   "name": "lucidcoder-backend",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "Backend for LucidCoder fullstack app",
   "main": "server.js",
   "type": "module",

@@ -216,6 +216,7 @@ export const AppStateProvider = ({ children }) => {
       tests: 'test',
       branches: 'branch',
       goals: 'goals',
+      runs: 'runs',
       'llm usage': 'llm-usage',
       llmusage: 'llm-usage'
     };
@@ -224,6 +225,7 @@ export const AppStateProvider = ({ children }) => {
     const allowed = new Set([
       'preview',
       'goals',
+      'runs',
       'files',
       'branch',
       'test',

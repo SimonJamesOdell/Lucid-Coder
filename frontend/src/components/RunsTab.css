@@ -1,0 +1,239 @@
+/* RunsTab.css */
+
+.runs-tab {
+  padding: 1rem;
+  color: var(--text-primary, #fff);
+}
+
+.runs-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.runs-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.runs-subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.9rem;
+}
+
+.runs-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 1rem;
+  min-height: 520px;
+}
+
+.runs-list {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  background: var(--background-secondary, #1a1a1a);
+  overflow: hidden;
+}
+
+.runs-error {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-color, #333);
+  color: #ffb3b3;
+  background: rgba(255, 0, 0, 0.08);
+}
+
+.runs-none {
+  padding: 1rem;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.runs-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0.75rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.run-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.run-item.is-active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.run-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.run-kind {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.85rem;
+}
+
+.run-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.35rem;
+}
+
+.run-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.8rem;
+}
+
+.run-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  text-transform: lowercase;
+  border: 1px solid var(--border-color, #333);
+}
+
+.run-status.is-completed {
+  color: #bfffd2;
+  border-color: rgba(0, 255, 128, 0.35);
+}
+
+.run-status.is-running {
+  color: #bfe2ff;
+  border-color: rgba(0, 140, 255, 0.35);
+}
+
+.run-status.is-failed {
+  color: #ffbfbf;
+  border-color: rgba(255, 0, 0, 0.35);
+}
+
+.run-status.is-cancelled {
+  color: #ffe3bf;
+  border-color: rgba(255, 170, 0, 0.35);
+}
+
+.run-status.is-pending {
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.runs-detail {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  background: var(--background-secondary, #1a1a1a);
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.runs-detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.runs-detail-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.runs-detail-badges {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.runs-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.9rem;
+}
+
+.runs-detail-key {
+  display: inline-block;
+  min-width: 72px;
+  color: var(--text-primary, #fff);
+  margin-right: 0.5rem;
+}
+
+.runs-detail-error {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: rgba(255, 0, 0, 0.08);
+  color: #ffb3b3;
+  border: 1px solid rgba(255, 0, 0, 0.25);
+}
+
+.runs-events h4 {
+  margin: 0.75rem 0 0.5rem;
+}
+
+.runs-events-empty {
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.runs-events-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.runs-event {
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border-color, #333);
+}
+
+.runs-event-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.8rem;
+}
+
+.runs-event-message {
+  margin: 0.35rem 0 0;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.85rem;
+}
+
+.runs-empty {
+  padding: 1rem;
+  color: var(--text-secondary, #b3b3b3);
+  border: 1px dashed var(--border-color, #333);
+  border-radius: 8px;
+}
+
+@media (max-width: 1024px) {
+  .runs-layout {
+    grid-template-columns: 1fr;
+  }
+}

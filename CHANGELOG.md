@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 (2026-01-26)
+- Added durable persisted Runs (SQLite `runs` + `run_events`) to capture job and autopilot execution history.
+- Added backend Runs API under `/api/projects/:projectId/runs` (list runs + fetch a run with optional events).
+- Mirrored job logs/status and autopilot session events into run timelines (best-effort, non-blocking persistence).
+- Added a new Runs tab in the frontend to browse run history and timeline events.
+- Changed default SQLite DB location to a per-user app data directory (with env overrides) and added best-effort migration from the legacy location.
+- Fixed CSS-only staged changes from invalidating the last successful test run.
+- Expanded frontend + backend tests to keep strict coverage gates green.
+
 ## 0.2.6 (2026-01-26)
 - Added Current/Past goal views, with Past goals grouped and collapsible for easier scanning.
 - Added Open/Past branch filtering in the sidebar with per-tab counts (Past = any non-open status, excluding `main`).

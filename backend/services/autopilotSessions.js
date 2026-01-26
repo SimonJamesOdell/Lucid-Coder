@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { autopilotFeatureRequest } from './agentAutopilot.js';
+import { appendRunEvent, createRun, updateRun } from './runStore.js';
 
 const EVENT_LIMIT = 500;
 const ACTIVE_STATUSES = new Set(['pending', 'running', 'paused']);
@@ -111,6 +112,14 @@ const appendSessionEvent = (session, rawEvent) => {
     session.eventsTrimmed += 1;
   }
   session.updatedAt = event.timestamp;
+
+  if (session.runId) {
+    Promise.resolve()
+      .then(() => appendRunEvent(session.runId, event))
+      .catch(() => {
+        // Best-effort only: never block autopilot on run persistence.
+      });
+  }
 };
 
 const summarizeSession = (session, { includeEvents = true } = {}) => {
@@ -120,6 +129,7 @@ const summarizeSession = (session, { includeEvents = true } = {}) => {
 
   return {
     id: session.id,
+    runId: session.runId || null,
     projectId: session.projectId,
     prompt: session.prompt,
     status: session.status,
@@ -203,6 +213,17 @@ const markSessionFailed = (session, errorMessage) => {
   });
 };
 
+const persistRunUpdate = async (session, updates) => {
+  if (!session?.runId) {
+    return;
+  }
+  try {
+    await updateRun(session.runId, updates);
+  } catch {
+    // Best-effort only.
+  }
+};
+
 const startAutopilotWorker = (session) => {
   if (!session || session.control.running) {
     return session?.control.workerPromise || null;
@@ -212,6 +233,11 @@ const startAutopilotWorker = (session) => {
     session.control.running = true;
     session.status = 'running';
     session.startedAt = session.startedAt || nowIso(session.control.now);
+    await persistRunUpdate(session, {
+      status: 'running',
+      startedAt: session.startedAt,
+      statusMessage: 'Autopilot execution started'
+    });
     appendSessionEvent(session, {
       type: 'session:started',
       message: 'Autopilot execution started',
@@ -230,6 +256,11 @@ const startAutopilotWorker = (session) => {
       session.result = clonePayload(result);
       session.status = 'completed';
       session.statusMessage = 'Completed successfully';
+      await persistRunUpdate(session, {
+        status: 'completed',
+        statusMessage: session.statusMessage,
+        error: null
+      });
       appendSessionEvent(session, {
         type: 'session:completed',
         message: 'Autopilot completed successfully',
@@ -242,6 +273,11 @@ const startAutopilotWorker = (session) => {
       if (code === 'AUTOPILOT_CANCELLED' || session.control.cancelRequested) {
         session.status = 'cancelled';
         session.statusMessage = 'Cancelled';
+        await persistRunUpdate(session, {
+          status: 'cancelled',
+          statusMessage: session.statusMessage,
+          error: message
+        });
         appendSessionEvent(session, {
           type: 'session:cancelled',
           message: error?.message || 'Autopilot cancelled',
@@ -250,10 +286,19 @@ const startAutopilotWorker = (session) => {
         });
       } else {
         markSessionFailed(session, message);
+        await persistRunUpdate(session, {
+          status: 'failed',
+          statusMessage: message,
+          error: message
+        });
       }
     } finally {
       session.finishedAt = nowIso(session.control.now);
       session.control.running = false;
+
+      await persistRunUpdate(session, {
+        finishedAt: session.finishedAt
+      });
     }
   };
 
@@ -281,6 +326,7 @@ export const createAutopilotSession = async ({ projectId, prompt, options, uiSes
 
   const session = {
     id: sessionId,
+    runId: null,
     projectId,
     prompt: normalizedPrompt,
     options: sanitizeOptions(options),
@@ -315,6 +361,36 @@ export const createAutopilotSession = async ({ projectId, prompt, options, uiSes
     payload: { prompt: normalizedPrompt },
     meta: null
   });
+
+  try {
+    const runRecord = await createRun({
+      projectId,
+      kind: 'autopilot',
+      status: 'pending',
+      sessionId,
+      statusMessage: session.statusMessage,
+      metadata: {
+        uiSessionId: session.uiSessionId,
+        options: session.options
+      }
+    });
+    if (runRecord?.id) {
+      session.runId = runRecord.id;
+
+      for (const event of session.events) {
+        try {
+          // Backfill events emitted before runId existed (ex: session:created).
+          // Best-effort only.
+          // eslint-disable-next-line no-await-in-loop
+          await appendRunEvent(session.runId, event);
+        } catch {
+          // Ignore.
+        }
+      }
+    }
+  } catch {
+    // Best-effort only: autopilot still runs without persisted run records.
+  }
 
   startAutopilotWorker(session);
 

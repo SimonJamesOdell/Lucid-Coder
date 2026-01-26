@@ -212,6 +212,47 @@ export const initializeDatabase = async () => {
       )
     `);
 
+    // Runs (canonical execution unit for goal/autopilot work).
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER,
+        goal_id INTEGER,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        session_id TEXT,
+        status_message TEXT,
+        metadata TEXT,
+        error TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        started_at DATETIME,
+        finished_at DATETIME
+      )
+    `);
+
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS run_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        session_event_id TEXT,
+        timestamp DATETIME NOT NULL,
+        type TEXT NOT NULL,
+        message TEXT,
+        payload TEXT,
+        meta TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+      )
+    `);
+
+    await ensureTableColumn('runs', 'status_message', 'TEXT');
+    await ensureTableColumn('runs', 'metadata', 'TEXT');
+    await ensureTableColumn('runs', 'error', 'TEXT');
+    await ensureTableColumn('runs', 'started_at', 'DATETIME');
+    await ensureTableColumn('runs', 'finished_at', 'DATETIME');
+    await ensureTableColumn('runs', 'session_id', 'TEXT');
+    await ensureTableColumn('runs', 'goal_id', 'INTEGER');
+
     // Projects table
     await dbRun(`
       CREATE TABLE IF NOT EXISTS projects (

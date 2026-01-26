@@ -288,6 +288,13 @@ describe('AppStateContext', () => {
 
     expect(result.current.previewPanelState.activeTab).toBe('llm-usage')
     expect(result.current.previewPanelState.followAutomation).toBe(false)
+
+    await act(async () => {
+      result.current.setPreviewPanelTab('runs', { source: 'user' })
+    })
+
+    expect(result.current.previewPanelState.activeTab).toBe('runs')
+    expect(result.current.previewPanelState.followAutomation).toBe(false)
   })
 
   test('setPreviewPanelTab restores followAutomation for agent or automation sources', async () => {

@@ -11,6 +11,7 @@ import GitTab from './GitTab';
 import ProcessesTab from './ProcessesTab';
 import PackageTab from './PackageTab';
 import LLMUsageTab from './LLMUsageTab';
+import RunsTab from './RunsTab';
 import './PreviewPanel.css';
 
 const PreviewPanel = () => {
@@ -42,6 +43,7 @@ const PreviewPanel = () => {
   const validTabsRef = useRef(new Set([
     'preview',
     'goals',
+    'runs',
     'files',
     'test',
     'branch',
@@ -488,6 +490,8 @@ const PreviewPanel = () => {
 
   const renderNonGoalsTab = () => {
     switch (activeTab) {
+      case 'runs':
+        return <RunsTab project={currentProject} />;
       case 'files':
         return (
           <FilesTab
@@ -560,6 +564,13 @@ const PreviewPanel = () => {
             onClick={() => setActiveTab('goals', { source: 'user' })}
           >
             Goals
+          </button>
+          <button
+            data-testid="runs-tab"
+            className={`tab ${activeTab === 'runs' ? 'active' : ''}`}
+            onClick={() => setActiveTab('runs', { source: 'user' })}
+          >
+            Runs
           </button>
           <button
             data-testid="branch-tab"

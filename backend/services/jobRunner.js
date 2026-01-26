@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import { appendRunEvent, createRun, updateRun } from './runStore.js';
 
 const MAX_LOG_ENTRIES = 500;
 const jobs = new Map();
@@ -22,6 +23,83 @@ const isTerminalStatus = (status) =>
 
 const now = () => new Date().toISOString();
 
+const mapJobStatusToRunStatus = (jobStatus) => {
+  if (jobStatus === JOB_STATUS.SUCCEEDED) return 'completed';
+  if (jobStatus === JOB_STATUS.FAILED) return 'failed';
+  if (jobStatus === JOB_STATUS.CANCELLED) return 'cancelled';
+  if (jobStatus === JOB_STATUS.RUNNING) return 'running';
+  return 'pending';
+};
+
+const enqueueRunEvent = (job, event) => {
+  if (!job || !event) {
+    return;
+  }
+
+  const normalized = {
+    ...event,
+    meta: {
+      ...(event.meta && typeof event.meta === 'object' ? event.meta : null),
+      jobId: job.id,
+      jobType: job.type
+    }
+  };
+
+  if (job.runId) {
+    appendRunEvent(job.runId, normalized).catch(() => {});
+    return;
+  }
+
+  if (!Array.isArray(job.pendingRunEvents)) {
+    job.pendingRunEvents = [];
+  }
+  job.pendingRunEvents.push(normalized);
+};
+
+const enqueueRunUpdate = (job, updates) => {
+  if (!job || !updates) {
+    return;
+  }
+
+  if (job.runId) {
+    updateRun(job.runId, updates).catch(() => {});
+    return;
+  }
+
+  job.pendingRunUpdates = {
+    ...(job.pendingRunUpdates && typeof job.pendingRunUpdates === 'object' ? job.pendingRunUpdates : {}),
+    ...updates
+  };
+};
+
+const flushPendingRunWork = async (job) => {
+  if (!job?.runId) {
+    return;
+  }
+
+  const pendingUpdates = job.pendingRunUpdates;
+  job.pendingRunUpdates = null;
+  if (pendingUpdates && Object.keys(pendingUpdates).length) {
+    try {
+      await updateRun(job.runId, pendingUpdates);
+    } catch {
+      // Best-effort.
+    }
+  }
+
+  const pendingEvents = Array.isArray(job.pendingRunEvents) ? job.pendingRunEvents : [];
+  job.pendingRunEvents = [];
+
+  for (const evt of pendingEvents) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await appendRunEvent(job.runId, evt);
+    } catch {
+      // Best-effort.
+    }
+  }
+};
+
 const pushLog = (job, stream, chunk) => {
   if (!chunk) {
     return;
@@ -38,6 +116,13 @@ const pushLog = (job, stream, chunk) => {
   }
 
   emitJobLog(job, entry);
+
+  enqueueRunEvent(job, {
+    type: 'job:log',
+    timestamp,
+    message: entry.message,
+    payload: { stream }
+  });
 };
 
 const sanitizeJob = (job) => {
@@ -195,7 +280,10 @@ export const startJob = (config) => {
     completedAt: null,
     exitCode: null,
     signal: null,
-    logs: []
+    logs: [],
+    runId: null,
+    pendingRunEvents: [],
+    pendingRunUpdates: null
   };
 
   jobs.set(id, job);
@@ -213,6 +301,46 @@ export const startJob = (config) => {
 
   emitJobCreated(job);
 
+  enqueueRunEvent(job, {
+    type: 'job:created',
+    timestamp: job.startedAt,
+    message: `Job started: ${job.displayName}`,
+    payload: {
+      command: job.command,
+      args: job.args,
+      cwd: job.cwd,
+      type: job.type,
+      displayName: job.displayName
+    }
+  });
+
+  createRun({
+    projectId: job.projectId,
+    kind: 'job',
+    status: mapJobStatusToRunStatus(job.status),
+    sessionId: job.id,
+    statusMessage: job.displayName,
+    metadata: {
+      jobId: job.id,
+      type: job.type,
+      displayName: job.displayName,
+      command: job.command,
+      args: job.args,
+      cwd: job.cwd
+    },
+    startedAt: job.startedAt
+  })
+    .then((created) => {
+      if (!created?.id) {
+        return;
+      }
+      job.runId = created.id;
+      return flushPendingRunWork(job);
+    })
+    .catch(() => {
+      // Best-effort only.
+    });
+
   if (child.stdout) {
     child.stdout.on('data', (chunk) => pushLog(job, 'stdout', chunk));
   }
@@ -226,6 +354,19 @@ export const startJob = (config) => {
     job.status = JOB_STATUS.FAILED;
     job.completedAt = now();
     delete job.process;
+
+    enqueueRunUpdate(job, {
+      status: mapJobStatusToRunStatus(job.status),
+      statusMessage: 'Job failed',
+      error: error?.message || 'Job failed',
+      finishedAt: job.completedAt
+    });
+    enqueueRunEvent(job, {
+      type: 'job:failed',
+      timestamp: job.completedAt,
+      message: error?.message || 'Job failed',
+      payload: { status: mapJobStatusToRunStatus(job.status) }
+    });
 
     emitJobUpdated(job);
   });
@@ -242,6 +383,19 @@ export const startJob = (config) => {
     }
 
     delete job.process;
+
+    const runStatus = mapJobStatusToRunStatus(job.status);
+    enqueueRunUpdate(job, {
+      status: runStatus,
+      statusMessage: job.status === JOB_STATUS.SUCCEEDED ? 'Job succeeded' : job.status === JOB_STATUS.CANCELLED ? 'Job cancelled' : 'Job failed',
+      finishedAt: job.completedAt
+    });
+    enqueueRunEvent(job, {
+      type: 'job:completed',
+      timestamp: job.completedAt,
+      message: `Job ${runStatus}`,
+      payload: { status: runStatus, exitCode: code ?? null, signal: signal || null }
+    });
 
     emitJobUpdated(job);
   });
@@ -274,6 +428,18 @@ export const cancelJob = (jobId) => {
   job.status = JOB_STATUS.CANCELLED;
   job.completedAt = now();
   delete job.process;
+
+  enqueueRunUpdate(job, {
+    status: mapJobStatusToRunStatus(job.status),
+    statusMessage: 'Job cancelled',
+    finishedAt: job.completedAt
+  });
+  enqueueRunEvent(job, {
+    type: 'job:cancelled',
+    timestamp: job.completedAt,
+    message: 'Job cancelled',
+    payload: { status: mapJobStatusToRunStatus(job.status) }
+  });
 
   emitJobUpdated(job);
 
