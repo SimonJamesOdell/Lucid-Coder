@@ -245,6 +245,16 @@ export const initializeDatabase = async () => {
       )
     `);
 
+    // Trace-oriented fields (kept optional for backward compatibility).
+    await ensureTableColumn('run_events', 'correlation_id', 'TEXT');
+    await ensureTableColumn('run_events', 'source', 'TEXT');
+    await ensureTableColumn('run_events', 'level', 'TEXT');
+
+    // Common indexes for timeline/pagination queries.
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_run_events_run_id_id ON run_events(run_id, id)');
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_run_events_run_id_type_id ON run_events(run_id, type, id)');
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_run_events_correlation_id ON run_events(correlation_id)');
+
     await ensureTableColumn('runs', 'status_message', 'TEXT');
     await ensureTableColumn('runs', 'metadata', 'TEXT');
     await ensureTableColumn('runs', 'error', 'TEXT');

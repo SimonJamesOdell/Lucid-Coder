@@ -48,4 +48,28 @@ router.get('/:runId', async (req, res) => {
   }
 });
 
+router.get('/:runId/events', async (req, res) => {
+  try {
+    const { projectId, runId } = req.params;
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const afterId = req.query.afterId ? Number(req.query.afterId) : undefined;
+    const types = typeof req.query.types === 'string' ? req.query.types : undefined;
+
+    if (!projectId) {
+      return res.status(400).json({ success: false, error: 'projectId is required' });
+    }
+
+    const runRecord = await getRun(runId);
+    if (!runRecord || String(runRecord.projectId) !== String(projectId)) {
+      return res.status(404).json({ success: false, error: 'Run not found' });
+    }
+
+    const events = await listRunEvents(runId, { limit, afterId, types });
+    res.status(200).json({ success: true, run: runRecord, events });
+  } catch (error) {
+    console.error('[Runs] Events failed:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch run events' });
+  }
+});
+
 export default router;

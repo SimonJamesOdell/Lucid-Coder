@@ -191,4 +191,67 @@ describe('Runs Routes', () => {
       });
     });
   });
+
+  describe('GET /api/projects/:projectId/runs/:runId/events', () => {
+    it('returns 400 when projectId param is missing', async () => {
+      app = buildApp({ mountWithProjectParam: false });
+
+      const response = await request(app)
+        .get('/api/projects/runs/123/events')
+        .expect(400);
+
+      expect(response.body).toEqual({
+        success: false,
+        error: 'projectId is required'
+      });
+    });
+
+    it('returns 404 when run is not found or mismatched projectId', async () => {
+      runStore.getRun.mockResolvedValue({ id: 1, projectId: 99, kind: 'job' });
+
+      const response = await request(app)
+        .get('/api/projects/42/runs/1/events')
+        .expect(404);
+
+      expect(response.body).toEqual({
+        success: false,
+        error: 'Run not found'
+      });
+      expect(runStore.listRunEvents).not.toHaveBeenCalled();
+    });
+
+    it('returns events and forwards query params to listRunEvents', async () => {
+      runStore.getRun.mockResolvedValue({ id: 12, projectId: 42, kind: 'job' });
+      runStore.listRunEvents.mockResolvedValue([{ id: 1, type: 'tool_call' }]);
+
+      const response = await request(app)
+        .get('/api/projects/42/runs/12/events?limit=25&afterId=10&types=tool_call,tool_result')
+        .expect(200);
+
+      expect(response.body).toEqual({
+        success: true,
+        run: { id: 12, projectId: 42, kind: 'job' },
+        events: [{ id: 1, type: 'tool_call' }]
+      });
+      expect(runStore.listRunEvents).toHaveBeenCalledWith('12', {
+        limit: 25,
+        afterId: 10,
+        types: 'tool_call,tool_result'
+      });
+    });
+
+    it('returns 500 when listRunEvents throws', async () => {
+      runStore.getRun.mockResolvedValue({ id: 13, projectId: 42, kind: 'job' });
+      runStore.listRunEvents.mockRejectedValue(new Error('boom'));
+
+      const response = await request(app)
+        .get('/api/projects/42/runs/13/events')
+        .expect(500);
+
+      expect(response.body).toEqual({
+        success: false,
+        error: 'Failed to fetch run events'
+      });
+    });
+  });
 });

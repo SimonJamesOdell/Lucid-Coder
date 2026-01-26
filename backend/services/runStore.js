@@ -101,6 +101,9 @@ const normalizeEventRow = (row) => {
     sessionEventId: row.session_event_id ?? null,
     timestamp: row.timestamp,
     type: row.type,
+    level: row.level ?? null,
+    source: row.source ?? null,
+    correlationId: row.correlation_id ?? null,
     message: row.message ?? '',
     payload: parseJson(row.payload),
     meta: parseJson(row.meta),
@@ -210,6 +213,11 @@ export const appendRunEvent = async (runId, event = {}) => {
 
   const type = typeof event.type === 'string' && event.type.trim() ? event.type.trim() : 'log';
   const timestamp = toIsoOrNull(event.timestamp) || new Date().toISOString();
+  const level = typeof event.level === 'string' && event.level.trim() ? event.level.trim() : null;
+  const source = typeof event.source === 'string' && event.source.trim() ? event.source.trim() : null;
+  const correlationId = typeof event.correlationId === 'string' && event.correlationId.trim()
+    ? event.correlationId.trim()
+    : (typeof event.correlation_id === 'string' && event.correlation_id.trim() ? event.correlation_id.trim() : null);
   const message = typeof event.message === 'string' ? event.message : String(event.message ?? '');
 
   const insert = await run(
@@ -218,15 +226,21 @@ export const appendRunEvent = async (runId, event = {}) => {
       session_event_id,
       timestamp,
       type,
+      level,
+      source,
+      correlation_id,
       message,
       payload,
       meta
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       event.id ? String(event.id) : null,
       timestamp,
       type,
+      level,
+      source,
+      correlationId,
       message,
       serializeJson(event.payload ?? null),
       serializeJson(event.meta ?? null)
@@ -268,15 +282,41 @@ export const listRunsForProject = async (projectId, { limit = 50 } = {}) => {
   return rows.map(normalizeRunRow);
 };
 
-export const listRunEvents = async (runId, { limit = 500 } = {}) => {
+export const listRunEvents = async (runId, { limit = 500, afterId = null, types = null } = {}) => {
   const id = Number(runId);
   if (!Number.isFinite(id)) {
     throw new Error('runId is required');
   }
+
   const normalizedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 500;
+
+  const normalizedAfterId = Number.isFinite(Number(afterId))
+    ? Math.floor(Number(afterId))
+    : null;
+
+  const normalizedTypes = Array.isArray(types)
+    ? types
+    : (typeof types === 'string' ? types.split(',') : []);
+  const filteredTypes = normalizedTypes
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean);
+
+  const where = ['run_id = ?'];
+  const params = [id];
+
+  if (Number.isFinite(normalizedAfterId) && normalizedAfterId > 0) {
+    where.push('id > ?');
+    params.push(normalizedAfterId);
+  }
+
+  if (filteredTypes.length > 0) {
+    where.push(`type IN (${filteredTypes.map(() => '?').join(', ')})`);
+    params.push(...filteredTypes);
+  }
+
   const rows = await all(
-    'SELECT * FROM run_events WHERE run_id = ? ORDER BY id ASC LIMIT ?',
-    [id, normalizedLimit]
+    `SELECT * FROM run_events WHERE ${where.join(' AND ')} ORDER BY id ASC LIMIT ?`,
+    [...params, normalizedLimit]
   );
   return rows.map(normalizeEventRow);
 };

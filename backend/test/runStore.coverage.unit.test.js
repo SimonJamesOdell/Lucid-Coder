@@ -25,8 +25,9 @@ describe('runStore coverage (unit)', () => {
         // Capture the message used for run_events inserts to verify
         // appendRunEvent message coercion (String(...)) ran.
         if (typeof sql === 'string' && /INSERT\s+INTO\s+run_events/i.test(sql)) {
-          // Params layout: [run_id, session_event_id, timestamp, type, message, payload, meta]
-          lastRunEventMessage = params?.[4] ?? null;
+          // Params layout:
+          // [run_id, session_event_id, timestamp, type, level, source, correlation_id, message, payload, meta]
+          lastRunEventMessage = params?.[7] ?? null;
         }
 
         // Default: ensure run() wrapper hits the success branch and resolves with lastID/changes.

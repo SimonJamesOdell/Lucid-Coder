@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 (2026-01-26)
+- Extended `run_events` with trace-oriented fields (`correlation_id`, `source`, `level`) and added supporting indexes.
+- Added a paginated/filterable run events endpoint: `/api/projects/:projectId/runs/:runId/events`.
+- Enhanced run event listing to support `afterId`, `types`, and `limit` options.
+
 ## 0.3.0 (2026-01-26)
 - Added durable persisted Runs (SQLite `runs` + `run_events`) to capture job and autopilot execution history.
 - Added backend Runs API under `/api/projects/:projectId/runs` (list runs + fetch a run with optional events).
