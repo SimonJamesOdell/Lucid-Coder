@@ -1,6 +1,6 @@
 # LucidCoder
 
-Version: 0.3.4
+Version: 0.3.5
 LucidCoder is a fullstack system for orchestrating goal-driven coding workflows. The frontend provides a rich React UI and the backend exposes REST and Socket.IO APIs for projects, goals, agents, and test execution.
 
 This project is a work in progress. Core functionality is in place, but many features and improvements are still planned. If you’re interested, please join in development and share updates, ideas, and contributions so we can evolve it together.
@@ -48,6 +48,7 @@ Tests use backend/test-lucidcoder.db by default (also controllable via `DATABASE
 ## Documentation
 
 - Project overview: [docs/OVERVIEW.md](docs/OVERVIEW.md)
+- 0.3.x roadmap: [docs/ROADMAP_0.3.x.md](docs/ROADMAP_0.3.x.md)
 - Versioning policy: [docs/VERSIONING.md](docs/VERSIONING.md)
 - Backend details: [backend/README.md](backend/README.md)
 - Frontend details: [frontend/README.md](frontend/README.md)

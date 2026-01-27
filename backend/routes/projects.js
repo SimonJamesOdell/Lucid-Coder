@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs/promises';
 import {
   createProject,
   getAllProjects,
@@ -180,6 +181,47 @@ router.post('/', async (req, res) => {
     
     const gitSettings = await getGitSettings();
     const portSettings = await getPortSettings();
+
+    const skipScaffolding =
+      (process.env.E2E_SKIP_SCAFFOLDING === 'true' || process.env.E2E_SKIP_SCAFFOLDING === '1') &&
+      process.env.NODE_ENV !== 'production';
+
+    if (skipScaffolding) {
+      await fs.mkdir(projectPath, { recursive: true });
+
+      const dbProjectData = {
+        name: name.trim(),
+        description: description?.trim() || '',
+        language: `${frontend.language},${backend.language}`,
+        framework: `${frontend.framework},${backend.framework}`,
+        path: projectPath,
+        frontendPort: null,
+        backendPort: null
+      };
+
+      const project = await createProject(dbProjectData);
+
+      const enhancedProject = {
+        ...project,
+        frontend,
+        backend,
+        path: projectPath
+      };
+
+      res.status(201).json({
+        success: true,
+        project: enhancedProject,
+        processes: null,
+        progress: null,
+        message: 'Project created successfully'
+      });
+
+      if (progressKey) {
+        completeProgress(progressKey, 'Project created successfully');
+      }
+
+      return;
+    }
 
     // Create project with full scaffolding
     let scaffoldResult;
