@@ -1,4 +1,5 @@
-import React, { useMemo, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useEffect, useRef, useState } from 'react';
+import axios from 'axios';
 import useBranchTabState from './useBranchTabState';
 import useToolbarActions from './useToolbarActions';
 import BranchSidebar from './BranchSidebar';
@@ -9,6 +10,7 @@ import { useAppState } from '../../context/AppStateContext';
 
 const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onRequestCommitsTab, registerBranchActions }) => {
   const { syncBranchOverview } = useAppState();
+  const projectId = project?.id;
 
   const branchState = useBranchTabState({
     project,
@@ -130,6 +132,68 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
     && !isStoppingProject
     && !isBeginningTesting;
 
+  const changedFilesCacheRef = useRef(new Map());
+  const [committedFiles, setCommittedFiles] = useState([]);
+  const [isLoadingCommittedFiles, setIsLoadingCommittedFiles] = useState(false);
+  const lastCommittedFilesBranchRef = useRef('');
+
+  useEffect(() => {
+    const targetBranch = selectedBranchName || '';
+    if (
+      !projectId
+      || !targetBranch
+      || targetBranch === 'main'
+      || !readyForMerge
+      || hasSelectedFiles
+    ) {
+      setCommittedFiles([]);
+      setIsLoadingCommittedFiles(false);
+      lastCommittedFilesBranchRef.current = '';
+      return;
+    }
+
+    const cachedFiles = changedFilesCacheRef.current.get(targetBranch);
+    if (Array.isArray(cachedFiles)) {
+      setCommittedFiles(cachedFiles);
+      setIsLoadingCommittedFiles(false);
+      lastCommittedFilesBranchRef.current = targetBranch;
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingCommittedFiles(true);
+    lastCommittedFilesBranchRef.current = targetBranch;
+
+    void axios
+      .get(`/api/projects/${projectId}/branches/${encodeURIComponent(targetBranch)}/changed-files`)
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        const nextFiles = Array.isArray(response?.data?.files) ? response.data.files : [];
+        changedFilesCacheRef.current.set(targetBranch, nextFiles);
+        setCommittedFiles(nextFiles);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        console.warn('[BranchTab] Failed to fetch committed files', err);
+        changedFilesCacheRef.current.set(targetBranch, []);
+        setCommittedFiles([]);
+      })
+      .finally(() => {
+        if (cancelled) {
+          return;
+        }
+        setIsLoadingCommittedFiles(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, selectedBranchName, readyForMerge, hasSelectedFiles]);
+
   const syncOverviewIfAvailable = useCallback((overview) => {
     if (!overview || !project?.id) {
       return;
@@ -222,6 +286,17 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
         onSkipTesting={canSkipTesting ? () => onRequestCommitsTab?.() : null}
         canSkipTesting={canSkipTesting}
         showCssOnlySkipHint={isCssOnlyStaged}
+        readyForMerge={readyForMerge}
+        onMerge={readyForMerge && handleMergeBranch
+          ? () => {
+            void Promise.resolve(handleMergeBranch(selectedBranchName)).catch(() => null);
+          }
+          : null}
+        canMerge={readyForMerge && !isStoppingProject && mergeInFlight !== selectedBranchName}
+        isMerging={mergeInFlight === selectedBranchName}
+        committedFiles={committedFiles}
+        isLoadingCommittedFiles={isLoadingCommittedFiles}
+        committedFilesBranchName={lastCommittedFilesBranchRef.current}
       />
     </div>
   ), [
@@ -250,7 +325,13 @@ const BranchTabRoot = ({ project, onRequestFileOpen, onRequestTestsTab, onReques
     isCssOnlyStaged,
     isMainSelected,
     isCurrentBranch,
-    onRequestCommitsTab
+    onRequestCommitsTab,
+    readyForMerge,
+    handleMergeBranch,
+    mergeInFlight,
+    committedFiles,
+    isLoadingCommittedFiles,
+    isStoppingProject
   ]);
 
   return (

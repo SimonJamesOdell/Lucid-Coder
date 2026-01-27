@@ -2,7 +2,6 @@ import React from 'react';
 import { formatTimestamp } from './formatters';
 
 const CommitListPanel = ({
-  projectName,
   projectId,
   commits,
   branchReadyToCommit,
@@ -14,7 +13,6 @@ const CommitListPanel = ({
   squashInFlight,
   squashError,
   selectedCommitSha,
-  onRefresh,
   onSelectPending,
   onSelectCommit,
   onToggleSquashSelection,
@@ -22,22 +20,6 @@ const CommitListPanel = ({
   onClearSquash
 }) => (
   <aside className="commits-list-panel">
-    <div className="panel-header">
-      <div>
-        <p className="panel-eyebrow">Commit history</p>
-        <h4>{projectName || 'Active project'}</h4>
-      </div>
-      <button
-        type="button"
-        className="commits-action ghost"
-        onClick={onRefresh}
-        disabled={!projectId}
-        data-testid="commits-refresh"
-      >
-        Refresh
-      </button>
-    </div>
-
     {Boolean(squashSelection.length) && (
       <div className="commits-status-message" role="status" data-testid="commit-squash-bar">
         <span>{squashSelection.length} selected</span>

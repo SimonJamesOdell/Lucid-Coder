@@ -10,7 +10,8 @@ LucidCoder follows Semantic Versioning.
 
 
 
-0.3.1
+
+0.3.2
 ## Policy
 
 - MAJOR: incompatible API or workflow changes.

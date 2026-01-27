@@ -11,7 +11,8 @@ import {
   deleteBranchByName,
   commitBranchChanges,
   getBranchCommitContext,
-  describeBranchCssOnlyStatus
+  describeBranchCssOnlyStatus,
+  getBranchChangedFiles
 } from '../services/branchWorkflow.js';
 import { requireDestructiveConfirmation } from './projects/internals.js';
 
@@ -96,6 +97,17 @@ router.get('/:branchName/css-only', async (req, res) => {
     res.json({ success: true, ...status });
   } catch (error) {
     respondWithError(res, error, 'Failed to evaluate branch changes');
+  }
+});
+
+router.get('/:branchName/changed-files', async (req, res) => {
+  try {
+    const projectId = parseProjectId(req.params.projectId);
+    const branchName = decodeURIComponent(req.params.branchName);
+    const result = await getBranchChangedFiles(projectId, branchName);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    respondWithError(res, error, 'Failed to fetch committed files');
   }
 });
 

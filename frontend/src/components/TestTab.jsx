@@ -259,14 +259,72 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       const lastRunSource = typeof testRunIntent?.source === 'string' ? testRunIntent.source : 'unknown';
       const shouldReturnToCommits = Boolean(testRunIntent?.returnToCommits);
 
+      const stagedCount = stagedFiles.length;
+      const hasCommitContext = Boolean(activeBranchName && activeBranchName !== 'main' && stagedCount > 0);
+
       // Only offer commit / prove-branch flows for automation-driven runs.
       // Manual test runs should never auto-suggest or attempt commits.
       if (lastRunSource !== 'automation') {
         resetCommitResumeState();
+        setResultModalVariant('default');
+        setResultModalTitle('Tests passed');
+
+        if (!hasCommitContext) {
+          setResultModalMessage('Frontend and backend tests both passed.');
+          setResultModalConfirmText(null);
+          setResultModalConfirmAction(null);
+          setResultModalProcessing(false);
+          setResultModalProcessingMessage('');
+          setIsResultModalOpen(true);
+          return;
+        }
+
+        setResultModalMessage('Frontend and backend tests both passed. Ready to continue to commits?');
+        setResultModalConfirmText('Continue to commits');
+        setResultModalConfirmAction(() => () => {
+          setIsResultModalOpen(false);
+          if (
+            projectId
+            && typeof syncBranchOverview === 'function'
+            && activeBranchName
+            && activeBranchName !== 'main'
+          ) {
+            const testsRequired = typeof activeWorkingBranch?.testsRequired === 'boolean'
+              ? activeWorkingBranch.testsRequired
+              : true;
+            const mergeBlockedReason = typeof activeWorkingBranch?.mergeBlockedReason === 'string'
+              ? activeWorkingBranch.mergeBlockedReason
+              : null;
+            const lastTestSummary = activeWorkingBranch?.lastTestSummary && typeof activeWorkingBranch.lastTestSummary === 'object'
+              ? activeWorkingBranch.lastTestSummary
+              : null;
+            const status = typeof activeWorkingBranch?.status === 'string'
+              ? activeWorkingBranch.status
+              : 'active';
+
+            syncBranchOverview(projectId, {
+              current: activeBranchName,
+              workingBranches: [
+                {
+                  name: activeBranchName,
+                  status,
+                  stagedFiles,
+                  lastTestStatus: 'passed',
+                  testsRequired,
+                  mergeBlockedReason,
+                  lastTestCompletedAt: new Date().toISOString(),
+                  lastTestSummary
+                }
+              ]
+            });
+          }
+          onRequestCommitsTab?.();
+        });
+        setResultModalProcessing(false);
+        setResultModalProcessingMessage('');
+        setIsResultModalOpen(true);
         return;
       }
-
-      const stagedCount = stagedFiles.length;
 
       if (!activeBranchName || activeBranchName === 'main') {
         resetCommitResumeState();

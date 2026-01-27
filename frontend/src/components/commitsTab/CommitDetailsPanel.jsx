@@ -18,6 +18,7 @@ const CommitDetailsPanel = ({
   mergeInFlight,
   commitInFlight,
   shouldShowTestingCta,
+  testsStatus,
   onStartTesting,
   hideCommitDetails,
   hasStagedFiles,
@@ -51,6 +52,13 @@ const CommitDetailsPanel = ({
     commitInFlight
   );
 
+  const shouldShowMergeBlockedBanner = Boolean(
+    !mergeActionError
+    && shouldShowBranchGate
+    && mergeBlockedBannerMessage
+    && (!gateStatus?.merge || !String(gateStatus.merge).includes(mergeBlockedBannerMessage))
+  );
+
   return (
     <section className="commits-details-panel" data-testid="commit-details-panel">
     {statusMessage && (
@@ -62,13 +70,15 @@ const CommitDetailsPanel = ({
     {shouldShowTestingCta && (
       <div className="commits-status-message with-action" role="status" data-testid="commit-tests-required">
         <div>
-          Testing is not complete. Run the test suites to continue to commit.
+          {testsStatus === 'pending'
+            ? 'Automated testing is currently running. Please wait…'
+            : 'This branch needs a successful, recorded test run before it can be merged. Start testing to continue.'}
         </div>
         <button
           type="button"
           className="commits-action"
           onClick={onStartTesting}
-          disabled={!onStartTesting}
+          disabled={!onStartTesting || testsStatus === 'pending'}
           data-testid="commit-start-tests"
         >
           Start testing
@@ -92,7 +102,7 @@ const CommitDetailsPanel = ({
       </div>
     )}
 
-    {!mergeActionError && shouldShowBranchGate && mergeBlockedBannerMessage && (
+    {shouldShowMergeBlockedBanner && (
       <div className="commits-status-message" role="status" data-testid="commit-merge-blocked">
         Merge blocked: {mergeBlockedBannerMessage}
       </div>

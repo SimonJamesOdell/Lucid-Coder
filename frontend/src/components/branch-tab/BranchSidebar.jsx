@@ -13,12 +13,6 @@ const BranchSidebar = ({
   onSelectBranch
 }) => (
   <aside className="branch-list-panel">
-    <div className="panel-header">
-      <div>
-        <p className="panel-eyebrow">Branches</p>
-      </div>
-      <span className="panel-count">{branchSummaries.length} total</span>
-    </div>
     <div className="branch-filter-bar" data-testid="branch-filter-bar">
       <button
         type="button"

@@ -22,7 +22,9 @@ Environment variables are loaded from [backend/.env](backend/.env).
 
 Common variables:
 - `PORT` — server port (default 5000)
-- `DATABASE_PATH` — SQLite path (defaults to backend/lucidcoder.db)
+- SQLite default location: per-user application data directory (platform-specific). The backend logs the resolved path on startup.
+- `DATABASE_PATH` — SQLite file path override (absolute or relative to the process working directory)
+- `LUCIDCODER_DB_DIR` — SQLite base directory override (absolute or relative to the process working directory)
 - `ENABLE_SOCKET_IO` — set to false to disable Socket.IO
 - LLM settings (provider, API URL, model, API key) used by the LLM client
 
