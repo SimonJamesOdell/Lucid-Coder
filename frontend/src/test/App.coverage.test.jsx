@@ -39,7 +39,8 @@ describe('App coverage branches', () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
       }
@@ -85,7 +86,8 @@ describe('App coverage branches', () => {
   })
 
   test('shows backend overlay when /api/health responds non-OK', async () => {
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false }) })
       }
@@ -104,7 +106,8 @@ describe('App coverage branches', () => {
   })
 
   test('shows backend overlay when /api/health returns invalid JSON', async () => {
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: true, status: 200, json: async () => 'not-an-object' })
       }
@@ -122,7 +125,8 @@ describe('App coverage branches', () => {
 
   test('shows backend overlay when the backend check times out (AbortError)', async () => {
     const abortError = Object.assign(new Error('aborted'), { name: 'AbortError' })
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.reject(abortError)
       }
@@ -139,7 +143,8 @@ describe('App coverage branches', () => {
   })
 
   test('shows backend overlay with fallback copy when fetch rejects without an error message', async () => {
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.reject({})
       }
@@ -260,11 +265,12 @@ describe('App coverage branches', () => {
       expect(screen.getByTestId('nav')).toHaveAttribute('data-version', VERSION)
     })
 
-    expect(global.fetch).toHaveBeenCalledWith('/api/version', expect.any(Object))
+    expect(fetch).toHaveBeenCalledWith('/api/version', expect.any(Object))
   })
 
   test('falls back to versionFile when /api/version omits version', async () => {
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
       }
@@ -282,7 +288,8 @@ describe('App coverage branches', () => {
   })
 
   test('keeps navigation version empty when /api/version is non-OK', async () => {
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
       }
@@ -300,7 +307,8 @@ describe('App coverage branches', () => {
   })
 
   test('keeps navigation version empty when /api/version returns invalid JSON', async () => {
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
       }
@@ -318,7 +326,8 @@ describe('App coverage branches', () => {
   })
 
   test('keeps navigation version empty when /api/version fetch rejects', async () => {
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
       }
@@ -362,7 +371,8 @@ describe('App coverage branches', () => {
       Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     ]
 
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return healthResponses.shift()
       }
@@ -382,7 +392,7 @@ describe('App coverage branches', () => {
     await vi.advanceTimersByTimeAsync(5000)
     await Promise.resolve()
 
-    const healthCalls = global.fetch.mock.calls.filter(([url]) => url === '/api/health')
+    const healthCalls = fetch.mock.calls.filter(([url]) => url === '/api/health')
     expect(healthCalls.length).toBe(2)
 
     await vi.advanceTimersByTimeAsync(0)
@@ -401,7 +411,8 @@ describe('App coverage branches', () => {
       resolveHealth = resolve
     })
 
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset()
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return pendingHealth
       }
@@ -415,7 +426,7 @@ describe('App coverage branches', () => {
 
     await vi.advanceTimersByTimeAsync(5000)
 
-    const healthCalls = global.fetch.mock.calls.filter(([url]) => url === '/api/health')
+    const healthCalls = fetch.mock.calls.filter(([url]) => url === '/api/health')
     expect(healthCalls.length).toBe(1)
 
     resolveHealth({ ok: false, status: 503, json: async () => ({ ok: false }) })

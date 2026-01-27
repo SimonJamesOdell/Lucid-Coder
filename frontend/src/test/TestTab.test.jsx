@@ -336,8 +336,178 @@ describe('TestTab', () => {
     const view = render(<TestTab project={baseProject} />);
     view.rerender(<TestTab project={baseProject} />);
 
-    await act(async () => {});
-    expect(screen.queryByTestId('modal-content')).toBeNull();
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText('Tests passed')).toBeInTheDocument();
+    expect(screen.queryByText('Continue to commit')).toBeNull();
+    expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Continue to commits');
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('shows Tests passed modal without commit CTA when lastRunSource is not automation and no commit context exists', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/manual-pass-no-staged',
+        stagedFiles: []
+      }
+    };
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'manual', updatedAt: createdAt },
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-manual', type: 'frontend:test', status: 'running', logs: [], createdAt },
+          { id: 'back-manual', type: 'backend:test', status: 'running', logs: [], createdAt }
+        ])
+      }))
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'manual', updatedAt: completedAt },
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-manual', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+          { id: 'back-manual', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+        ])
+      }));
+
+    const view = render(<TestTab project={baseProject} />);
+    view.rerender(<TestTab project={baseProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText('Tests passed')).toBeInTheDocument();
+    expect(screen.getByText('Frontend and backend tests both passed.')).toBeInTheDocument();
+    expect(screen.queryByTestId('modal-confirm')).toBeNull();
+  });
+
+  test('offers Continue to commits for non-automation passing run with commit context and syncs overview on confirm', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+    const onRequestCommitsTab = vi.fn();
+
+    const stagedFiles = [{ path: 'src/App.jsx' }];
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/manual-pass-staged',
+        stagedFiles,
+        testsRequired: false,
+        mergeBlockedReason: 'nope',
+        lastTestSummary: { message: 'ok' },
+        status: 'active'
+      }
+    };
+
+    const contextFirst = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: createdAt },
+      workingBranches,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-manual2', type: 'frontend:test', status: 'running', logs: [], createdAt },
+        { id: 'back-manual2', type: 'backend:test', status: 'running', logs: [], createdAt }
+      ])
+    });
+
+    const contextSecond = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: completedAt },
+      workingBranches,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-manual2', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+        { id: 'back-manual2', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+      ])
+    });
+
+    useAppState
+      .mockReturnValueOnce(contextFirst)
+      .mockReturnValueOnce(contextSecond);
+
+    const view = render(<TestTab project={baseProject} onRequestCommitsTab={onRequestCommitsTab} />);
+    view.rerender(<TestTab project={baseProject} onRequestCommitsTab={onRequestCommitsTab} />);
+
+    await screen.findByTestId('modal-content');
+    expect(screen.getByText('Tests passed')).toBeInTheDocument();
+    expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Continue to commits');
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      expect(contextSecond.syncBranchOverview).toHaveBeenCalledWith(baseProject.id, {
+        current: 'feature/manual-pass-staged',
+        workingBranches: [
+          expect.objectContaining({
+            name: 'feature/manual-pass-staged',
+            lastTestStatus: 'passed'
+          })
+        ]
+      });
+      expect(onRequestCommitsTab).toHaveBeenCalled();
+    });
+  });
+
+  test('normalizes working branch fields when continuing to commits after non-automation pass', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+    const onRequestCommitsTab = vi.fn();
+
+    const stagedFiles = [{ path: 'src/App.jsx' }];
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/manual-normalize',
+        stagedFiles,
+        testsRequired: 'nope',
+        mergeBlockedReason: 123,
+        lastTestSummary: 'nope',
+        status: 42
+      }
+    };
+
+    const contextFirst = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: createdAt },
+      workingBranches,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-norm', type: 'frontend:test', status: 'running', logs: [], createdAt },
+        { id: 'back-norm', type: 'backend:test', status: 'running', logs: [], createdAt }
+      ])
+    });
+
+    const contextSecond = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: completedAt },
+      workingBranches,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-norm', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+        { id: 'back-norm', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+      ])
+    });
+
+    useAppState
+      .mockReturnValueOnce(contextFirst)
+      .mockReturnValueOnce(contextSecond);
+
+    const view = render(<TestTab project={baseProject} onRequestCommitsTab={onRequestCommitsTab} />);
+    view.rerender(<TestTab project={baseProject} onRequestCommitsTab={onRequestCommitsTab} />);
+
+    await screen.findByTestId('modal-content');
+    expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Continue to commits');
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      expect(contextSecond.syncBranchOverview).toHaveBeenCalledWith(baseProject.id, {
+        current: 'feature/manual-normalize',
+        workingBranches: [
+          expect.objectContaining({
+            name: 'feature/manual-normalize',
+            lastTestStatus: 'passed',
+            testsRequired: true,
+            mergeBlockedReason: null,
+            lastTestSummary: null,
+            status: 'active'
+          })
+        ]
+      });
+      expect(onRequestCommitsTab).toHaveBeenCalled();
+    });
   });
 
   test('commits immediately when the initial commit attempt succeeds (no proof required)', async () => {
@@ -1469,7 +1639,7 @@ describe('TestTab', () => {
       .map((call) => call[0])
       .find((evt) => evt?.type === 'lucidcoder:autofix-tests');
 
-    expect(autofixEvent).toBeTruthy();
+    expect(autofixEvent).toEqual(expect.objectContaining({ type: 'lucidcoder:autofix-tests' }));
     expect(autofixEvent.detail.origin).toBe('automation');
     expect(autofixEvent.detail.prompt).toBe('Fix failing tests');
     expect(autofixEvent.detail.childPrompts).toEqual(
@@ -1478,10 +1648,11 @@ describe('TestTab', () => {
         'Fix failing backend tests'
       ])
     );
-    expect(autofixEvent.detail.failureContext).toBeTruthy();
-    expect(Array.isArray(autofixEvent.detail.failureContext.jobs)).toBe(true);
+    expect(autofixEvent.detail.failureContext).toEqual(
+      expect.objectContaining({ jobs: expect.any(Array) })
+    );
     const frontendSummary = autofixEvent.detail.failureContext.jobs.find((job) => job.label === 'Frontend tests');
-    expect(frontendSummary).toBeTruthy();
+    expect(frontendSummary).not.toBeUndefined();
     expect(frontendSummary.testFailures).toEqual(['src/test/Foo.test.jsx > Foo > does something']);
     expect(frontendSummary.recentLogs.some((line) => line.includes('FAIL  src/test/Foo.test.jsx'))).toBe(true);
   });
@@ -1659,7 +1830,11 @@ describe('TestTab', () => {
       const payload = registerTestActions.mock.calls
         .map(([value]) => value)
         .find((value) => value && typeof value.runAllTests === 'function');
-      expect(payload).toBeTruthy();
+      expect(payload).toEqual(
+        expect.objectContaining({
+          runAllTests: expect.any(Function)
+        })
+      );
       runAllTests = payload.runAllTests;
     });
 
@@ -1696,7 +1871,7 @@ describe('TestTab', () => {
         .map(([value]) => value)
         .find((value) => value && typeof value.runAllTests === 'function');
       runAllTests = payload?.runAllTests;
-      expect(runAllTests).toBeTruthy();
+      expect(typeof runAllTests).toBe('function');
     });
 
     await act(async () => {
@@ -1722,7 +1897,7 @@ describe('TestTab', () => {
         .map(([value]) => value)
         .find((value) => value && typeof value.runAllTests === 'function');
       runAllTests = payload?.runAllTests;
-      expect(runAllTests).toBeTruthy();
+      expect(typeof runAllTests).toBe('function');
     });
 
     await act(async () => {
@@ -1749,7 +1924,7 @@ describe('TestTab', () => {
         .map(([value]) => value)
         .find((value) => value && typeof value.runAllTests === 'function');
       runAllTests = payload?.runAllTests;
-      expect(runAllTests).toBeTruthy();
+      expect(typeof runAllTests).toBe('function');
     });
 
     await act(async () => {
@@ -2453,10 +2628,10 @@ describe('TestTab', () => {
     const { rerender } = render(<TestTab project={baseProject} />);
     rerender(<TestTab project={baseProject} />);
 
-    await waitFor(() => {
-      expect(screen.queryByTestId('modal-content')).toBeNull();
-      expect(screen.queryByText('Continue to commit')).toBeNull();
-    });
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText('Tests passed')).toBeInTheDocument();
+    expect(screen.queryByText('Continue to commit')).toBeNull();
+    expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Continue to commits');
     expect(axios.post).not.toHaveBeenCalled();
   });
 
@@ -3568,7 +3743,7 @@ describe('TestTab', () => {
           .map(([value]) => value)
           .find((value) => value && typeof value.runAllTests === 'function');
         runAllTests = payload?.runAllTests;
-        expect(runAllTests).toBeTruthy();
+        expect(typeof runAllTests).toBe('function');
       });
 
       await act(async () => {
@@ -3625,7 +3800,7 @@ describe('TestTab', () => {
           .map(([value]) => value)
           .find((value) => value && typeof value.runAllTests === 'function');
         runAllTests = payload?.runAllTests;
-        expect(runAllTests).toBeTruthy();
+        expect(typeof runAllTests).toBe('function');
       });
 
       await act(async () => {

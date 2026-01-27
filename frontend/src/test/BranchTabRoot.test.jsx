@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, act, screen, waitFor } from '@testing-library/react';
 import BranchTabRoot from '../components/branch-tab/BranchTabRoot';
+import axios from 'axios';
 
 const mockUseBranchTabState = vi.fn();
 const mockUseCommitComposer = vi.fn();
@@ -96,6 +97,7 @@ const buildBranchState = (overrides = {}) => ({
   testInFlight: null,
   mergeInFlight: null,
   testMergeInFlight: null,
+  skipMergeInFlight: null,
   deleteInFlight: null,
   commitInFlight: null,
   handleRunTests: vi.fn(),
@@ -124,10 +126,53 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockDeriveDisplayStatus.mockReturnValue('active');
   mockCanBranchMerge.mockReturnValue(true);
+  axios.get.mockResolvedValue({ data: { files: [] } });
   setupMocks();
 });
 
 describe('BranchTabRoot targeted behavior', () => {
+  test('runs committed files effect on mount', async () => {
+    axios.get.mockResolvedValueOnce({ data: { files: [] } });
+
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'feature/effect-mount',
+        selectedSummary: { name: 'feature/effect-mount', isCurrent: false, stagedFileCount: 1 },
+        selectedWorkingBranch: { name: 'feature/effect-mount', stagedFiles: [] },
+        selectedFiles: [],
+        hasSelectedFiles: false
+      }
+    });
+
+    render(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+
+    await waitFor(() => {
+      expect(axios.get).toHaveBeenCalled();
+    });
+  });
+
+  test('committed files effect falls back when selectedBranchName is falsy', async () => {
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: '',
+        selectedSummary: null,
+        selectedWorkingBranch: null,
+        selectedFiles: [],
+        hasSelectedFiles: false
+      }
+    });
+
+    render(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+
+    await waitFor(() => {
+      const detailsProps = branchDetailsMock.mock.calls.at(-1)[0];
+      expect(detailsProps.committedFiles).toEqual([]);
+      expect(detailsProps.committedFilesBranchName).toBe('');
+    });
+
+    expect(axios.get).not.toHaveBeenCalled();
+  });
+
   test('begin testing does not sync overview when project id is missing', async () => {
     const overview = { branches: [{ name: 'main' }], current: 'main' };
     const handleRunTests = vi.fn().mockResolvedValue({ overview });
@@ -224,6 +269,197 @@ describe('BranchTabRoot targeted behavior', () => {
 
     const latestModalProps = newBranchModalMock.mock.calls.at(-1)[0];
     expect(latestModalProps.errorMessage).toBe('Failed to create branch');
+  });
+
+  test('clears committed files when prerequisites are not met', async () => {
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'main',
+        selectedSummary: { name: 'main', isCurrent: true },
+        selectedWorkingBranch: null,
+        selectedFiles: [],
+        hasSelectedFiles: false
+      }
+    });
+
+    render(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+
+    await waitFor(() => {
+      const detailsProps = branchDetailsMock.mock.calls.at(-1)[0];
+      expect(detailsProps.committedFiles).toEqual([]);
+      expect(detailsProps.isLoadingCommittedFiles).toBe(false);
+      expect(detailsProps.committedFilesBranchName).toBe('');
+    });
+  });
+
+  test('fetches committed files once and serves subsequent visits from cache', async () => {
+    axios.get.mockResolvedValueOnce({ data: { files: ['src/A.jsx', 'src/B.jsx'] } });
+
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'feature/cache-me',
+        selectedSummary: { name: 'feature/cache-me', isCurrent: false, stagedFileCount: 1 },
+        selectedWorkingBranch: { name: 'feature/cache-me', stagedFiles: [] },
+        selectedFiles: [],
+        hasSelectedFiles: false
+      }
+    });
+
+    const view = render(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+
+    await waitFor(() => {
+      const detailsProps = branchDetailsMock.mock.calls.at(-1)[0];
+      expect(detailsProps.committedFiles).toEqual(['src/A.jsx', 'src/B.jsx']);
+      expect(detailsProps.isLoadingCommittedFiles).toBe(false);
+      expect(detailsProps.committedFilesBranchName).toBe('feature/cache-me');
+    });
+
+    // Move away to another branch, then back to ensure the cache hit path runs.
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'feature/other',
+        selectedSummary: { name: 'feature/other', isCurrent: false, stagedFileCount: 1 },
+        selectedWorkingBranch: { name: 'feature/other', stagedFiles: [] },
+        // Avoid triggering a separate committed-files fetch for the intermediate branch.
+        selectedFiles: [{ path: 'README.md' }],
+        hasSelectedFiles: true
+      }
+    });
+
+    view.rerender(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'feature/cache-me',
+        selectedSummary: { name: 'feature/cache-me', isCurrent: false, stagedFileCount: 1 },
+        selectedWorkingBranch: { name: 'feature/cache-me', stagedFiles: [] },
+        selectedFiles: [],
+        hasSelectedFiles: false
+      }
+    });
+
+    view.rerender(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+
+    await waitFor(() => {
+      const detailsProps = branchDetailsMock.mock.calls.at(-1)[0];
+      expect(detailsProps.committedFiles).toEqual(['src/A.jsx', 'src/B.jsx']);
+      expect(detailsProps.committedFilesBranchName).toBe('feature/cache-me');
+    });
+
+    expect(axios.get).toHaveBeenCalledTimes(1);
+  });
+
+  test('handles committed files fetch errors by caching and surfacing empty files', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => null);
+    axios.get.mockRejectedValueOnce(new Error('boom'));
+
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'feature/fail-fetch',
+        selectedSummary: { name: 'feature/fail-fetch', isCurrent: false, stagedFileCount: 1 },
+        selectedWorkingBranch: { name: 'feature/fail-fetch', stagedFiles: [] },
+        selectedFiles: [],
+        hasSelectedFiles: false
+      }
+    });
+
+    render(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+
+    await waitFor(() => {
+      const detailsProps = branchDetailsMock.mock.calls.at(-1)[0];
+      expect(detailsProps.committedFiles).toEqual([]);
+      expect(detailsProps.isLoadingCommittedFiles).toBe(false);
+      expect(detailsProps.committedFilesBranchName).toBe('feature/fail-fetch');
+    });
+
+    warnSpy.mockRestore();
+  });
+
+  test('ignores committed files fetch resolution after unmount (covers cancelled guards)', async () => {
+    const deferred = {};
+    deferred.promise = new Promise((resolve, reject) => {
+      deferred.resolve = resolve;
+      deferred.reject = reject;
+    });
+
+    axios.get.mockReturnValueOnce(deferred.promise);
+
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'feature/cancelled',
+        selectedSummary: { name: 'feature/cancelled', isCurrent: false, stagedFileCount: 1 },
+        selectedWorkingBranch: { name: 'feature/cancelled', stagedFiles: [] },
+        selectedFiles: [],
+        hasSelectedFiles: false
+      }
+    });
+
+    const view = render(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+    view.unmount();
+
+    await act(async () => {
+      deferred.resolve({ data: { files: ['src/ignored.jsx'] } });
+      await Promise.resolve();
+    });
+  });
+
+  test('does not warn when committed files fetch rejects after unmount (covers cancelled catch guard)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => null);
+    const deferred = {};
+    deferred.promise = new Promise((resolve, reject) => {
+      deferred.resolve = resolve;
+      deferred.reject = reject;
+    });
+
+    axios.get.mockReturnValueOnce(deferred.promise);
+
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'feature/cancelled-reject',
+        selectedSummary: { name: 'feature/cancelled-reject', isCurrent: false, stagedFileCount: 1 },
+        selectedWorkingBranch: { name: 'feature/cancelled-reject', stagedFiles: [] },
+        selectedFiles: [],
+        hasSelectedFiles: false
+      }
+    });
+
+    const view = render(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+    view.unmount();
+
+    await act(async () => {
+      deferred.reject(new Error('nope'));
+      await Promise.resolve();
+    });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test('wraps onMerge callback and swallows merge errors', async () => {
+    const handleMergeBranch = vi.fn().mockRejectedValue(new Error('merge failed'));
+
+    setupMocks({
+      branchOverrides: {
+        selectedBranchName: 'feature/merge-wrap',
+        selectedSummary: { name: 'feature/merge-wrap', isCurrent: false, stagedFileCount: 1 },
+        selectedWorkingBranch: { name: 'feature/merge-wrap', stagedFiles: [] },
+        selectedFiles: [],
+        hasSelectedFiles: false,
+        handleMergeBranch
+      }
+    });
+
+    render(<BranchTabRoot project={{ id: 'proj-1', name: 'Demo' }} />);
+    const detailsProps = branchDetailsMock.mock.calls.at(-1)[0];
+
+    expect(typeof detailsProps.onMerge).toBe('function');
+
+    await act(async () => {
+      detailsProps.onMerge();
+      await Promise.resolve();
+    });
+
+    expect(handleMergeBranch).toHaveBeenCalledWith('feature/merge-wrap');
   });
 
   test('renders revert checkout controls when selected branch is merged', () => {

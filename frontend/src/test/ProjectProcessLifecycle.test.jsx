@@ -52,7 +52,8 @@ const defaultFetchImpl = async (url, options = {}) => {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  global.fetch = vi.fn(defaultFetchImpl);
+  fetch.mockReset();
+  fetch.mockImplementation(defaultFetchImpl);
   localStorage.clear();
 });
 
@@ -69,7 +70,7 @@ describe('Project Process Lifecycle', () => {
       });
 
       const startCall = global.fetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/start'));
-      expect(startCall).toBeFalsy();
+      expect(startCall).toBeUndefined();
       expect(result.current.currentProject).toBe(null);
     });
 
@@ -91,7 +92,7 @@ describe('Project Process Lifecycle', () => {
       });
 
       const processesCall = global.fetch.mock.calls.find(([url]) => url === `/api/projects/${mockProject.id}/processes`);
-      expect(processesCall).toBeTruthy();
+      expect(processesCall?.[0]).toBe(`/api/projects/${mockProject.id}/processes`);
       expect(result.current.projectProcesses?.projectId).toBe(mockProject.id);
     });
 
@@ -147,7 +148,7 @@ describe('Project Process Lifecycle', () => {
       });
 
       const stopCall = global.fetch.mock.calls.find(([url]) => url === `/api/projects/${mockProject.id}/stop`);
-      expect(stopCall).toBeTruthy();
+      expect(stopCall?.[0]).toBe(`/api/projects/${mockProject.id}/stop`);
       expect(stopCall?.[1]).toMatchObject({ method: 'POST' });
     });
   });
@@ -164,7 +165,7 @@ describe('Project Process Lifecycle', () => {
       expect(createCall?.[1]).toMatchObject({ method: 'POST' });
 
       const startCall = global.fetch.mock.calls.find(([url]) => url === `/api/projects/${mockProject.id}/start`);
-      expect(startCall).toBeTruthy();
+      expect(startCall?.[0]).toBe(`/api/projects/${mockProject.id}/start`);
       expect(startCall?.[1]).toMatchObject({ method: 'POST' });
     });
   });

@@ -11,12 +11,6 @@ vi.mock('../context/AppStateContext', () => ({
   useAppState: () => useAppStateMock()
 }));
 
-vi.mock('axios', () => ({
-  default: {
-    post: vi.fn()
-  }
-}));
-
 const mockAxios = axios;
 
 const setAppState = (overrides = {}) => {

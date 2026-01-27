@@ -13,7 +13,9 @@ vi.mock('../services/branchWorkflow.js', () => ({
   checkoutBranch: vi.fn(),
   deleteBranchByName: vi.fn(),
   commitBranchChanges: vi.fn(),
-  getBranchCommitContext: vi.fn()
+  getBranchCommitContext: vi.fn(),
+  describeBranchCssOnlyStatus: vi.fn(),
+  getBranchChangedFiles: vi.fn()
 }));
 
 import branchRoutes from '../routes/branches.js';
@@ -24,6 +26,7 @@ import {
   clearStagedChanges,
   commitBranchChanges,
   getBranchCommitContext,
+  getBranchChangedFiles,
   runTestsForBranch,
   recordJobProofForBranch,
   mergeBranch,
@@ -114,6 +117,34 @@ describe('branch route error handling', () => {
 
     expect(response.status).toBe(500);
     expect(response.body.error).toBe('Failed to describe staged changes');
+  });
+
+  test('GET /branches/:branch/changed-files surfaces runner errors', async () => {
+    getBranchChangedFiles.mockRejectedValueOnce(new Error('changed-files crashed'));
+
+    const response = await request(app)
+      .get('/api/projects/1/branches/feature-broken/changed-files');
+
+    expect(response.status).toBe(500);
+    expect(response.body.error).toBe('Failed to fetch committed files');
+  });
+
+  test('GET /branches/:branch/changed-files returns files when successful', async () => {
+    getBranchChangedFiles.mockResolvedValueOnce({
+      branch: 'feature/one',
+      files: ['src/app.jsx']
+    });
+
+    const response = await request(app)
+      .get('/api/projects/1/branches/feature%2Fone/changed-files');
+
+    expect(response.status).toBe(200);
+    expect(getBranchChangedFiles).toHaveBeenCalledWith(1, 'feature/one');
+    expect(response.body).toEqual({
+      success: true,
+      branch: 'feature/one',
+      files: ['src/app.jsx']
+    });
   });
 
   test('POST /branches/:branch/tests surfaces runner errors', async () => {

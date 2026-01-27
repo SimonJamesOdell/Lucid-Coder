@@ -90,7 +90,8 @@ describe('AppStateContext jobs socket integration', () => {
     useAppState = module.useAppState;
     __appStateTestHelpers = module.__appStateTestHelpers;
 
-    global.fetch = vi.fn((url, options) => {
+    fetch.mockReset();
+    fetch.mockImplementation((url, options) => {
       if (url === '/api/llm/status') {
         return Promise.resolve(
           createResponse(true, {
@@ -383,7 +384,8 @@ describe('AppStateContext jobs socket integration', () => {
       resolveJobsList = resolve;
     });
 
-    global.fetch = vi.fn((url, options) => {
+    fetch.mockReset();
+    fetch.mockImplementation((url, options) => {
       if (url === '/api/projects') {
         return Promise.resolve(createResponse(true, { success: true, projects: [] }));
       }

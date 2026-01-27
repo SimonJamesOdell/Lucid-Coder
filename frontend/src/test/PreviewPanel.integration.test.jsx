@@ -5,13 +5,6 @@ import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import PreviewPanel from '../components/PreviewPanel';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
-
 let appStateGetter = () => {
   throw new Error('useAppState mock not configured');
 };

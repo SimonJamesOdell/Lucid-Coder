@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import axios from 'axios'
 import App from '../App'
@@ -640,11 +640,23 @@ describe('App Component Integration', () => {
     test('handles slow API response', async () => {
       projectsDelayMs = 100
 
-      renderApp()
+      vi.useFakeTimers()
 
-      await waitFor(() => {
-        expect(screen.getByText('Select Project')).toBeInTheDocument()
-      })
+      try {
+        renderApp()
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100)
+        })
+
+        vi.useRealTimers()
+
+        await waitFor(() => {
+          expect(screen.getByText('Select Project')).toBeInTheDocument()
+        })
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })

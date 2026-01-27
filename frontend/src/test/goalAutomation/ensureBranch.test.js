@@ -3,13 +3,6 @@ import { ensureBranch } from '../../services/goalAutomation/ensureBranch.js';
 import axios from 'axios';
 import { automationLog, requestBranchNameFromLLM, isBranchNameRelevantToPrompt } from '../../services/goalAutomation/automationUtils.js';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
-
 vi.mock('../../services/goalAutomation/automationUtils.js', () => ({
   automationLog: vi.fn(),
   requestBranchNameFromLLM: vi.fn(),

@@ -161,13 +161,6 @@ vi.mock('socket.io-client', () => ({
   })
 }));
 
-vi.mock('axios', () => ({
-  default: {
-    post: vi.fn(),
-    get: vi.fn()
-  }
-}));
-
 const mockAxios = axios;
 
 const renderComponent = () => {

@@ -191,6 +191,56 @@ describe('PreviewPanel', () => {
     expect(startAgentUiBridge).not.toHaveBeenCalled();
   });
 
+  test('supports registerCommitsActions null payload and cleanup', async () => {
+    const user = userEvent.setup();
+
+    useAppState.mockReturnValue(
+      createAppState({
+        currentProject: { id: 505, name: 'Commits Actions' }
+      })
+    );
+
+    render(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(typeof PreviewPanel.__testHooks?.setActiveTab).toBe('function');
+    });
+
+    await act(async () => {
+      PreviewPanel.__testHooks.setActiveTab('commits');
+      await flushPromises();
+    });
+
+    await waitFor(() => {
+      expect(commitsTabPropsRef.current).not.toBeNull();
+      expect(typeof commitsTabPropsRef.current.registerCommitsActions).toBe('function');
+    });
+
+    const refreshCommits = vi.fn();
+
+    let cleanup;
+    await act(async () => {
+      cleanup = commitsTabPropsRef.current.registerCommitsActions({
+        refreshCommits,
+        isDisabled: false
+      });
+      await flushPromises();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('commits-refresh')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('commits-refresh'));
+
+    expect(refreshCommits).toHaveBeenCalledTimes(1);
+
+    expect(typeof cleanup).toBe('function');
+
+    commitsTabPropsRef.current.registerCommitsActions(null);
+    cleanup();
+  });
+
   test('agent UI bridge can provide snapshots and trigger preview reload', async () => {
     const reportBackendConnectivity = vi.fn();
 

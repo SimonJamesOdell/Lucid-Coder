@@ -10,15 +10,6 @@ vi.mock('../context/AppStateContext', () => ({
   useAppState: vi.fn()
 }));
 
-vi.mock('axios', () => {
-  return {
-    default: {
-      get: vi.fn(),
-      delete: vi.fn()
-    }
-  };
-});
-
 vi.mock('../components/Modal', () => ({
   default: ({ isOpen, onClose, onConfirm, title, message, confirmText = 'Confirm', cancelText = 'Cancel' }) =>
     isOpen ? (

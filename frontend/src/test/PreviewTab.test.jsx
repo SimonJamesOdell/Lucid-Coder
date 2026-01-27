@@ -201,7 +201,7 @@ describe('PreviewTab', () => {
   test('exposes reload and restart handlers through ref', () => {
     const { previewRef } = renderPreviewTab();
 
-    expect(previewRef.current).toBeDefined();
+    expect(previewRef.current).not.toBeNull();
     expect(typeof previewRef.current.reloadPreview).toBe('function');
     expect(typeof previewRef.current.restartProject).toBe('function');
   });
@@ -735,7 +735,8 @@ describe('PreviewTab', () => {
 
     expect(dispatchSpy).toHaveBeenCalled();
     const call = dispatchSpy.mock.calls.find((args) => args?.[0]?.type === 'lucidcoder:prefill-chat');
-    expect(call).toBeTruthy();
+    expect(call).toEqual(expect.any(Array));
+    expect(call[0]).toEqual(expect.objectContaining({ type: 'lucidcoder:prefill-chat' }));
 
     dispatchSpy.mockRestore();
   });
@@ -779,7 +780,8 @@ describe('PreviewTab', () => {
     });
 
     const call = dispatchSpy.mock.calls.find((args) => args?.[0]?.type === 'lucidcoder:prefill-chat');
-    expect(call).toBeTruthy();
+    expect(call).toEqual(expect.any(Array));
+    expect(call[0]).toEqual(expect.objectContaining({ type: 'lucidcoder:prefill-chat' }));
     const prompt = call[0].detail?.prompt || '';
     expect(prompt).toContain('Frontend logs (tail):');
     expect(prompt).toContain('2026-01-25T00:00:00.000Z stderr frontend boom');
@@ -1056,7 +1058,9 @@ describe('PreviewTab', () => {
       expect(screen.getByText(/didn.?t finish loading|blocks embedding|unreachable/i)).toBeInTheDocument();
 
       const expectedUrl = previewRef.current.getPreviewUrl();
-      expect(screen.getByText((_, element) => element?.tagName === 'CODE' && element.textContent === expectedUrl)).toBeTruthy();
+      expect(
+        screen.getByText((_, element) => element?.tagName === 'CODE' && element.textContent === expectedUrl)
+      ).toBeInTheDocument();
 
       await act(async () => {
         fireEvent.click(screen.getByText('Retry'));
@@ -1219,7 +1223,7 @@ describe('PreviewTab', () => {
     expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
     expect(
       screen.getByText((_, element) => element?.tagName === 'STRONG' && element.textContent === 'Details:')
-    ).toBeTruthy();
+    ).toBeInTheDocument();
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
   });
 

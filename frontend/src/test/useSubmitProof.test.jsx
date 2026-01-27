@@ -4,12 +4,6 @@ import { render, act, cleanup } from '@testing-library/react';
 import axios from 'axios';
 import { useSubmitProof } from '../components/test-tab/useSubmitProof.js';
 
-vi.mock('axios', () => ({
-  default: {
-    post: vi.fn()
-  }
-}));
-
 let latestSubmitProof;
 
 const HookHarness = (props) => {

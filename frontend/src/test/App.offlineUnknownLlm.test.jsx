@@ -38,7 +38,8 @@ describe('App (unknown LLM status) backend offline startup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset();
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.reject(new Error('Backend unreachable'));
       }
@@ -81,7 +82,8 @@ describe('App (unknown backend connectivity) startup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    global.fetch = vi.fn((url) => {
+    fetch.mockReset();
+    fetch.mockImplementation((url) => {
       if (url === '/api/health') {
         return Promise.reject(new Error('Backend unreachable'));
       }

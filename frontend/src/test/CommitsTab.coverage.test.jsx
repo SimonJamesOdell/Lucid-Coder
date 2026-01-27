@@ -13,13 +13,6 @@ let isLLMConfiguredValue = false;
 
 const project = { id: 'project-coverage', name: 'Coverage Project' };
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
-
 vi.mock('../context/AppStateContext', () => ({
   useAppState: () => ({
     requestEditorFocus: requestEditorFocusValue,
@@ -160,7 +153,11 @@ describe('CommitsTab coverage branches', () => {
     await renderCommitsTab({ testApiRef });
 
     await waitFor(() => {
-      expect(testApiRef.current).toBeTruthy();
+      expect(testApiRef.current).toEqual(
+        expect.objectContaining({
+          handleCommitStagedChanges: expect.any(Function)
+        })
+      );
     });
 
     await act(async () => {
@@ -213,7 +210,11 @@ describe('CommitsTab coverage branches', () => {
     await renderCommitsTab({ testApiRef });
 
     await waitFor(() => {
-      expect(testApiRef.current).toBeTruthy();
+      expect(testApiRef.current).toEqual(
+        expect.objectContaining({
+          handleCommitStagedChanges: expect.any(Function)
+        })
+      );
     });
 
     await act(async () => {
@@ -663,7 +664,6 @@ describe('CommitsTab coverage branches', () => {
     await renderCommitsTab({ testApiRef: apiRef });
 
     await waitFor(() => {
-      expect(apiRef.current).toBeTruthy();
       expect(typeof apiRef.current.handleCommitStagedChanges).toBe('function');
       expect(typeof apiRef.current.handleManualAutofill).toBe('function');
     });
@@ -700,7 +700,6 @@ describe('CommitsTab coverage branches', () => {
     await renderCommitsTab({ testApiRef: apiRef });
 
     await waitFor(() => {
-      expect(apiRef.current).toBeTruthy();
       expect(typeof apiRef.current.handleMergeBranch).toBe('function');
     });
 
@@ -995,6 +994,8 @@ describe('CommitsTab coverage branches', () => {
   });
 
   test('merge failure uses server-provided error copy', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     axios.get.mockResolvedValueOnce({ data: { success: true, commits: [] } });
 
     axios.post.mockRejectedValueOnce({
@@ -1026,9 +1027,14 @@ describe('CommitsTab coverage branches', () => {
     });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Cannot merge right now');
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
   });
 
   test('merge failure falls back to default error copy when backend omits error', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     axios.get.mockResolvedValueOnce({ data: { success: true, commits: [] } });
 
     axios.post.mockRejectedValueOnce(new Error('Merge failed'));
@@ -1054,9 +1060,14 @@ describe('CommitsTab coverage branches', () => {
     });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to merge branch');
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
   });
 
   test('omits commit payload when draft message is empty and uses fallback commit error copy', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     axios.get
       .mockResolvedValueOnce({ data: { success: true, commits: [] } })
       .mockResolvedValueOnce({ data: { success: true, commits: [] } });
@@ -1091,6 +1102,9 @@ describe('CommitsTab coverage branches', () => {
     expect(await screen.findByTestId('branch-commit-error')).toHaveTextContent(
       'Failed to commit staged changes'
     );
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
   });
 
   test('commit success syncs overview when backend returns one', async () => {

@@ -4,14 +4,6 @@ import useBranchTabState from './useBranchTabState';
 import { useAppState } from '../../context/AppStateContext';
 import axios from 'axios';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    delete: vi.fn()
-  }
-}));
-
 vi.mock('../../context/AppStateContext', () => ({
   useAppState: vi.fn()
 }));
@@ -119,7 +111,7 @@ describe('useBranchTabState', () => {
     });
 
     await waitFor(() => {
-      expect(useBranchTabState.__testHooks.latestInstance).toBeTruthy();
+      expect(useBranchTabState.__testHooks.latestInstance?.setBranchSummaries).toBeTypeOf('function');
     });
 
     act(() => {
@@ -321,7 +313,8 @@ describe('useBranchTabState', () => {
       await result.current.handleTestAndMerge('feature/login');
     });
 
-    expect(result.current.mergeWarning).toBeTruthy();
+    expect(result.current.mergeWarning).toEqual(expect.any(String));
+    expect(result.current.mergeWarning).not.toBe('');
     const postUrls = mockedAxios.post.mock.calls.map(([url]) => url);
     expect(postUrls[0]).toContain('/tests');
     expect(postUrls[1]).toContain('/commit');

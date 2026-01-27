@@ -231,10 +231,9 @@ afterEach(() => {
   
   // Reset fetch mock to default behavior
   global.fetch.mockClear()
-  global.fetch.mockResolvedValue({
-    ok: true,
-    json: () => Promise.resolve({ success: true, projects: [] }),
-  })
+  global.fetch.mockResolvedValue(
+    mockApiResponse({ success: true, projects: [] }, true, 200)
+  )
 
   cleanup()
 })

@@ -23,11 +23,11 @@ describe('BranchSidebar', () => {
   test('shows header and empty state when no branches exist', () => {
     renderSidebar();
 
-    expect(screen.getByText('Branches')).toBeInTheDocument();
-    expect(screen.getByText('0 total')).toBeInTheDocument();
     expect(screen.getByTestId('branch-filter-bar')).toBeInTheDocument();
     expect(screen.getByTestId('branch-filter-open')).toBeInTheDocument();
     expect(screen.getByTestId('branch-filter-past')).toBeInTheDocument();
+    expect(screen.getByLabelText('Open branches count')).toHaveTextContent('0');
+    expect(screen.getByLabelText('Past branches count')).toHaveTextContent('0');
     expect(screen.getByTestId('branch-empty')).toHaveTextContent('No branches yet');
   });
 

@@ -6,12 +6,6 @@ import axios from 'axios';
 
 import RunsTab from '../components/RunsTab.jsx';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn()
-  }
-}));
-
 describe('RunsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();

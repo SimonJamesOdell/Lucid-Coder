@@ -437,7 +437,7 @@ describe('GoalsPanel', () => {
 
     const parentButton = screen.getByTestId('goals-modal-goal-10');
     const group = parentButton.closest('.goals-modal-goal-group');
-    expect(group).toBeTruthy();
+    expect(group).not.toBeNull();
 
     const titles = Array.from(group.querySelectorAll('.goals-modal-children .goals-modal-goal-title'))
       .map((node) => node.textContent);
@@ -504,7 +504,7 @@ describe('GoalsPanel', () => {
 
     const parentButton = screen.getByTestId('goals-modal-goal-10');
     const group = parentButton.closest('.goals-modal-goal-group');
-    expect(group).toBeTruthy();
+    expect(group).not.toBeNull();
 
     const titles = Array.from(group.querySelectorAll('.goals-modal-children .goals-modal-goal-title'))
       .map((node) => node.textContent);
@@ -805,7 +805,7 @@ describe('GoalsPanel', () => {
 
     const backdrop = screen.getByTestId('goals-modal');
     const panel = screen.getByText('Goals & Progress').closest('.goals-modal-panel');
-    expect(panel).toBeTruthy();
+    expect(panel).not.toBeNull();
 
     // Clicking inside the panel should not close.
     panel.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));

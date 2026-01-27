@@ -495,7 +495,7 @@ describe('AppStateContext', () => {
       imported = result.current.importProject({ name: 'Generated ID Project' })
     })
 
-    expect(imported.id).toBeDefined()
+    expect(imported.id).toEqual(expect.any(String))
     expect(imported.id).not.toBe('')
     expect(result.current.projects[0].id).toBe(imported.id)
     Date.now.mockRestore()
@@ -795,7 +795,7 @@ describe('AppStateContext', () => {
       await result.current.selectProject(project)
     })
 
-    expect(result.current.projectGitSettings[project.id]).toBeDefined()
+    expect(result.current.projectGitSettings[project.id]).toEqual(expect.any(Object))
 
     fetch.mockResolvedValueOnce(projectGitSettingsResponse({}, true))
 
@@ -1141,7 +1141,7 @@ describe('AppStateContext', () => {
       })
 
       const restartCall = fetch.mock.calls.find(([url]) => url === '/api/projects/active-project/restart')
-      expect(restartCall).toBeTruthy()
+        expect(restartCall?.[0]).toBe('/api/projects/active-project/restart')
       expect(restartCall?.[1]).toMatchObject({ method: 'POST' })
     })
 
@@ -1169,7 +1169,7 @@ describe('AppStateContext', () => {
         }
       })
 
-      expect(caughtError).toBeTruthy()
+      expect(caughtError).toBeInstanceOf(Error)
       expect(caughtError.message).toContain('Port settings saved but failed to restart project')
 
       consoleSpy.mockRestore()

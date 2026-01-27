@@ -53,7 +53,8 @@ describe('TestTab coverage helpers', () => {
       ]
     });
 
-    expect(plan.prompt).toBeTruthy();
+    expect(plan.prompt).toEqual(expect.any(String));
+    expect(plan.prompt.length).toBeGreaterThan(0);
     expect(plan.childPrompts).toContain('Fix failing frontend tests');
     expect(plan.childPrompts).toContain('Fix failing backend tests');
   });
@@ -284,7 +285,12 @@ describe('TestTab coverage helpers', () => {
       { label: 'Frontend', kind: 'frontend', job: { status: 'failed', logs: [] } }
     ]);
 
-    expect(context).toBeTruthy();
+    expect(context).toEqual(
+      expect.objectContaining({
+        jobs: expect.any(Array),
+        generatedAt: expect.any(String)
+      })
+    );
     expect(context.jobs).toHaveLength(1);
     expect(context.jobs[0].label).toBe('Frontend');
     expect(typeof context.generatedAt).toBe('string');

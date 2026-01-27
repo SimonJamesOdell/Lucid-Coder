@@ -24,6 +24,11 @@ This project includes comprehensive testing coverage for both frontend and backe
 # Run all tests
 ./run-tests.ps1
 
+# Run tests via npm scripts from repo root
+npm test
+npm run test:frontend
+npm run test:backend
+
 # Force reinstall dependencies (slower, but ensures a clean install)
 ./run-tests.ps1 -ForceInstall
 

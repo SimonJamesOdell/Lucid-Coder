@@ -4,13 +4,6 @@ import axios from 'axios';
 import { useAppState } from '../../context/AppStateContext';
 import { useCommitComposer, fetchCommitContextForProject } from './useCommitComposer';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
-
 vi.mock('../../context/AppStateContext', () => ({
   useAppState: vi.fn()
 }));

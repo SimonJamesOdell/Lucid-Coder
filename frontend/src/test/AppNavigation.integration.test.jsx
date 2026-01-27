@@ -1,13 +1,12 @@
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { AppContent } from '../App';
 import { useAppState } from '../context/AppStateContext';
+import { mockApiResponse } from './setup';
 
 vi.mock('../context/AppStateContext', () => ({
   useAppState: vi.fn()
 }));
-
-const originalFetch = global.fetch;
 
 const buildState = (overrides = {}) => ({
   currentView: 'main',
@@ -39,15 +38,7 @@ const buildState = (overrides = {}) => ({
 describe('AppContent navigation integration', () => {
   beforeEach(() => {
     useAppState.mockReset();
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ok: true })
-    });
-  });
-
-  afterEach(() => {
-    global.fetch = originalFetch;
-    vi.clearAllMocks();
+    fetch.mockResolvedValue(mockApiResponse({ ok: true }));
   });
 
   test('renders Navigation after backend health check succeeds', async () => {
@@ -59,6 +50,6 @@ describe('AppContent navigation integration', () => {
       expect(screen.getByRole('navigation')).toBeInTheDocument();
     });
 
-    expect(global.fetch).toHaveBeenCalledWith('/api/health', expect.any(Object));
+    expect(fetch).toHaveBeenCalledWith('/api/health', expect.any(Object));
   });
 });

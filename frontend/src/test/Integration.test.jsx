@@ -4,13 +4,6 @@ import userEvent from '@testing-library/user-event';
 import App from '../App';
 import axios from 'axios';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
-
 vi.mock('../components/ProjectInspector', () => ({
   default: () => <div data-testid="project-inspector">Project Inspector</div>
 }));
@@ -71,7 +64,8 @@ const buildLlmStatus = ({ configured = true, ready = true } = {}) => ({
 });
 
 const setupFetchMock = () => {
-  const handler = vi.fn((url) => {
+  fetch.mockReset();
+  fetch.mockImplementation((url) => {
     if (url === '/api/llm/status') {
       return Promise.resolve({
         ok: true,
@@ -92,8 +86,7 @@ const setupFetchMock = () => {
     });
   });
 
-  global.fetch = handler;
-  return handler;
+  return fetch;
 };
 
 beforeEach(() => {

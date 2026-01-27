@@ -3,8 +3,6 @@ import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { AppStateProvider, useAppState, __appStateTestHelpers } from './AppStateContext';
 
-const originalFetch = global.fetch;
-
 const createResponse = (ok, payload) => ({
   ok,
   json: () => Promise.resolve(payload)
@@ -67,8 +65,9 @@ describe('AppStateContext integrations', () => {
   beforeEach(() => {
     localStorage.clear();
     defaultFetchImpl = buildFetchMock();
-    fetchMock = vi.fn((...args) => defaultFetchImpl(...args));
-    global.fetch = fetchMock;
+    fetchMock = fetch;
+    fetchMock.mockReset();
+    fetchMock.mockImplementation((...args) => defaultFetchImpl(...args));
   });
 
   test('importProject persists imported metadata and returns the snapshot', () => {
@@ -80,7 +79,8 @@ describe('AppStateContext integrations', () => {
     });
 
     expect(imported.name).toBe('External Repo');
-    expect(imported.id).toBeTruthy();
+    expect(imported.id).toEqual(expect.any(String));
+    expect(imported.id).not.toBe('');
     expect(result.current.projects.some((proj) => proj.id === imported.id)).toBe(true);
   });
 
@@ -163,11 +163,6 @@ describe('AppStateContext integrations', () => {
   });
 
   afterEach(() => {
-    if (originalFetch) {
-      global.fetch = originalFetch;
-    } else {
-      delete global.fetch;
-    }
     vi.restoreAllMocks();
   });
 
@@ -776,7 +771,7 @@ describe('AppStateContext integrations', () => {
     const snapshot = result.current.getProjectGitSettingsSnapshot();
     expect(snapshot.inheritsFromGlobal).toBe(true);
     expect(snapshot.projectSettings).toBeNull();
-    expect(snapshot.globalSettings).toBeDefined();
+    expect(snapshot.globalSettings).toEqual(expect.any(Object));
   });
 
   test('updateProjectGitSettings requires a project id', async () => {
@@ -834,7 +829,7 @@ describe('AppStateContext integrations', () => {
       await result.current.updateProjectGitSettings('proj-tokenless', { workflow: 'remote' });
     });
 
-    expect(capturedBody).toBeDefined();
+    expect(capturedBody).toEqual(expect.any(Object));
     expect(capturedBody.token).toBeUndefined();
 
     await waitFor(() => {
@@ -2833,7 +2828,11 @@ describe('AppStateContext integrations', () => {
     const staged = result.current.workspaceChanges['proj-local'].stagedFiles;
     expect(staged).toHaveLength(1);
     expect(staged[0].source).toBe('ai');
-    expect(staged[0].timestamp).toBeTruthy();
+    expect(staged[0].timestamp).toSatisfy((value) => {
+      if (typeof value === 'string') return value.length > 0;
+      if (typeof value === 'number') return Number.isFinite(value);
+      return false;
+    });
   });
 
   test('clearStagedChanges removes local entries after a successful DELETE', async () => {
@@ -4475,7 +4474,7 @@ describe('AppStateContext integrations', () => {
     const { unmount } = renderHook(() => useAppState(), { wrapper });
 
     expect(typeof __appStateTestHelpers.clearJobPolls).toBe('function');
-    expect(__appStateTestHelpers.jobPollsRef).toBeDefined();
+    expect(__appStateTestHelpers.jobPollsRef?.current).toBeInstanceOf(Map);
 
     const controller = {
       cancelled: false,

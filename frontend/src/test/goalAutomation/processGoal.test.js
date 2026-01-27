@@ -1,11 +1,4 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-
-vi.mock('axios', () => {
-  const post = vi.fn(() => Promise.resolve({ data: {} }));
-  const get = vi.fn(() => Promise.resolve({ data: { files: [] } }));
-  return { default: { post, get } };
-});
-
 import axios from 'axios';
 import { processGoal, __processGoalTestHooks } from '../../services/goalAutomation/processGoal.js';
 

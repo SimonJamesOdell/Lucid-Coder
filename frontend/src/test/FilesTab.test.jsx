@@ -6,14 +6,6 @@ import axios from 'axios';
 import FilesTab from '../components/FilesTab';
 import { useAppState } from '../context/AppStateContext';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn()
-  }
-}));
-
 vi.mock('../context/AppStateContext', () => ({
   useAppState: vi.fn()
 }));
@@ -145,7 +137,8 @@ const renderFilesTabWithHooks = async ({ theme = 'dark', overrides = {}, userOpt
   });
 
   await waitFor(() => {
-    expect(hooks).toBeTruthy();
+    expect(hooks?.buildSiblingPath).toBeTypeOf('function');
+    expect(hooks?.getActiveFilePath).toBeTypeOf('function');
   });
 
   return { user, hooks, getHooks };
@@ -494,7 +487,7 @@ describe('FilesTab Component', () => {
     render(<FilesTab project={null} __testHooks={__testHooks} />);
 
     await waitFor(() => {
-      expect(hooks).toBeTruthy();
+      expect(hooks?.handleContextAction).toBeTypeOf('function');
     });
 
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('App2.jsx');
@@ -3089,7 +3082,12 @@ describe('FilesTab Component', () => {
         }
       };
       await renderFilesTab({ componentProps: { __testHooks: collectHooks } });
-      await waitFor(() => expect(hooks).toBeDefined());
+      await waitFor(() => {
+        expect(hooks?.handleToggleDiffMode).toBeTypeOf('function');
+        expect(hooks?.forceActiveFilePath).toBeTypeOf('function');
+        expect(hooks?.handleEditorChange).toBeTypeOf('function');
+        expect(hooks?.getFileStates).toBeTypeOf('function');
+      });
 
       // No active file is selected yet, so diff toggle should no-op.
       const callsBefore = mockAxios.get.mock.calls.length;
@@ -3122,7 +3120,10 @@ describe('FilesTab Component', () => {
         }
       };
       await renderFilesTab({ componentProps: { __testHooks: collectHooks } });
-      await waitFor(() => expect(hooks).toBeDefined());
+      await waitFor(() => {
+        expect(hooks?.forceFileState).toBeTypeOf('function');
+        expect(hooks?.getFileStates).toBeTypeOf('function');
+      });
 
       await act(async () => {
         hooks.forceFileState('virtual.js', {
@@ -3152,7 +3153,12 @@ describe('FilesTab Component', () => {
         }
       };
       await renderFilesTab({ componentProps: { __testHooks: collectHooks } });
-      await waitFor(() => expect(hooks).toBeDefined());
+      await waitFor(() => {
+        expect(hooks?.forceActiveFilePath).toBeTypeOf('function');
+        expect(hooks?.forceFileState).toBeTypeOf('function');
+        expect(hooks?.handleSaveFile).toBeTypeOf('function');
+        expect(hooks?.getFileStates).toBeTypeOf('function');
+      });
 
       await act(async () => {
         hooks.forceActiveFilePath('virtual.js');

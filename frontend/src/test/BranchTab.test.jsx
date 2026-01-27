@@ -5,14 +5,6 @@ import axios from 'axios';
 import BranchTab from '../components/BranchTab';
 import { AppStateContext } from '../context/AppStateContext';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    delete: vi.fn()
-  }
-}));
-
 const mockProject = { id: 'project-123', name: 'Demo Project' };
 const baseOverview = {
   branches: [
@@ -330,7 +322,24 @@ describe('BranchTab', () => {
   });
 
   test('disables Begin testing CTA when branch has no staged changes', async () => {
-    await renderBranchTab({ overview: readyOverview });
+    const noStagedOverview = {
+      ...baseOverview,
+      branches: [
+        { name: 'main', status: 'protected', isCurrent: true, stagedFileCount: 1 },
+        { name: 'feature-login', status: 'active', isCurrent: false, stagedFileCount: 0 }
+      ],
+      workingBranches: [
+        {
+          ...baseOverview.workingBranches[0],
+          status: 'active',
+          lastTestStatus: null,
+          mergeBlockedReason: 'Tests must pass before merge',
+          stagedFiles: []
+        }
+      ]
+    };
+
+    await renderBranchTab({ overview: noStagedOverview });
     await userEvent.click(screen.getByTestId('branch-list-item-feature-login'));
 
     const beginButton = await screen.findByTestId('branch-begin-testing');
@@ -347,7 +356,7 @@ describe('BranchTab', () => {
     await renderBranchTab({ props: { registerBranchActions } });
 
     await waitFor(() => {
-      expect(latestBranchActions?.createBranch).toBeTruthy();
+      expect(latestBranchActions?.createBranch?.onClick).toBeTypeOf('function');
     });
 
     expect(latestBranchActions.createBranch.label).toBe('New branch');
@@ -393,7 +402,7 @@ describe('BranchTab', () => {
 
     await renderBranchTab({ props: { registerBranchActions } });
 
-    await waitFor(() => expect(latestBranchActions?.createBranch).toBeTruthy());
+    await waitFor(() => expect(latestBranchActions?.createBranch?.onClick).toBeTypeOf('function'));
 
     await latestBranchActions.createBranch.onClick();
 

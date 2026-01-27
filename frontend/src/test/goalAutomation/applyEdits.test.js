@@ -1,11 +1,4 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-
-vi.mock('axios', () => {
-  const get = vi.fn();
-  const post = vi.fn();
-  return { default: { get, post } };
-});
-
 import axios from 'axios';
 import * as automationUtils from '../../services/goalAutomation/automationUtils.js';
 

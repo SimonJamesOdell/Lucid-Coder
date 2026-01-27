@@ -12,24 +12,11 @@ import {
   agentRequestStream
 } from './goalsApi';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
-
 const mockedAxios = axios;
-const originalFetch = global.fetch;
 
 describe('goalsApi helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    global.fetch = originalFetch;
-  });
-
-  afterEach(() => {
-    global.fetch = originalFetch;
   });
 
   test('fetchGoals requires projectId and returns goal list', async () => {
@@ -115,12 +102,12 @@ describe('goalsApi helpers', () => {
     await expect(agentRequestStream()).rejects.toThrow('projectId is required');
     await expect(agentRequestStream({ projectId: 'proj-1' })).rejects.toThrow('prompt is required');
 
-    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    fetch.mockResolvedValue({ ok: false, status: 500 });
     await expect(agentRequestStream({ projectId: 'proj-1', prompt: 'Hello' })).rejects.toThrow(
       'Streaming request failed (500)'
     );
 
-    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: null });
+    fetch.mockResolvedValue({ ok: true, status: 200, body: null });
     await expect(agentRequestStream({ projectId: 'proj-1', prompt: 'Hello' })).rejects.toThrow(
       'Streaming request failed (200)'
     );
@@ -147,7 +134,7 @@ describe('goalsApi helpers', () => {
       }
     });
 
-    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: stream });
+    fetch.mockResolvedValue({ ok: true, status: 200, body: stream });
 
     const receivedChunks = [];
     const completed = [];
@@ -182,7 +169,7 @@ describe('goalsApi helpers', () => {
         .mockResolvedValueOnce({ value: undefined, done: true })
     };
 
-    global.fetch = vi.fn().mockResolvedValue({
+    fetch.mockResolvedValue({
       ok: true,
       status: 200,
       body: { getReader: () => reader }
@@ -218,7 +205,7 @@ describe('goalsApi helpers', () => {
         .mockResolvedValueOnce({ value: undefined, done: true })
     };
 
-    global.fetch = vi.fn().mockResolvedValue({
+    fetch.mockResolvedValue({
       ok: true,
       status: 200,
       body: { getReader: () => reader }

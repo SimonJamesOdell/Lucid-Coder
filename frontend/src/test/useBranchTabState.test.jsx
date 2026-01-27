@@ -9,14 +9,6 @@ vi.mock('../context/AppStateContext', () => ({
   useAppState: vi.fn()
 }));
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    delete: vi.fn()
-  }
-}));
-
 const computeStagedSignatureMock = vi.fn((files = []) => JSON.stringify(files));
 const canBranchMergeMock = vi.fn(() => true);
 const describeMergeBlockerMock = vi.fn(() => 'blocked');
@@ -94,7 +86,7 @@ const renderHookState = async ({
   );
 
   await waitFor(() => {
-    expect(latestState).toBeDefined();
+    expect(latestState).not.toBeUndefined();
   });
 
   return {
