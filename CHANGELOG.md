@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4 (2026-01-27)
+- Added Playwright-based browser E2E smoke tests with backend+frontend orchestration.
+- Added dedicated E2E SQLite DB reset for reliable clean runs.
+- Added root npm scripts for running E2E (`npm run e2e*`) and documented usage in TESTING.md.
+
 ## 0.3.3 (2026-01-27)
 - Consolidated frontend test mocking (axios + fetch) into the shared Vitest setup to reduce redundancy and brittleness.
 - Hardened root npm scripts and testing docs so `npm test` consistently runs frontend + backend suites from repo root.
