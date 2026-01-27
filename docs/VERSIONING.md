@@ -21,3 +21,7 @@ LucidCoder follows Semantic Versioning.
 - Human-readable version in [VERSION](VERSION)
 
 Use the version bumper to keep these in sync.
+
+You can validate version consistency (and that the changelog has an entry) from the repo root:
+
+- `npm run release:check`

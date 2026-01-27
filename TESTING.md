@@ -24,6 +24,11 @@ This project includes comprehensive testing coverage for both frontend and backe
 # Run all tests
 ./run-tests.ps1
 
+# Release sanity checks (recommended before tagging a release)
+npm run release:check
+npm test
+npm run e2e
+
 # Run tests via npm scripts from repo root
 npm test
 npm run test:frontend
@@ -129,7 +134,7 @@ npm run test:coverage      # Generate coverage report
 ## Continuous Integration
 
 ### Test Automation
-The test suite is designed for CI/CD integration:
+The test suite is designed for CI/CD integration, but this repo can also be run as **local-only** (recommended while GitHub Actions is unavailable):
 
 ```yaml
 # Example CI configuration
