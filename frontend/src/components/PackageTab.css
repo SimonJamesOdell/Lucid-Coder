@@ -96,7 +96,10 @@
 
 .package-section-actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 
@@ -263,5 +266,86 @@
 .package-missing {
   color: var(--text-muted, rgba(255, 255, 255, 0.6));
   margin: 0.2rem 0 0;
+}
+
+.package-add-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  z-index: 1000;
+}
+
+.package-add-panel {
+  width: min(760px, 100%);
+  background: var(--background-secondary, #0f0f0f);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1rem;
+  box-shadow: 0 24px 55px rgba(0, 0, 0, 0.6);
+  padding: 1.15rem 1.25rem;
+}
+
+.package-add-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.package-add-title {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.package-add-close {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0.65rem;
+  color: inherit;
+  cursor: pointer;
+  width: 40px;
+  height: 40px;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.package-add-close:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.package-add-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.package-add-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.package-add-cancel {
+  background: var(--background-tertiary, #151515);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.65rem;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.45rem 0.85rem;
+}
+
+.package-add-cancel:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.package-add-cancel:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 

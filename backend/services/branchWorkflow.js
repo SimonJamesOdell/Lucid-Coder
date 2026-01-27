@@ -492,6 +492,29 @@ export const describeBranchCssOnlyStatus = async (projectId, branchName) => {
   };
 };
 
+export const getBranchChangedFiles = async (projectId, branchName) => {
+  await ensureProjectExists(projectId);
+  await ensureMainBranch(projectId);
+
+  const branch = typeof branchName === 'string' ? branchName.trim() : '';
+  if (!branch) {
+    throw withStatusCode(new Error('Branch name is required'), 400);
+  }
+
+  const context = await getProjectContext(projectId);
+  if (!context?.gitReady) {
+    return { branch, files: [] };
+  }
+
+  try {
+    const files = await listBranchChangedPaths(context, { branchRef: branch });
+    return { branch, files: Array.isArray(files) ? files : [] };
+  } catch (error) {
+    console.warn(`[BranchWorkflow] Failed to list changed files for ${branch}: ${error.message}`);
+    return { branch, files: [] };
+  }
+};
+
 const stagingApi = createBranchWorkflowStaging({
   fs,
   path,

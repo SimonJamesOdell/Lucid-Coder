@@ -1,6 +1,6 @@
 # LucidCoder
 
-Version: 0.3.1
+Version: 0.3.2
 LucidCoder is a fullstack system for orchestrating goal-driven coding workflows. The frontend provides a rich React UI and the backend exposes REST and Socket.IO APIs for projects, goals, agents, and test execution.
 
 This project is a work in progress. Core functionality is in place, but many features and improvements are still planned. If you’re interested, please join in development and share updates, ideas, and contributions so we can evolve it together.
@@ -41,7 +41,9 @@ Default endpoints:
 
 Backend reads environment variables from [backend/.env](backend/.env). For LLM-backed features, configure provider, API URL, model, and API key. Socket.IO can be disabled with `ENABLE_SOCKET_IO=false`.
 
-Database defaults to backend/lucidcoder.db. Tests use backend/test-lucidcoder.db (controlled via `DATABASE_PATH`).
+Database defaults to a per-user application data directory (platform-specific). You can override with `DATABASE_PATH` (full file path) or `LUCIDCODER_DB_DIR` (base directory). If you previously used a repo-local DB under backend/, the backend will do a best-effort one-time copy into the new default location.
+
+Tests use backend/test-lucidcoder.db by default (also controllable via `DATABASE_PATH`).
 
 ## Documentation
 

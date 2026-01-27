@@ -38,6 +38,7 @@ const PreviewPanel = () => {
   const [filesSaveControl, setFilesSaveControl] = useState({ handleSave: null, isDisabled: true });
   const [testActions, setTestActions] = useState(null);
   const [branchActions, setBranchActions] = useState(null);
+  const [commitsActions, setCommitsActions] = useState(null);
   const pendingTestRunRef = useRef(null);
   const activeTab = previewPanelState?.activeTab || localActiveTab;
   const validTabsRef = useRef(new Set([
@@ -210,6 +211,16 @@ const PreviewPanel = () => {
     }
 
     return () => setBranchActions(null);
+  }, []);
+
+  const handleRegisterCommitsActions = useCallback((payload) => {
+    if (payload) {
+      setCommitsActions(payload);
+    } else {
+      setCommitsActions(null);
+    }
+
+    return () => setCommitsActions(null);
   }, []);
 
   useEffect(() => {
@@ -526,6 +537,7 @@ const PreviewPanel = () => {
             autofillRequestId={commitsAutofillRequestId}
             onConsumeAutofillRequest={() => setCommitsAutofillRequestId(null)}
             onRequestTestsTab={handleShowTestsTabAndRun}
+            registerCommitsActions={handleRegisterCommitsActions}
           />
         );
       case 'git':
@@ -698,6 +710,17 @@ const PreviewPanel = () => {
             <>
               {renderBranchActionButton(branchActions?.createBranch, 'branch-create')}
             </>
+          )}
+          {isCommitsActive && (
+            <button
+              type="button"
+              className="preview-action-button"
+              onClick={() => commitsActions?.refreshCommits?.()}
+              disabled={!currentProject || commitsActions?.isDisabled}
+              data-testid="commits-refresh"
+            >
+              Refresh
+            </button>
           )}
         </div>
       </div>

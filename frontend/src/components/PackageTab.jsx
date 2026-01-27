@@ -33,7 +33,9 @@ const PackageTab = ({ project, forceProjectId }) => {
   });
   const [globalError, setGlobalError] = useState('');
   const [activeWorkspaceKey, setActiveWorkspaceKey] = useState(WORKSPACES[0]?.key || 'frontend');
+  const [addPackageModalWorkspaceKey, setAddPackageModalWorkspaceKey] = useState(null);
   const completedJobsRef = useRef(new Map());
+  const addPackageNameInputRef = useRef(null);
 
   const jobs = useMemo(() => getJobsForProject(projectId), [getJobsForProject, projectId]);
 
@@ -104,6 +106,7 @@ const PackageTab = ({ project, forceProjectId }) => {
     setDrafts({ frontend: { name: '', version: '', dev: false }, backend: { name: '', version: '', dev: false } });
     setGlobalError('');
     setActiveWorkspaceKey(WORKSPACES[0]?.key || 'frontend');
+    setAddPackageModalWorkspaceKey(null);
 
     if (!projectId) {
       return;
@@ -113,6 +116,48 @@ const PackageTab = ({ project, forceProjectId }) => {
       fetchManifest(key);
     });
   }, [projectId, fetchManifest]);
+
+  useEffect(() => {
+    setAddPackageModalWorkspaceKey(null);
+  }, [activeWorkspaceKey]);
+
+  useEffect(() => {
+    if (!addPackageModalWorkspaceKey) {
+      if (typeof document !== 'undefined') {
+        document.body.style.overflow = 'unset';
+      }
+      return undefined;
+    }
+
+    const focusInput = () => {
+      addPackageNameInputRef.current?.focus();
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(focusInput);
+    } else {
+      focusInput();
+    }
+
+    if (typeof document !== 'undefined') {
+      document.body.style.overflow = 'hidden';
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setAddPackageModalWorkspaceKey(null);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      if (typeof document !== 'undefined') {
+        document.body.style.overflow = 'unset';
+      }
+    };
+  }, [addPackageModalWorkspaceKey]);
 
   useEffect(() => {
     if (!projectId) {
@@ -193,9 +238,20 @@ const PackageTab = ({ project, forceProjectId }) => {
         ...prev,
         [workspaceKey]: { ...prev[workspaceKey], name: '', version: '' }
       }));
+
+      setAddPackageModalWorkspaceKey((current) => (current === workspaceKey ? null : current));
     } catch (error) {
       setGlobalError(error.message || 'Failed to add package');
     }
+  };
+
+  const handleOpenAddPackageModal = (workspaceKey) => {
+    setGlobalError('');
+    setAddPackageModalWorkspaceKey(workspaceKey);
+  };
+
+  const handleCloseAddPackageModal = () => {
+    setAddPackageModalWorkspaceKey(null);
   };
 
   const handleRemovePackage = async (workspaceKey, dependencyName, options = {}) => {
@@ -313,37 +369,43 @@ const PackageTab = ({ project, forceProjectId }) => {
     const error = errors[workspace.key];
     const draft = drafts[workspace.key];
     const isLoading = loadingState[workspace.key];
+    const isAddModalOpen = addPackageModalWorkspaceKey === workspace.key;
 
-    const tabId = `package-workspace-tab-${workspace.key}`;
-    const panelId = `package-workspace-panel-${workspace.key}`;
+    const activeTabId = `package-workspace-tab-${workspace.key}`;
 
     return (
       <section
         key={workspace.key}
-        id={panelId}
         className="package-section"
         aria-live="polite"
         role="tabpanel"
-        aria-labelledby={tabId}
+        aria-labelledby={activeTabId}
+        data-testid={`package-workspace-panel-${workspace.key}`}
       >
         <header className="package-section-header">
-          <div>
-            <h3>{workspace.label}</h3>
-            {manifest && (
-              <p className="package-manifest-meta">
-                {manifest.name || 'Unnamed workspace'}{manifest.version ? ` · v${manifest.version}` : ''}
-              </p>
-            )}
-            {!manifest && !error && !isLoading && (
-              <p className="package-missing" data-testid={`package-missing-${workspace.key}`}>
-                package.json not found for this workspace
-              </p>
-            )}
-            {error && (
-              <p className="package-error" data-testid={`package-error-${workspace.key}`}>
-                {error}
-              </p>
-            )}
+          <div
+            className="package-workspace-tabs"
+            role="tablist"
+            aria-label="Package workspaces"
+          >
+            {WORKSPACES.map((entry) => {
+              const tabId = `package-workspace-tab-${entry.key}`;
+              const isActive = entry.key === workspace.key;
+              return (
+                <button
+                  key={entry.key}
+                  id={tabId}
+                  type="button"
+                  role="tab"
+                  className={`package-workspace-tab ${isActive ? 'is-active' : ''}`.trim()}
+                  aria-selected={isActive}
+                  data-testid={`package-workspace-tab-${entry.key}`}
+                  onClick={() => setActiveWorkspaceKey(entry.key)}
+                >
+                  {entry.label}
+                </button>
+              );
+            })}
           </div>
           <div className="package-section-actions">
             <button
@@ -355,6 +417,14 @@ const PackageTab = ({ project, forceProjectId }) => {
             </button>
             <button
               type="button"
+              onClick={() => handleOpenAddPackageModal(workspace.key)}
+              disabled={!manifest || isBusy}
+              data-testid={`package-add-open-${workspace.key}`}
+            >
+              Add package...
+            </button>
+            <button
+              type="button"
               onClick={() => handleInstallDependencies(workspace.key)}
               disabled={!manifest || isBusy}
             >
@@ -363,39 +433,101 @@ const PackageTab = ({ project, forceProjectId }) => {
           </div>
         </header>
 
+        {!manifest && !error && !isLoading && (
+          <p className="package-missing" data-testid={`package-missing-${workspace.key}`}>
+            package.json not found for this workspace
+          </p>
+        )}
+        {error && (
+          <p className="package-error" data-testid={`package-error-${workspace.key}`}>
+            {error}
+          </p>
+        )}
+
         {manifest && (
           <div className="package-panel">
-            <div className="package-form" data-testid={`package-form-${workspace.key}`}>
-              <label>
-                <span>Package name</span>
-                <input
-                  type="text"
-                  value={draft.name}
-                  onChange={(event) => handleDraftChange(workspace.key, 'name', event.target.value)}
-                  placeholder="e.g. react"
-                />
-              </label>
-              <label>
-                <span>Version (optional)</span>
-                <input
-                  type="text"
-                  value={draft.version}
-                  onChange={(event) => handleDraftChange(workspace.key, 'version', event.target.value)}
-                  placeholder="latest"
-                />
-              </label>
-              <label className="package-checkbox">
-                <input
-                  type="checkbox"
-                  checked={draft.dev}
-                  onChange={(event) => handleDraftChange(workspace.key, 'dev', event.target.checked)}
-                />
-                <span>Dev dependency</span>
-              </label>
-              <button type="button" onClick={() => handleAddPackage(workspace.key)} disabled={isBusy}>
-                Add package
-              </button>
-            </div>
+            {isAddModalOpen && (
+              <div
+                className="package-add-backdrop"
+                onClick={(event) => {
+                  if (event.target === event.currentTarget && !isBusy) {
+                    handleCloseAddPackageModal();
+                  }
+                }}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={`package-add-title-${workspace.key}`}
+                data-testid={`package-add-modal-${workspace.key}`}
+              >
+                <div className="package-add-panel">
+                  <div className="package-add-header">
+                    <h2 id={`package-add-title-${workspace.key}`} className="package-add-title">
+                      Add package ({workspace.label})
+                    </h2>
+                    <button
+                      type="button"
+                      className="package-add-close"
+                      onClick={handleCloseAddPackageModal}
+                      disabled={isBusy}
+                      aria-label="Close add package modal"
+                      data-testid={`package-add-close-${workspace.key}`}
+                    >
+                      &times;
+                    </button>
+                  </div>
+
+                  <div className="package-add-body">
+                    <div className="package-form" data-testid={`package-form-${workspace.key}`}>
+                      <label>
+                        <span>Package name</span>
+                        <input
+                          ref={addPackageNameInputRef}
+                          type="text"
+                          value={draft.name}
+                          onChange={(event) => handleDraftChange(workspace.key, 'name', event.target.value)}
+                          placeholder="e.g. react"
+                          disabled={isBusy}
+                        />
+                      </label>
+                      <label>
+                        <span>Version (optional)</span>
+                        <input
+                          type="text"
+                          value={draft.version}
+                          onChange={(event) => handleDraftChange(workspace.key, 'version', event.target.value)}
+                          placeholder="latest"
+                          disabled={isBusy}
+                        />
+                      </label>
+                      <label className="package-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={draft.dev}
+                          onChange={(event) => handleDraftChange(workspace.key, 'dev', event.target.checked)}
+                          disabled={isBusy}
+                        />
+                        <span>Dev dependency</span>
+                      </label>
+                      <button type="button" onClick={() => handleAddPackage(workspace.key)} disabled={isBusy}>
+                        Add package
+                      </button>
+                    </div>
+
+                    <div className="package-add-footer">
+                      <button
+                        type="button"
+                        className="package-add-cancel"
+                        onClick={handleCloseAddPackageModal}
+                        disabled={isBusy}
+                        data-testid={`package-add-cancel-${workspace.key}`}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="package-groups">
               <div>
@@ -417,41 +549,13 @@ const PackageTab = ({ project, forceProjectId }) => {
 
   return (
     <div className="package-tab" data-testid="package-tab">
-      <div
-        className="package-workspace-tabs"
-        role="tablist"
-        aria-label="Package workspaces"
-      >
-        {WORKSPACES.map((workspace) => {
-          const tabId = `package-workspace-tab-${workspace.key}`;
-          const panelId = `package-workspace-panel-${workspace.key}`;
-          const isActive = workspace.key === activeWorkspace?.key;
-          return (
-            <button
-              key={workspace.key}
-              id={tabId}
-              type="button"
-              role="tab"
-              className={`package-workspace-tab ${isActive ? 'is-active' : ''}`.trim()}
-              aria-selected={isActive}
-              aria-controls={panelId}
-              data-testid={`package-workspace-tab-${workspace.key}`}
-              onClick={() => setActiveWorkspaceKey(workspace.key)}
-            >
-              {workspace.label}
-            </button>
-          );
-        })}
-      </div>
-
       {globalError && (
         <div className="package-global-error" role="alert">
           {globalError}
         </div>
       )}
-      <div className="package-sections">
-        {activeWorkspace ? renderWorkspace(activeWorkspace) : null}
-      </div>
+
+      {activeWorkspace ? renderWorkspace(activeWorkspace) : null}
     </div>
   );
 };

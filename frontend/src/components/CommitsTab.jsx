@@ -19,6 +19,7 @@ const CommitsTab = ({
   autofillRequestId = null,
   onConsumeAutofillRequest = null,
   onRequestTestsTab = null,
+  registerCommitsActions = null,
   testApiRef = null,
   testInitialState = null
 }) => {
@@ -89,7 +90,9 @@ const CommitsTab = ({
     && (isCssOnlyStaged || (branchIsProven && testsPassed))
   );
 
-  const testsSatisfiedForMerge = Boolean(testsPassed || testsRequired === false);
+  // We treat "proven" (ready-for-merge) as the source of truth that a passing test
+  // run has been recorded for this branch. A passing status alone is not sufficient.
+  const testsSatisfiedForMerge = Boolean(testsRequired === false || (branchIsProven && testsPassed));
 
   const branchReadyToMerge = Boolean(
     activeBranchName
@@ -160,10 +163,10 @@ const CommitsTab = ({
     && hasStagedFiles
     && testsRequired !== false
     && !isCssOnlyStaged
-    && (!testsStatus || testsStatus === 'pending')
+    && (!branchIsProven || !testsPassed || testsStatus === 'pending')
   );
 
-  const shouldShowGateBanners = Boolean(!shouldShowTestingCta && !shouldShowCommitComposer);
+  const shouldShowGateBanners = Boolean(!branchReadyToMerge && !shouldShowTestingCta && !shouldShowCommitComposer);
 
   const handleStartTesting = useCallback(() => {
     if (typeof onRequestTestsTab !== 'function') {
@@ -518,6 +521,23 @@ const CommitsTab = ({
   }, [fetchCommits]);
 
   useEffect(() => {
+    if (typeof registerCommitsActions !== 'function') {
+      return undefined;
+    }
+
+    const cleanup = registerCommitsActions({
+      refreshCommits: fetchCommits,
+      isDisabled: !projectId
+    });
+
+    return () => {
+      if (typeof cleanup === 'function') {
+        cleanup();
+      }
+    };
+  }, [fetchCommits, projectId, registerCommitsActions]);
+
+  useEffect(() => {
     if (!statusMessage) {
       return;
     }
@@ -725,7 +745,6 @@ const CommitsTab = ({
       {!loading && !error && (
         <div className="commits-layout">
           <CommitListPanel
-            projectName={project?.name}
             projectId={projectId}
             commits={commits}
             branchReadyToCommit={branchReadyToCommit}
@@ -737,7 +756,6 @@ const CommitsTab = ({
             squashInFlight={squashInFlight}
             squashError={squashError}
             selectedCommitSha={selectedCommitSha}
-            onRefresh={fetchCommits}
             onSelectPending={handleSelectPending}
             onSelectCommit={handleSelectCommit}
             onToggleSquashSelection={toggleSquashSelection}
@@ -761,6 +779,7 @@ const CommitsTab = ({
             mergeInFlight={mergeInFlight}
             commitInFlight={commitInFlight}
             shouldShowTestingCta={shouldShowTestingCta}
+            testsStatus={testsStatus}
             onStartTesting={handleStartTesting}
             hideCommitDetails={shouldShowTestingCta}
             hasStagedFiles={hasStagedFiles}

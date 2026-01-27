@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
+const isWindows = process.platform === 'win32'
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -8,7 +10,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.js'],
     css: true,
-    pool: 'threads',
+    pool: isWindows ? 'forks' : 'threads',
     onConsoleLog(log, type) {
       if (process.env.VITE_VERBOSE_TEST_LOGS === 'true') {
         return
