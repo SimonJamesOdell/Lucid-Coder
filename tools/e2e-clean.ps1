@@ -26,14 +26,14 @@ foreach ($port in $Ports) {
     continue
   }
 
-  foreach ($pid in $pids) {
+  foreach ($processId in $pids) {
     try {
-      $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+      $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
       $name = if ($proc) { $proc.ProcessName } else { 'unknown' }
-      Write-Host "[e2e:clean] Port ${port}: stopping PID ${pid} ($name)"
-      Stop-Process -Id $pid -Force -ErrorAction Stop
+      Write-Host "[e2e:clean] Port ${port}: stopping PID ${processId} ($name)"
+      Stop-Process -Id $processId -Force -ErrorAction Stop
     } catch {
-      Write-Warning "[e2e:clean] Port ${port}: failed to stop PID ${pid}: $($_.Exception.Message)"
+      Write-Warning "[e2e:clean] Port ${port}: failed to stop PID ${processId}: $($_.Exception.Message)"
       throw
     }
   }

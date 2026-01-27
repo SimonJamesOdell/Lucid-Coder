@@ -29,6 +29,9 @@ npm run release:check
 npm test
 npm run e2e
 
+# Single-command local release gate
+npm run release:gate
+
 # Run tests via npm scripts from repo root
 npm test
 npm run test:frontend
