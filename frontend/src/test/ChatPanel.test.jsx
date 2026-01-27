@@ -16,12 +16,6 @@ vi.mock('../services/goalAutomationService', () => ({
   processGoals: vi.fn()
 }));
 vi.mock('socket.io-client');
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
 vi.mock('../components/AutopilotTimeline.jsx', () => ({
   default: ({ events }) => (
     <div data-testid="autopilot-timeline">
@@ -1237,7 +1231,8 @@ describe('ChatPanel', () => {
       render(<ChatPanel width={320} side="left" />);
 
       const instance = ChatPanel.__testHooks?.getLatestInstance?.();
-      expect(instance?.messagesContainerRef).toBeDefined();
+      expect(instance?.messagesContainerRef).toEqual(expect.any(Object));
+      expect(instance?.messagesContainerRef?.current).toBeDefined();
       instance.messagesContainerRef.current = null;
 
       await userEvent.type(screen.getByTestId('chat-input'), 'Trigger effect');
@@ -1254,7 +1249,8 @@ describe('ChatPanel', () => {
       render(<ChatPanel width={320} side="left" />);
 
       const instance = ChatPanel.__testHooks?.getLatestInstance?.();
-      expect(instance?.messagesRef).toBeDefined();
+      expect(instance?.messagesRef).toEqual(expect.any(Object));
+      expect(instance?.messagesRef?.current).toBeDefined();
       instance.messagesRef.current = null;
 
       await userEvent.type(screen.getByTestId('chat-input'), 'Hello');
@@ -1272,7 +1268,8 @@ describe('ChatPanel', () => {
       render(<ChatPanel width={320} side="left" />);
 
       const instance = ChatPanel.__testHooks?.getLatestInstance?.();
-      expect(instance?.messagesContainerRef).toBeDefined();
+      expect(instance?.messagesContainerRef).toEqual(expect.any(Object));
+      expect(instance?.messagesContainerRef?.current).toBeDefined();
 
       instance.messagesContainerRef.current = null;
 

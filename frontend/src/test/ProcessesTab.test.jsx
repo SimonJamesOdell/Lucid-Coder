@@ -473,8 +473,8 @@ describe('process helper utils', () => {
   test('computeProcessSnapshot returns data only when ids align', () => {
     const info = buildProcessInfo();
     const snapshot = computeProcessSnapshot(mockProject.id, info);
-    expect(snapshot.processes.frontend).toBeTruthy();
-    expect(snapshot.ports).toBeTruthy();
+    expect(snapshot.processes.frontend).toEqual(expect.any(Object));
+    expect(snapshot.ports).toEqual(expect.any(Object));
 
     const emptySnapshot = computeProcessSnapshot('other-project', info);
     expect(emptySnapshot.processes.frontend).toBeNull();

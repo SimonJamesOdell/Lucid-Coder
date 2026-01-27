@@ -10,7 +10,6 @@ import {
   __testOnly
 } from './goalAutomationService';
 
-vi.mock('axios');
 vi.mock('../utils/goalsApi');
 
 describe('goalAutomationService', () => {

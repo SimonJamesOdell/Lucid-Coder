@@ -78,6 +78,7 @@ vi.mock('./NewBranchModal', () => ({
 import BranchTabRoot from './BranchTabRoot';
 import useBranchTabState from './useBranchTabState';
 import useToolbarActions from './useToolbarActions';
+import axios from 'axios';
 
 const buildBranchState = (overrides = {}) => ({
   loading: false,
@@ -134,6 +135,8 @@ describe('BranchTabRoot', () => {
     useToolbarActions.mockImplementation((state) => {
       latestToolbarState = state;
     });
+
+    axios.get.mockResolvedValue({ data: { files: [] } });
   });
 
   const renderComponent = (props = {}) => (

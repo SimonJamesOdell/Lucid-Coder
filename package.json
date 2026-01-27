@@ -1,20 +1,21 @@
 {
   "name": "lucidcoder-fullstack",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "A fullstack React + Vite / Node.js + Express application",
   "scripts": {
-    "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "install-all": "npm install && npm --prefix backend install && npm --prefix frontend install",
     "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
-    "frontend": "cd frontend && npm run start",
-    "backend": "cd backend && npm run start",
+    "frontend": "npm --prefix frontend run start",
+    "backend": "npm --prefix backend run start",
+    "test": "npm run test:frontend && npm run test:backend",
     "test:e2e": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\run-tests.ps1",
     "coverage:e2e": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\coverage-report.ps1",
-    "test:backend": "cd backend && npm test",
-    "test:frontend": "cd frontend && npm test",
-    "coverage:backend": "cd backend && npm run test:coverage",
-    "coverage:frontend": "cd frontend && npm run test:coverage",
-    "build": "cd frontend && npm run build",
-    "start": "cd backend && npm start"
+    "test:backend": "npm --prefix backend test",
+    "test:frontend": "npm --prefix frontend test",
+    "coverage:backend": "npm --prefix backend run test:coverage",
+    "coverage:frontend": "npm --prefix frontend run test:coverage",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix backend start"
   },
   "devDependencies": {
     "baseline-browser-mapping": "^2.9.17",

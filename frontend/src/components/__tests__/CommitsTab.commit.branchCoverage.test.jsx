@@ -3,34 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act, waitFor } from '@testing-library/react';
 import { AppStateProvider, __appStateTestHelpers } from '../../context/AppStateContext.jsx';
 import CommitsTab from '../CommitsTab.jsx';
-
-// Mock axios to avoid real network calls
-vi.mock('axios', () => {
-  return {
-    default: {
-      get: vi.fn(async (url) => {
-        // Initial commits fetch
-        return { data: { success: true, commits: [], overview: null } };
-      }),
-      post: vi.fn(async (url, payload) => {
-        // Commit endpoint
-        if (/\/commit$/.test(url)) {
-          return {
-            data: {
-              success: true,
-              overview: {
-                branches: [],
-                current: 'feature/test',
-                workingBranches: []
-              }
-            }
-          };
-        }
-        return { data: { success: true } };
-      })
-    }
-  };
-});
+import axios from 'axios';
 
 // Mock useCommitComposer to force getCommitMessageForBranch to return a non-string
 vi.mock('../branch-tab/useCommitComposer', async () => {
@@ -55,7 +28,25 @@ vi.mock('../branch-tab/useCommitComposer', async () => {
 
 describe('CommitsTab commit message branch coverage', () => {
   beforeEach(() => {
-    // Reset helpers if needed
+    axios.get.mockImplementation(async () => ({
+      data: { success: true, commits: [], overview: null }
+    }));
+
+    axios.post.mockImplementation(async (url) => {
+      if (/\/commit$/.test(url)) {
+        return {
+          data: {
+            success: true,
+            overview: {
+              branches: [],
+              current: 'feature/test',
+              workingBranches: []
+            }
+          }
+        };
+      }
+      return { data: { success: true } };
+    });
   });
 
   it('handles commit with non-string commit message (covers typeof false branch)', async () => {
@@ -90,12 +81,10 @@ describe('CommitsTab commit message branch coverage', () => {
     // Wait for base UI to render
     await findByTestId('commits-tab-panel');
 
-    const axios = (await import('axios')).default;
-
     // Call commit via test API
     // Wait until the component exposes its test API
     await waitFor(() => {
-      expect(apiRef.current).toBeTruthy();
+      expect(apiRef.current?.handleCommitStagedChanges).toBeTypeOf('function');
     });
 
     await act(async () => {
@@ -118,8 +107,6 @@ describe('CommitsTab commit message branch coverage', () => {
         <CommitsTab project={project} testApiRef={apiRef} />
       </AppStateProvider>
     );
-
-    const axios = (await import('axios')).default;
 
     axios.get.mockImplementation(async (url) => {
       if (/\/api\/projects\/1\/commits\/abcdef123$/.test(url)) {
@@ -177,7 +164,7 @@ describe('CommitsTab commit message branch coverage', () => {
     await findByTestId('commits-tab-panel');
 
     await waitFor(() => {
-      expect(apiRef.current).toBeTruthy();
+      expect(apiRef.current?.handleCommitStagedChanges).toBeTypeOf('function');
     });
 
     await act(async () => {

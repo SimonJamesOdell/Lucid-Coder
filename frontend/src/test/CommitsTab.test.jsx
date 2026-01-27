@@ -12,13 +12,6 @@ let workspaceChangesValue = {};
 let syncBranchOverviewValue = vi.fn();
 let isLLMConfiguredValue = false;
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
-
 vi.mock('../context/AppStateContext', () => ({
   useAppState: () => ({
     requestEditorFocus: requestEditorFocusValue,
@@ -643,19 +636,27 @@ describe('CommitsTab', () => {
   });
 
   test('does not fetch commits when no project is provided', async () => {
-    await renderCommitsTab({ project: null }, { skipFetchWait: true });
+    const registerCommitsActions = vi.fn();
+    await renderCommitsTab({ project: null, registerCommitsActions }, { skipFetchWait: true });
 
     expect(axios.get).not.toHaveBeenCalled();
     expect(screen.getByTestId('commits-empty')).toBeInTheDocument();
-    expect(screen.getByTestId('commits-refresh')).toBeDisabled();
+    expect(registerCommitsActions).toHaveBeenCalledWith(expect.objectContaining({
+      isDisabled: true,
+      refreshCommits: expect.any(Function)
+    }));
   });
 
   test('treats projects without an id as not selected', async () => {
-    await renderCommitsTab({ project: { name: 'Untitled project' } }, { skipFetchWait: true });
+    const registerCommitsActions = vi.fn();
+    await renderCommitsTab({ project: { name: 'Untitled project' }, registerCommitsActions }, { skipFetchWait: true });
 
     expect(axios.get).not.toHaveBeenCalled();
     expect(screen.getByTestId('commits-empty')).toBeInTheDocument();
-    expect(screen.getByTestId('commits-refresh')).toBeDisabled();
+    expect(registerCommitsActions).toHaveBeenCalledWith(expect.objectContaining({
+      isDisabled: true,
+      refreshCommits: expect.any(Function)
+    }));
   });
 
   test('surfaces API error copy when commits response is not successful', async () => {
@@ -726,6 +727,13 @@ describe('CommitsTab', () => {
   });
 
   test('keeps selected commit when refreshed with an unchanged entry', async () => {
+    const registerCommitsActions = vi.fn();
+    let refreshCommits;
+    registerCommitsActions.mockImplementation((actions) => {
+      refreshCommits = actions?.refreshCommits;
+      return undefined;
+    });
+
     axios.get
       .mockResolvedValueOnce({ data: { success: true, commits: baseCommits } })
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } })
@@ -733,12 +741,15 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commits: [...baseCommits].reverse() } });
 
     const user = userEvent.setup();
-    await renderCommitsTab();
+    await renderCommitsTab({ registerCommitsActions });
 
     await user.click(screen.getByTestId('commit-abc1234'));
     await waitFor(() => expect(screen.getByTestId('commit-abc1234')).toHaveClass('selected'));
 
-    await user.click(screen.getByTestId('commits-refresh'));
+    expect(typeof refreshCommits).toBe('function');
+    await act(async () => {
+      await refreshCommits();
+    });
     await waitFor(() => expect(axios.get).toHaveBeenCalledTimes(4));
     expect(screen.getByTestId('commit-abc1234')).toHaveClass('selected');
   });
@@ -772,7 +783,7 @@ describe('CommitsTab', () => {
 
     const user = userEvent.setup();
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSelectCommit).toBeTypeOf('function'));
 
     await user.click(screen.getByTestId('commit-abc1234'));
     await waitFor(() => expect(screen.getByTestId('commit-abc1234')).toHaveClass('selected'));
@@ -791,7 +802,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.loadCommitDetails).toBeTypeOf('function'));
     await waitFor(() => expect(axios.get).toHaveBeenCalledTimes(2));
     await screen.findByTestId('commit-files-list');
 
@@ -811,7 +822,7 @@ describe('CommitsTab', () => {
       .mockRejectedValueOnce(detailError);
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.loadCommitDetails).toBeTypeOf('function'));
     await act(async () => {
       await testApiRef.current.loadCommitDetails('missing-sha');
     });
@@ -957,7 +968,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef, testInitialState: { revertingSha: baseCommits[0].sha } });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleRevertCommit).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleRevertCommit(baseCommits[0].sha);
@@ -973,7 +984,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleRevertCommit).toBeTypeOf('function'));
     await waitFor(() => expect(screen.getByTestId('commit-abc1234')).toBeInTheDocument());
 
     await act(async () => {
@@ -1014,7 +1025,7 @@ describe('CommitsTab', () => {
     axios.post.mockResolvedValueOnce({ data: { success: true } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleRevertCommit).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleRevertCommit(baseCommits[0].sha);
@@ -1033,7 +1044,7 @@ describe('CommitsTab', () => {
     axios.post.mockResolvedValueOnce({ data: { success: false } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleRevertCommit).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleRevertCommit(baseCommits[0].sha);
@@ -1053,7 +1064,7 @@ describe('CommitsTab', () => {
     axios.post.mockRejectedValueOnce(revertError);
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleRevertCommit).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleRevertCommit(baseCommits[0].sha);
@@ -1071,7 +1082,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleOpenFileFromCommit).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.handleOpenFileFromCommit('');
@@ -1106,7 +1117,7 @@ describe('CommitsTab', () => {
   test('handleCommitStagedChanges guard returns when project id is missing', async () => {
     const testApiRef = { current: null };
     await renderCommitsTab({ project: { name: 'No id project' } }, { testApiRef, skipFetchWait: true });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleCommitStagedChanges).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleCommitStagedChanges();
@@ -1125,7 +1136,7 @@ describe('CommitsTab', () => {
     axios.get.mockResolvedValueOnce({ data: { success: true, commits: [] } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleCommitStagedChanges).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleCommitStagedChanges();
@@ -1147,7 +1158,7 @@ describe('CommitsTab', () => {
     axios.get.mockResolvedValueOnce({ data: { success: true, commits: [] } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleCommitStagedChanges).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleCommitStagedChanges();
@@ -1728,9 +1739,9 @@ describe('CommitsTab', () => {
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-login',
-        status: 'ready-for-merge',
-        lastTestStatus: 'passed',
-        testsRequired: true,
+        status: 'active',
+        lastTestStatus: null,
+        testsRequired: false,
         mergeBlockedReason: null,
         lastTestSummary: {
           coverage: {
@@ -1742,7 +1753,7 @@ describe('CommitsTab', () => {
             }
           }
         },
-        stagedFiles: []
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
       }
     };
 
@@ -1759,18 +1770,18 @@ describe('CommitsTab', () => {
     await renderCommitsTab();
 
     expect(await screen.findByTestId('commit-gate-status')).toBeInTheDocument();
-    expect(screen.getByTestId('commit-gate-tests')).toHaveTextContent('Tests: Passed');
+    expect(screen.getByTestId('commit-gate-tests')).toHaveTextContent('Tests: Optional');
     expect(screen.getByTestId('commit-gate-coverage')).toHaveTextContent('Coverage: 95% / 90%');
-    expect(screen.getByTestId('commit-gate-merge')).toHaveTextContent('Merge: Allowed');
+    expect(screen.getByTestId('commit-gate-merge')).toHaveTextContent('Merge: Blocked (Commit staged changes before merging)');
   });
 
   test('gate status coverage label shows Unknown when pct is missing', async () => {
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-login',
-        status: 'ready-for-merge',
-        lastTestStatus: 'passed',
-        testsRequired: true,
+        status: 'active',
+        lastTestStatus: null,
+        testsRequired: false,
         mergeBlockedReason: null,
         lastTestSummary: {
           coverage: {
@@ -1782,7 +1793,7 @@ describe('CommitsTab', () => {
             }
           }
         },
-        stagedFiles: []
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
       }
     };
 
@@ -1805,9 +1816,9 @@ describe('CommitsTab', () => {
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-login',
-        status: 'ready-for-merge',
-        lastTestStatus: 'passed',
-        testsRequired: true,
+        status: 'active',
+        lastTestStatus: null,
+        testsRequired: false,
         mergeBlockedReason: null,
         lastTestSummary: {
           coverage: {
@@ -1819,7 +1830,7 @@ describe('CommitsTab', () => {
             }
           }
         },
-        stagedFiles: []
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
       }
     };
 
@@ -1846,7 +1857,7 @@ describe('CommitsTab', () => {
         lastTestStatus: 'passed',
         testsRequired: true,
         mergeBlockedReason: null,
-        stagedFiles: []
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
       }
     };
 
@@ -1862,6 +1873,11 @@ describe('CommitsTab', () => {
 
     await renderCommitsTab();
 
+    // When a branch is ready-to-commit, CommitsTab selects the pending commit by default.
+    // Select a real commit to exit the composer state so gate banners can render.
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('commit-abc1234'));
+
     expect(await screen.findByTestId('commit-gate-coverage')).toHaveTextContent('Coverage: Unknown');
   });
 
@@ -1869,11 +1885,11 @@ describe('CommitsTab', () => {
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-login',
-        status: 'ready-for-merge',
+        status: 'active',
         lastTestStatus: null,
         testsRequired: false,
         mergeBlockedReason: null,
-        stagedFiles: []
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
       }
     };
 
@@ -1892,7 +1908,7 @@ describe('CommitsTab', () => {
     expect(await screen.findByTestId('commit-gate-coverage')).toHaveTextContent('Coverage: Optional');
   });
 
-  test('gate status tests label shows Failed when the last run failed', async () => {
+  test('shows testing CTA when the last run failed', async () => {
     workingBranchesValue = {
       [mockProject.id]: {
         name: 'feature-tests-failed',
@@ -1915,7 +1931,8 @@ describe('CommitsTab', () => {
 
     await renderCommitsTab();
 
-    expect(await screen.findByTestId('commit-gate-tests')).toHaveTextContent('Tests: Failed');
+    expect(await screen.findByTestId('commit-tests-required')).toBeInTheDocument();
+    expect(screen.queryByTestId('commit-gate-status')).toBeNull();
   });
 
   test('shows a single testing CTA when no test results are available', async () => {
@@ -2051,11 +2068,11 @@ describe('CommitsTab', () => {
       workingBranchesValue = {
         [mockProject.id]: {
           name: 'feature-missing-blocker',
-          status: 'needs-fix',
-          lastTestStatus: 'failed',
+          status: 'ready-for-merge',
+          lastTestStatus: 'passed',
           testsRequired: true,
           mergeBlockedReason: null,
-          stagedFiles: [{ path: 'src/components/Nav.jsx', source: 'editor', timestamp: '2025-01-02T12:00:00.000Z' }]
+          stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T12:00:00.000Z' }]
         }
       };
 
@@ -2071,6 +2088,9 @@ describe('CommitsTab', () => {
 
       await renderCommitsTab();
 
+      const user = userEvent.setup();
+      await user.click(await screen.findByTestId('commit-abc1234'));
+
       expect(await screen.findByTestId('commit-gate-merge')).toHaveTextContent('Merge: Blocked');
       expect(screen.queryByTestId('commit-merge-blocked')).not.toBeInTheDocument();
     } finally {
@@ -2081,7 +2101,7 @@ describe('CommitsTab', () => {
   test('requestSquashSelectedCommits exits when project id is missing via test API', async () => {
     const testApiRef = { current: null };
     await renderCommitsTab({ project: { name: 'No project id' } }, { testApiRef, skipFetchWait: true });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.requestSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.requestSquashSelectedCommits();
@@ -2099,7 +2119,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.requestSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.toggleSquashSelection(baseCommits[0].sha);
@@ -2121,7 +2141,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.toggleSquashSelection).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.toggleSquashSelection(null);
@@ -2139,7 +2159,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.toggleSquashSelection).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.toggleSquashSelection(baseCommits[0].sha);
@@ -2229,7 +2249,7 @@ describe('CommitsTab', () => {
     });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleSquashSelectedCommits({
@@ -2260,7 +2280,7 @@ describe('CommitsTab', () => {
     });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleSquashSelectedCommits({
@@ -2285,7 +2305,7 @@ describe('CommitsTab', () => {
     axios.post.mockRejectedValueOnce(err);
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleSquashSelectedCommits({
@@ -2308,7 +2328,7 @@ describe('CommitsTab', () => {
     axios.post.mockRejectedValueOnce(new Error('Network down'));
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleSquashSelectedCommits({
@@ -2324,7 +2344,7 @@ describe('CommitsTab', () => {
   test('handleSquashSelectedCommits exits when project id is missing via test API', async () => {
     const testApiRef = { current: null };
     await renderCommitsTab({ project: { name: 'No project id' } }, { testApiRef, skipFetchWait: true });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleSquashSelectedCommits({ olderSha: 'older', newerSha: 'newer' });
@@ -2341,7 +2361,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.clearSquashSelection();
@@ -2362,7 +2382,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.requestSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.clearSquashSelection();
@@ -2386,7 +2406,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.applyCommits).toBeTypeOf('function'));
 
     const weirdCommit = {
       ...baseCommits[0],
@@ -2479,7 +2499,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.requestSquashSelectedCommits).toBeTypeOf('function'));
     await screen.findByTestId('commit-def9876');
 
     await act(async () => {
@@ -2508,7 +2528,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.applyCommits).toBeTypeOf('function'));
     await screen.findByTestId('commit-def9876');
 
     const commitsWithBlankShortSha = baseCommits.map((commit) => ({
@@ -2546,7 +2566,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.openConfirmModal).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.openConfirmModal({ title: '', message: '', onConfirm: 'nope' });
@@ -2565,7 +2585,7 @@ describe('CommitsTab', () => {
     axios.post.mockResolvedValueOnce({ data: { success: true, squashed: { newSha: '' } } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSquashSelectedCommits).toBeTypeOf('function'));
 
     await act(async () => {
       await testApiRef.current.handleSquashSelectedCommits({
@@ -2621,7 +2641,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: false } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.handleSelectCommit).toBeTypeOf('function'));
     await screen.findByTestId('commit-def9876');
 
     await act(async () => {
@@ -2638,7 +2658,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.openConfirmModal).toBeTypeOf('function'));
 
     const onConfirm = vi.fn();
 
@@ -2660,7 +2680,7 @@ describe('CommitsTab', () => {
   test('requestRevertCommit exits when project id is missing via test API', async () => {
     const testApiRef = { current: null };
     await renderCommitsTab({ project: { name: 'No project id' } }, { testApiRef, skipFetchWait: true });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.requestRevertCommit).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.requestRevertCommit('some-sha');
@@ -2677,7 +2697,7 @@ describe('CommitsTab', () => {
       .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
 
     await renderCommitsTab({}, { testApiRef });
-    await waitFor(() => expect(testApiRef.current).toBeTruthy());
+    await waitFor(() => expect(testApiRef.current?.requestRevertCommit).toBeTypeOf('function'));
 
     await act(async () => {
       testApiRef.current.requestRevertCommit(baseCommits[1].sha);

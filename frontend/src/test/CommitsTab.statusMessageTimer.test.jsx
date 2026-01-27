@@ -9,13 +9,6 @@ let syncBranchOverviewValue = vi.fn();
 
 const project = { id: 'project-status-message', name: 'Status Message Project' };
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn()
-  }
-}));
-
 vi.mock('../context/AppStateContext', () => ({
   useAppState: () => ({
     requestEditorFocus: vi.fn(),

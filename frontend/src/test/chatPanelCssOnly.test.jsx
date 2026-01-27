@@ -2,12 +2,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import axios from 'axios';
 import { resolveWorkingBranchSnapshot, shouldSkipAutomationTests } from '../components/chatPanelCssOnly';
 
-vi.mock('axios', () => ({
-  default: {
-    get: vi.fn()
-  }
-}));
-
 describe('chatPanelCssOnly helpers', () => {
   beforeEach(() => {
     axios.get.mockReset();

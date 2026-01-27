@@ -23,7 +23,7 @@ vi.mock('socket.io-client', () => ({
     on: vi.fn((event, handler) => {
       // Simulate immediate connection
       if (event === 'connect') {
-        setTimeout(() => handler(), 0);
+        handler();
       }
     }),
     off: vi.fn(),
@@ -1123,7 +1123,7 @@ describe('ChatPanel - Autopilot Features', () => {
 
       await act(async () => {
         const result = await autopilotMessage?.('Focus on CSS coverage');
-        expect(result).toBeTruthy();
+        expect(result).toEqual(expect.any(Object));
       });
 
       const statusNote = await screen.findByTestId('autopilot-status-note');

@@ -19,8 +19,6 @@ import {
   agentRequestStream
 } from '../utils/goalsApi.js';
 
-vi.mock('axios');
-
 describe('goalsApi', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -233,7 +231,6 @@ describe('goalsApi', () => {
   });
 
   it('agentRequestStream emits chunk/done/error events and parses event names', async () => {
-    const originalFetch = global.fetch;
     const encoder = new TextEncoder();
     const chunks = [
       'event: chunk\n',
@@ -251,23 +248,19 @@ describe('goalsApi', () => {
       }
     });
 
-    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: stream });
+    fetch.mockResolvedValue({ ok: true, status: 200, body: stream });
 
     const receivedChunks = [];
     const completed = [];
     const errors = [];
 
-    try {
-      await agentRequestStream({
-        projectId: 'proj-1',
-        prompt: 'Hello',
-        onChunk: (text) => receivedChunks.push(text),
-        onComplete: (result) => completed.push(result),
-        onError: (message) => errors.push(message)
-      });
-    } finally {
-      global.fetch = originalFetch;
-    }
+    await agentRequestStream({
+      projectId: 'proj-1',
+      prompt: 'Hello',
+      onChunk: (text) => receivedChunks.push(text),
+      onComplete: (result) => completed.push(result),
+      onError: (message) => errors.push(message)
+    });
 
     expect(receivedChunks).toEqual(['Hello']);
     expect(completed).toEqual([{ kind: 'question' }]);

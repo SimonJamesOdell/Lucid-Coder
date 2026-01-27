@@ -27,7 +27,8 @@ const setupFetchMock = ({
   frontendResponse,
   backendResponse
 } = {}) => {
-  const mock = vi.fn((url) => {
+  fetch.mockReset();
+  fetch.mockImplementation((url) => {
     if (url.includes('frontend/package.json')) {
       if (typeof frontendResponse === 'function') {
         return frontendResponse();
@@ -45,8 +46,7 @@ const setupFetchMock = ({
       json: async () => ({ success: false })
     });
   });
-  global.fetch = mock;
-  return mock;
+  return fetch;
 };
 
 const getReactOnClick = (element) => {
@@ -55,7 +55,6 @@ const getReactOnClick = (element) => {
 };
 
 describe('PackageTab', () => {
-  const originalFetch = global.fetch;
   const frontendManifest = {
     name: 'frontend-app',
     dependencies: { react: '^18.2.0' },
@@ -73,9 +72,17 @@ describe('PackageTab', () => {
     fetchMock = setupFetchMock({ frontend: frontendManifest, backend: backendManifest });
   });
 
-  afterEach(() => {
-    global.fetch = originalFetch;
-  });
+  const getWorkspacePanel = async (workspaceKey) => {
+    return screen.findByTestId(`package-workspace-panel-${workspaceKey}`);
+  };
+
+  const openAddPackageForm = async (workspaceKey, user) => {
+    const panel = await getWorkspacePanel(workspaceKey);
+    const openButton = within(panel).getByTestId(`package-add-open-${workspaceKey}`);
+    await waitFor(() => expect(openButton).toBeEnabled());
+    await user.click(openButton);
+    return screen.findByTestId(`package-form-${workspaceKey}`);
+  };
 
   test('renders dependency information for each workspace', async () => {
     useAppState.mockReturnValue(createAppState());
@@ -116,9 +123,7 @@ describe('PackageTab', () => {
     render(<PackageTab project={{ id: 99, name: 'Packages' }} />);
     const user = userEvent.setup();
 
-    await waitFor(() => expect(screen.getByTestId('package-form-frontend')).toBeInTheDocument());
-
-    const frontendForm = screen.getByTestId('package-form-frontend');
+    const frontendForm = await openAddPackageForm('frontend', user);
     const nameInput = within(frontendForm).getByPlaceholderText('e.g. react');
     const versionInput = within(frontendForm).getByPlaceholderText('latest');
 
@@ -139,6 +144,112 @@ describe('PackageTab', () => {
         dev: true
       }
     });
+  });
+
+  test('focuses add-package name input without requestAnimationFrame and closes on Escape', async () => {
+    const context = createAppState();
+    useAppState.mockReturnValue(context);
+
+    const originalRaf = window.requestAnimationFrame;
+    // Force the fallback focusInput() branch.
+    // eslint-disable-next-line no-undef
+    window.requestAnimationFrame = undefined;
+
+    try {
+      render(<PackageTab project={{ id: 123, name: 'Packages' }} />);
+      const user = userEvent.setup();
+
+      const form = await openAddPackageForm('frontend', user);
+      const nameInput = within(form).getByPlaceholderText('e.g. react');
+
+      await waitFor(() => {
+        expect(document.activeElement).toBe(nameInput);
+        expect(document.body.style.overflow).toBe('hidden');
+      });
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('package-add-modal-frontend')).toBeNull();
+        expect(document.body.style.overflow).toBe('unset');
+      });
+    } finally {
+      window.requestAnimationFrame = originalRaf;
+    }
+  });
+
+  test('closes add-package modal on backdrop click when not busy', async () => {
+    useAppState.mockReturnValue(createAppState());
+    render(<PackageTab project={{ id: 456, name: 'Packages' }} />);
+    const user = userEvent.setup();
+
+    await openAddPackageForm('frontend', user);
+    const backdrop = await screen.findByTestId('package-add-modal-frontend');
+
+    fireEvent.click(backdrop);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('package-add-modal-frontend')).toBeNull();
+    });
+  });
+
+  test('closes add-package modal after a successful add-package job', async () => {
+    const context = createAppState();
+    useAppState.mockReturnValue(context);
+
+    render(<PackageTab project={{ id: 777, name: 'Packages' }} />);
+    const user = userEvent.setup();
+
+    const form = await openAddPackageForm('frontend', user);
+    const nameInput = within(form).getByPlaceholderText('e.g. react');
+    await user.type(nameInput, 'left-pad');
+
+    await user.click(within(form).getByRole('button', { name: 'Add package' }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('package-add-modal-frontend')).toBeNull();
+    });
+
+    const reopenedForm = await openAddPackageForm('frontend', user);
+    expect(within(reopenedForm).getByPlaceholderText('e.g. react')).toHaveValue('');
+    expect(within(reopenedForm).getByPlaceholderText('latest')).toHaveValue('');
+  });
+
+  test('does not reopen add-package modal when it is closed mid-flight (covers modal workspaceKey update else branch)', async () => {
+    const deferred = {};
+    deferred.promise = new Promise((resolve, reject) => {
+      deferred.resolve = resolve;
+      deferred.reject = reject;
+    });
+
+    const context = createAppState({
+      startAutomationJob: vi.fn().mockReturnValue(deferred.promise)
+    });
+    useAppState.mockReturnValue(context);
+
+    render(<PackageTab project={{ id: 888, name: 'Packages' }} />);
+    const user = userEvent.setup();
+
+    const form = await openAddPackageForm('frontend', user);
+    const nameInput = within(form).getByPlaceholderText('e.g. react');
+    await user.type(nameInput, 'mid-flight');
+
+    await user.click(within(form).getByRole('button', { name: 'Add package' }));
+
+    // Switching tabs closes the modal via the activeWorkspaceKey effect.
+    await user.click(screen.getByTestId('package-workspace-tab-backend'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('package-add-modal-frontend')).toBeNull();
+    });
+
+    await act(async () => {
+      deferred.resolve({});
+      await Promise.resolve();
+    });
+
+    // Modal should remain closed after the job settles.
+    expect(screen.queryByTestId('package-add-modal-frontend')).toBeNull();
   });
 
   test('removing a dependency queues remove-package job', async () => {
@@ -199,7 +310,7 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={{ id: 91, name: 'Packages' }} />);
 
-    const frontendForm = await screen.findByTestId('package-form-frontend');
+    const frontendForm = await openAddPackageForm('frontend', user);
     await user.click(within(frontendForm).getByRole('button', { name: 'Add package' }));
 
     expect(context.startAutomationJob).not.toHaveBeenCalled();
@@ -214,8 +325,9 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={{ id: 12, name: 'Packages' }} />);
 
-    const frontendSection = await screen.findByRole('heading', { name: 'Frontend' });
-    const installButton = within(frontendSection.closest('section')).getByRole('button', { name: 'Install dependencies' });
+    const frontendPanel = await getWorkspacePanel('frontend');
+    const installButton = within(frontendPanel).getByRole('button', { name: 'Install dependencies' });
+    await waitFor(() => expect(installButton).toBeEnabled());
     await user.click(installButton);
 
     await waitFor(() => expect(context.startAutomationJob).toHaveBeenCalledWith('frontend:install', { projectId: 12 }));
@@ -229,9 +341,9 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={{ id: 14, name: 'Packages' }} />);
 
-    const frontendHeading = await screen.findByRole('heading', { name: 'Frontend' });
-    const frontendSection = frontendHeading.closest('section');
-    const installButton = within(frontendSection).getByRole('button', { name: 'Install dependencies' });
+    const frontendPanel = await getWorkspacePanel('frontend');
+    const installButton = within(frontendPanel).getByRole('button', { name: 'Install dependencies' });
+    await waitFor(() => expect(installButton).toBeEnabled());
     await user.click(installButton);
 
     await waitFor(() => expect(context.startAutomationJob).toHaveBeenCalledWith('frontend:install', { projectId: 14 }));
@@ -245,9 +357,9 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={{ id: 13, name: 'Packages' }} />);
 
-    const frontendHeading = await screen.findByRole('heading', { name: 'Frontend' });
-    const frontendSection = frontendHeading.closest('section');
-    const installButton = within(frontendSection).getByRole('button', { name: 'Install dependencies' });
+    const frontendPanel = await getWorkspacePanel('frontend');
+    const installButton = within(frontendPanel).getByRole('button', { name: 'Install dependencies' });
+    await waitFor(() => expect(installButton).toBeEnabled());
     await user.click(installButton);
 
     await waitFor(() => expect(context.startAutomationJob).toHaveBeenCalledWith('frontend:install', { projectId: 13 }));
@@ -297,13 +409,13 @@ describe('PackageTab', () => {
     render(<PackageTab project={{ id: 55, name: 'Packages' }} />);
 
     await user.click(screen.getByTestId('package-workspace-tab-backend'));
-    await screen.findByTestId('package-form-backend');
+    await screen.findByTestId('package-empty-backend-dependencies');
 
     expect(screen.getByTestId('package-empty-backend-dependencies')).toHaveTextContent('No dependencies defined');
     expect(screen.getByTestId('package-empty-backend-devDependencies')).toHaveTextContent('No dev dependencies defined');
   });
 
-  test('renders fallback manifest metadata when name is missing but version exists', async () => {
+  test('treats manifest as loaded even when name is missing', async () => {
     fetchMock = setupFetchMock({
       backend: { name: '', version: '2.5.0', dependencies: {}, devDependencies: {} }
     });
@@ -313,9 +425,10 @@ describe('PackageTab', () => {
     render(<PackageTab project={{ id: 56, name: 'Packages' }} />);
 
     await user.click(screen.getByTestId('package-workspace-tab-backend'));
-    const backendHeading = await screen.findByRole('heading', { name: 'Backend' });
-    const backendSection = backendHeading.closest('section');
-    expect(within(backendSection).getByText('Unnamed workspace · v2.5.0')).toBeInTheDocument();
+    const backendPanel = await getWorkspacePanel('backend');
+    const addOpenButton = within(backendPanel).getByTestId('package-add-open-backend');
+    await waitFor(() => expect(addOpenButton).toBeEnabled());
+    expect(within(backendPanel).getByTestId('package-empty-backend-dependencies')).toBeInTheDocument();
   });
 
   test('refresh button reloads manifests for a workspace', async () => {
@@ -327,9 +440,8 @@ describe('PackageTab', () => {
 
     await user.click(screen.getByTestId('package-workspace-tab-backend'));
 
-    const backendHeading = await screen.findByRole('heading', { name: 'Backend' });
-    const backendSection = backendHeading.closest('section');
-    const refreshButton = within(backendSection).getByRole('button', { name: 'Refresh' });
+    const backendPanel = await getWorkspacePanel('backend');
+    const refreshButton = within(backendPanel).getByRole('button', { name: 'Refresh' });
 
     await user.click(refreshButton);
 
@@ -357,11 +469,10 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={null} />);
 
-    const frontendHeading = screen.getByRole('heading', { name: 'Frontend' });
-    const frontendSection = frontendHeading.closest('section');
-    expect(within(frontendSection).getByTestId('package-missing-frontend')).toHaveTextContent('package.json not found');
+    const frontendPanel = await getWorkspacePanel('frontend');
+    expect(within(frontendPanel).getByTestId('package-missing-frontend')).toHaveTextContent('package.json not found');
 
-    const refreshButton = within(frontendSection).getByRole('button', { name: 'Refresh' });
+    const refreshButton = within(frontendPanel).getByRole('button', { name: 'Refresh' });
     await user.click(refreshButton);
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -382,9 +493,8 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={{ id: 111, name: 'Packages' }} forceProjectId={null} />);
 
-    const frontendHeading = await screen.findByRole('heading', { name: 'Frontend' });
-    const frontendSection = frontendHeading.closest('section');
-    const installButton = within(frontendSection).getByRole('button', { name: 'Install dependencies' });
+    const frontendPanel = await getWorkspacePanel('frontend');
+    const installButton = within(frontendPanel).getByRole('button', { name: 'Install dependencies' });
     const handler = getReactOnClick(installButton);
     expect(handler).toBeInstanceOf(Function);
 
@@ -401,7 +511,8 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={{ id: 222, name: 'Packages' }} forceProjectId={null} />);
 
-    const frontendForm = await screen.findByTestId('package-form-frontend');
+    const user = userEvent.setup();
+    const frontendForm = await openAddPackageForm('frontend', user);
     const addButton = within(frontendForm).getByRole('button', { name: 'Add package' });
     const handler = getReactOnClick(addButton);
     expect(handler).toBeInstanceOf(Function);
@@ -471,7 +582,7 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={{ id: 101, name: 'Packages' }} />);
 
-    const frontendForm = await screen.findByTestId('package-form-frontend');
+    const frontendForm = await openAddPackageForm('frontend', user);
     const nameInput = within(frontendForm).getByPlaceholderText('e.g. react');
     await user.clear(nameInput);
     await user.type(nameInput, 'lint-staged');
@@ -496,7 +607,7 @@ describe('PackageTab', () => {
 
     render(<PackageTab project={{ id: 102, name: 'Packages' }} />);
 
-    const frontendForm = await screen.findByTestId('package-form-frontend');
+    const frontendForm = await openAddPackageForm('frontend', user);
     const nameInput = within(frontendForm).getByPlaceholderText('e.g. react');
     await user.clear(nameInput);
     await user.type(nameInput, 'storybook');
@@ -566,9 +677,8 @@ describe('PackageTab', () => {
 
     await user.click(screen.getByTestId('package-workspace-tab-backend'));
 
-    const backendHeading = await screen.findByRole('heading', { name: 'Backend' });
-    const backendSection = backendHeading.closest('section');
-    const loadingRefreshButton = within(backendSection).getByRole('button', { name: 'Refreshing…' });
+    const backendPanel = await getWorkspacePanel('backend');
+    const loadingRefreshButton = within(backendPanel).getByRole('button', { name: 'Refreshing…' });
 
     const initialBackendCalls = fetchMock.mock.calls.filter(([url]) => typeof url === 'string' && url.includes('backend/package.json')).length;
     const handler = getReactOnClick(loadingRefreshButton);
@@ -585,7 +695,7 @@ describe('PackageTab', () => {
       resolveBackend();
     });
 
-    await waitFor(() => within(backendSection).getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => within(backendPanel).getByRole('button', { name: 'Refresh' }));
   });
 
   test('does not register fetchManifest hook when __testHooks is missing', async () => {

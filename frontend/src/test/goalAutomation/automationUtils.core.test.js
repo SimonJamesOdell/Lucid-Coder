@@ -10,12 +10,6 @@ const {
   __automationUtilsTestHooks
 } = automationUtils;
 
-vi.mock('axios', () => ({
-  default: {
-    post: vi.fn()
-  }
-}));
-
 beforeEach(() => {
   axios.post.mockReset();
 });

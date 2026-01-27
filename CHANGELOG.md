@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 (2026-01-27)
+- Consolidated frontend test mocking (axios + fetch) into the shared Vitest setup to reduce redundancy and brittleness.
+- Hardened root npm scripts and testing docs so `npm test` consistently runs frontend + backend suites from repo root.
+- Expanded Branch/Commits UI coverage (committed-files flow, merge gating) and added backend coverage for the branches changed-files endpoint.
+
 ## 0.3.1 (2026-01-26)
 - Extended `run_events` with trace-oriented fields (`correlation_id`, `source`, `level`) and added supporting indexes.
 - Added a paginated/filterable run events endpoint: `/api/projects/:projectId/runs/:runId/events`.
