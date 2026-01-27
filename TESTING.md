@@ -36,6 +36,24 @@ npm run test:backend
 ./coverage-report.ps1
 ```
 
+### Browser E2E (Playwright)
+```powershell
+# One-time: install browser binaries
+npm run e2e:install
+
+# Run E2E smoke tests (starts backend + frontend automatically)
+npm run e2e
+
+# Helpful modes
+npm run e2e:ui
+npm run e2e:headed
+npm run e2e:debug
+```
+
+Notes:
+- E2E uses a dedicated SQLite DB at `backend/e2e-lucidcoder.db` (deleted before each run).
+- If you already have servers running, you can set `E2E_FRONTEND_URL` / `E2E_BACKEND_URL` to reuse them.
+
 ### Individual Test Suites
 
 #### Backend Tests
