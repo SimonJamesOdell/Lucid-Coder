@@ -225,6 +225,18 @@ export function registerProjectProcessRoutes(router) {
         });
       }
 
+      const skipScaffolding =
+        (process.env.E2E_SKIP_SCAFFOLDING === 'true' || process.env.E2E_SKIP_SCAFFOLDING === '1') &&
+        process.env.NODE_ENV !== 'production';
+
+      if (skipScaffolding && !project.frontendPort && !project.backendPort) {
+        return res.json({
+          success: true,
+          message: 'Project selected (E2E skip scaffolding)',
+          processes: null
+        });
+      }
+
       // Check if already running
       const { processes: existingProcesses, state: existingState, launchType: existingLaunchType } = getRunningProcessEntry(id);
       const isExplicitlyRunning = existingProcesses && existingState === 'running' && existingLaunchType !== 'auto';

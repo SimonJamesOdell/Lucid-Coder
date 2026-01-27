@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.5 (2026-01-27)
+- Expanded Playwright E2E coverage with critical journeys (create/import/close/delete project) and more robust bootstrap assertions.
+- Made E2E runs more deterministic (no implicit server reuse; stable selectors).
+- Made E2E project creation fast and reliable via a non-production `E2E_SKIP_SCAFFOLDING` backend mode.
+
 ## 0.3.4 (2026-01-27)
 - Added Playwright-based browser E2E smoke tests with backend+frontend orchestration.
 - Added dedicated E2E SQLite DB reset for reliable clean runs.

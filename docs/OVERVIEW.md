@@ -2,6 +2,9 @@
 
 LucidCoder is a fullstack system for coordinating goal-driven coding workflows. The frontend delivers a React-based experience, while the backend provides REST and Socket.IO APIs for projects, goals, agent orchestration, and test execution.
 
+Roadmap:
+- 0.3.x hardening plan: [ROADMAP_0.3.x.md](ROADMAP_0.3.x.md)
+
 ## System at a glance
 
 - Frontend: React + Vite UI in [frontend](frontend)
