@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6 (2026-01-27)
+- Add GitHub Actions CI for `npm test` + Playwright E2E with artifacts on failure.
+- Add `npm run release:check` to validate version alignment and changelog presence.
+
 ## 0.3.5 (2026-01-27)
 - Expanded Playwright E2E coverage with critical journeys (create/import/close/delete project) and more robust bootstrap assertions.
 - Made E2E runs more deterministic (no implicit server reuse; stable selectors).

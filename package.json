@@ -1,6 +1,6 @@
 {
   "name": "lucidcoder-fullstack",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "A fullstack React + Vite / Node.js + Express application",
   "scripts": {
     "install-all": "npm install && npm --prefix backend install && npm --prefix frontend install",
@@ -15,6 +15,7 @@
     "e2e:ui": "npx playwright test --ui",
     "e2e:headed": "npx playwright test --headed",
     "e2e:debug": "npx playwright test --debug",
+    "release:check": "node tools/release-check.mjs",
     "test:backend": "npm --prefix backend test",
     "test:frontend": "npm --prefix frontend test",
     "coverage:backend": "npm --prefix backend run test:coverage",
