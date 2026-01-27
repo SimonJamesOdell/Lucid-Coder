@@ -1,0 +1,42 @@
+param(
+  [int[]]$Ports = @(3000, 5000)
+)
+
+$ErrorActionPreference = 'Stop'
+
+function Get-ListeningPidsForPort {
+  param([int]$Port)
+
+  try {
+    $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if (-not $connections) {
+      return @()
+    }
+    return $connections | Select-Object -ExpandProperty OwningProcess -Unique
+  } catch {
+    return @()
+  }
+}
+
+foreach ($port in $Ports) {
+  $pids = Get-ListeningPidsForPort -Port $port
+
+  if (-not $pids -or $pids.Count -eq 0) {
+    Write-Host "[e2e:clean] Port ${port}: free"
+    continue
+  }
+
+  foreach ($pid in $pids) {
+    try {
+      $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+      $name = if ($proc) { $proc.ProcessName } else { 'unknown' }
+      Write-Host "[e2e:clean] Port ${port}: stopping PID ${pid} ($name)"
+      Stop-Process -Id $pid -Force -ErrorAction Stop
+    } catch {
+      Write-Warning "[e2e:clean] Port ${port}: failed to stop PID ${pid}: $($_.Exception.Message)"
+      throw
+    }
+  }
+}
+
+Write-Host "[e2e:clean] Done"

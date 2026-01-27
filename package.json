@@ -12,6 +12,8 @@
     "coverage:e2e": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\coverage-report.ps1",
     "e2e:install": "npx playwright install chromium",
     "e2e": "npx playwright test",
+    "e2e:clean": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\tools\\e2e-clean.ps1",
+    "e2e:clean-run": "npm run e2e:clean && npm run e2e",
     "e2e:ui": "npx playwright test --ui",
     "e2e:headed": "npx playwright test --headed",
     "e2e:debug": "npx playwright test --debug",

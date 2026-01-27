@@ -49,6 +49,9 @@ npm run e2e:install
 # Run E2E smoke tests (starts backend + frontend automatically)
 npm run e2e
 
+# If you often hit "port already used" failures, use the clean wrapper
+npm run e2e:clean-run
+
 # Helpful modes
 npm run e2e:ui
 npm run e2e:headed
