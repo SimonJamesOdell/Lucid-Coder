@@ -1,4 +1,7 @@
-# Changelog
+### 0.3.7 (2026-01-28)
+- (Fill in release notes)
+
+ Changelog
 
 ## 0.3.6 (2026-01-27)
 - Add a manual-only GitHub Actions workflow for `npm test` + Playwright E2E (kept local-first by default).
