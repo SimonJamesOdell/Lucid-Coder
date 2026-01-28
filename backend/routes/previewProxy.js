@@ -559,6 +559,21 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       return;
     }
 
+    // Some apps set CSP headers that block inline scripts, which would prevent
+    // the injected bridge/helper from running. Since this HTML is only used
+    // inside the LucidCoder preview iframe, we strip CSP for these responses.
+    for (const key of Object.keys(headers)) {
+      const lower = key.toLowerCase();
+      if (
+        lower === 'content-security-policy' ||
+        lower === 'content-security-policy-report-only' ||
+        lower === 'x-content-security-policy' ||
+        lower === 'x-webkit-csp'
+      ) {
+        delete headers[key];
+      }
+    }
+
     const chunks = [];
     proxyRes.on('data', (chunk) => chunks.push(chunk));
     proxyRes.on('end', () => {

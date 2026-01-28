@@ -1159,6 +1159,37 @@ describe('previewProxy', () => {
     expect(html).toContain('/preview/12');
   });
 
+  test('proxyRes handler strips CSP headers for HTML responses', async () => {
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: null });
+
+    const proxyResHandler = getProxyHandler('proxyRes');
+    expect(typeof proxyResHandler).toBe('function');
+
+    const req = createReq('/preview/12/');
+    req.__lucidcoderPreviewProxy = { previewPrefix: '/preview/12' };
+
+    const res = createRes();
+    const proxyRes = createProxyRes({
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'content-length': '1',
+        'content-security-policy': "default-src 'self'; script-src 'self'",
+        'content-security-policy-report-only': "default-src 'self'"
+      },
+      statusCode: 200
+    });
+
+    proxyResHandler(proxyRes, req, res);
+    proxyRes.emit('data', Buffer.from('<html><head><title>x</title></head><body>ok</body></html>', 'utf8'));
+    proxyRes.emit('end');
+
+    const headers = res.writeHead.mock.calls[0]?.[1];
+    expect(headers).toBeTruthy();
+    expect(headers).not.toHaveProperty('content-security-policy');
+    expect(headers).not.toHaveProperty('content-security-policy-report-only');
+  });
+
   test('proxyRes handler defaults HTML status code when proxy response status is falsy', async () => {
     const { createPreviewProxy } = await import('../routes/previewProxy.js');
     createPreviewProxy({ logger: null });
