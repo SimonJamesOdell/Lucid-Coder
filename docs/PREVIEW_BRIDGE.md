@@ -32,14 +32,12 @@ Payload:
 
 ## Preview helper (0.4.x)
 
-0.4.x introduces a **dev-only** preview helper that is injected into the proxied preview HTML.
-It is **disabled by default** and can be enabled by setting:
-
-- `LUCIDCODER_PREVIEW_HELPER=1`
+0.4.x introduces a preview helper that is injected into the proxied preview HTML.
+It is intended as a mainstream feature.
 
 ### `LUCIDCODER_PREVIEW_HELPER_READY` (iframe → parent)
 
-Sent when the helper initializes (only when enabled).
+Sent when the helper initializes.
 
 Payload:
 

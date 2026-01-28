@@ -591,9 +591,9 @@ describe('previewProxy', () => {
     expect(script).toContain('LUCIDCODER_PREVIEW_BRIDGE_PONG');
   });
 
-  test('buildPreviewBridgeScript includes preview helper hooks when enabled', async () => {
+  test('buildPreviewBridgeScript includes preview helper hooks', async () => {
     const { __testOnly } = await import('../routes/previewProxy.js');
-    const script = __testOnly.buildPreviewBridgeScript({ previewPrefix: '/preview/123', enableHelper: true });
+    const script = __testOnly.buildPreviewBridgeScript({ previewPrefix: '/preview/123' });
     expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU');
     expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_READY');
   });

@@ -333,19 +333,18 @@ const buildSetCookieHeader = (projectId) => {
   return `${COOKIE_NAME}=${value}; Path=/; SameSite=Lax`;
 };
 
-const buildPreviewBridgeScript = ({ previewPrefix, enableHelper = false }) => {
+const buildPreviewBridgeScript = ({ previewPrefix }) => {
   const safePrefix = typeof previewPrefix === 'string' ? previewPrefix : '';
-  const helperEnabled = Boolean(enableHelper);
 
-  return `\n<script>\n(function(){\n  try {\n    var prefix = ${JSON.stringify(safePrefix)};\n    var BRIDGE_VERSION = 1;\n    var HELPER_ENABLED = ${helperEnabled ? 'true' : 'false'};\n\n    var lastHref = '';\n\n    var send = function(type, extra){\n      try {\n        var payload = extra && typeof extra === 'object' ? extra : {};\n        payload.type = type;\n        payload.prefix = prefix;\n        payload.bridgeVersion = BRIDGE_VERSION;\n        window.parent && window.parent.postMessage(payload, '*');\n      } catch (e) {\n        // ignore\n      }\n    };\n\n    var readHref = function(){\n      return window.location && window.location.href ? String(window.location.href) : '';\n    };\n\n    var postNav = function(){\n      var href = readHref();\n      if (!href || href === lastHref) return;\n      lastHref = href;\n      send('LUCIDCODER_PREVIEW_NAV', {\n        href: href,\n        title: (document && typeof document.title === 'string' ? document.title : '')\n      });\n    };\n\n    var postReady = function(){\n      send('LUCIDCODER_PREVIEW_BRIDGE_READY', {\n        href: readHref()\n      });\n    };\n\n    var wrapHistory = function(method){\n      var original = window.history && window.history[method];\n      if (!original) return;\n      window.history[method] = function(){\n        var result = original.apply(this, arguments);\n        postNav();\n        return result;\n      };\n    };\n\n    wrapHistory('pushState');\n    wrapHistory('replaceState');\n    window.addEventListener('popstate', postNav);\n    window.addEventListener('hashchange', postNav);\n\n    window.addEventListener('message', function(event){\n      try {\n        var data = event && event.data;\n        if (!data || typeof data !== 'object') return;\n\n        if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_PING') {\n          send('LUCIDCODER_PREVIEW_BRIDGE_PONG', { nonce: data.nonce || null });\n          postNav();\n          return;\n        }\n\n        if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_GET_LOCATION') {\n          postNav();\n        }\n      } catch (e) {\n        // ignore\n      }\n    });\n\n    if (HELPER_ENABLED) {\n      window.addEventListener('contextmenu', function(event){\n        try {\n          if (!event) return;\n          if (event.shiftKey) return;\n\n          if (typeof event.preventDefault === 'function') event.preventDefault();\n          if (typeof event.stopPropagation === 'function') event.stopPropagation();\n\n          var target = event.target;\n          var tagName = target && typeof target.tagName === 'string' ? target.tagName : '';\n          var id = target && typeof target.id === 'string' ? target.id : '';\n          var className = target && typeof target.className === 'string' ? target.className : '';\n\n          send('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU', {\n            href: readHref(),\n            clientX: typeof event.clientX === 'number' ? event.clientX : 0,\n            clientY: typeof event.clientY === 'number' ? event.clientY : 0,\n            tagName: tagName,\n            id: id,\n            className: className\n          });\n        } catch (e) {\n          // ignore\n        }\n      }, true);\n\n      send('LUCIDCODER_PREVIEW_HELPER_READY', { href: readHref() });\n    }\n\n    // Fall back: poll for safety (covers frameworks that bypass history wrappers).\n    window.setInterval(postNav, 500);\n\n    postReady();\n    postNav();\n  } catch (e) {\n    // ignore\n  }\n})();\n</script>\n`;
+  return `\n<script>\n(function(){\n  try {\n    var prefix = ${JSON.stringify(safePrefix)};\n    var BRIDGE_VERSION = 1;\n\n    var lastHref = '';\n\n    var send = function(type, extra){\n      try {\n        var payload = extra && typeof extra === 'object' ? extra : {};\n        payload.type = type;\n        payload.prefix = prefix;\n        payload.bridgeVersion = BRIDGE_VERSION;\n        window.parent && window.parent.postMessage(payload, '*');\n      } catch (e) {\n        // ignore\n      }\n    };\n\n    var readHref = function(){\n      return window.location && window.location.href ? String(window.location.href) : '';\n    };\n\n    var postNav = function(){\n      var href = readHref();\n      if (!href || href === lastHref) return;\n      lastHref = href;\n      send('LUCIDCODER_PREVIEW_NAV', {\n        href: href,\n        title: (document && typeof document.title === 'string' ? document.title : '')\n      });\n    };\n\n    var postReady = function(){\n      send('LUCIDCODER_PREVIEW_BRIDGE_READY', {\n        href: readHref()\n      });\n    };\n\n    var wrapHistory = function(method){\n      var original = window.history && window.history[method];\n      if (!original) return;\n      window.history[method] = function(){\n        var result = original.apply(this, arguments);\n        postNav();\n        return result;\n      };\n    };\n\n    wrapHistory('pushState');\n    wrapHistory('replaceState');\n    window.addEventListener('popstate', postNav);\n    window.addEventListener('hashchange', postNav);\n\n    window.addEventListener('message', function(event){\n      try {\n        var data = event && event.data;\n        if (!data || typeof data !== 'object') return;\n\n        if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_PING') {\n          send('LUCIDCODER_PREVIEW_BRIDGE_PONG', { nonce: data.nonce || null });\n          postNav();\n          return;\n        }\n\n        if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_GET_LOCATION') {\n          postNav();\n        }\n      } catch (e) {\n        // ignore\n      }\n    });\n\n    window.addEventListener('contextmenu', function(event){\n      try {\n        if (!event) return;\n        if (event.shiftKey) return;\n\n        if (typeof event.preventDefault === 'function') event.preventDefault();\n        if (typeof event.stopPropagation === 'function') event.stopPropagation();\n\n        var target = event.target;\n        var tagName = target && typeof target.tagName === 'string' ? target.tagName : '';\n        var id = target && typeof target.id === 'string' ? target.id : '';\n        var className = target && typeof target.className === 'string' ? target.className : '';\n\n        send('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU', {\n          href: readHref(),\n          clientX: typeof event.clientX === 'number' ? event.clientX : 0,\n          clientY: typeof event.clientY === 'number' ? event.clientY : 0,\n          tagName: tagName,\n          id: id,\n          className: className\n        });\n      } catch (e) {\n        // ignore\n      }\n    }, true);\n\n    send('LUCIDCODER_PREVIEW_HELPER_READY', { href: readHref() });\n\n    // Fall back: poll for safety (covers frameworks that bypass history wrappers).\n    window.setInterval(postNav, 500);\n\n    postReady();\n    postNav();\n  } catch (e) {\n    // ignore\n  }\n})();\n</script>\n`;
 };
 
-const injectPreviewBridge = (html, { previewPrefix, enableHelper = false } = {}) => {
+const injectPreviewBridge = (html, { previewPrefix } = {}) => {
   if (typeof html !== 'string' || !html) {
     return html;
   }
 
-  const script = buildPreviewBridgeScript({ previewPrefix, enableHelper });
+  const script = buildPreviewBridgeScript({ previewPrefix });
 
   const headOpen = html.match(/<head[^>]*>/i);
   if (headOpen && headOpen.index != null) {
@@ -354,14 +353,6 @@ const injectPreviewBridge = (html, { previewPrefix, enableHelper = false } = {})
   }
 
   return `${script}${html}`;
-};
-
-const isPreviewHelperEnabled = () => {
-  const raw = typeof process.env.LUCIDCODER_PREVIEW_HELPER === 'string'
-    ? process.env.LUCIDCODER_PREVIEW_HELPER
-    : '';
-  const normalized = raw.trim().toLowerCase();
-  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 };
 
 const shouldBypassPreviewProxy = (url = '') => {
@@ -574,8 +565,7 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       const bodyBuffer = Buffer.concat(chunks);
       const html = bodyBuffer.toString('utf8');
       const injected = injectPreviewBridge(html, {
-        previewPrefix: context.previewPrefix,
-        enableHelper: isPreviewHelperEnabled()
+        previewPrefix: context.previewPrefix
       });
       const payload = Buffer.from(injected, 'utf8');
 
