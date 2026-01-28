@@ -9,8 +9,28 @@ const fail = (message) => {
 };
 
 const run = (cmd, args, { cwd } = {}) => {
+  const resolvedCwd = cwd || process.cwd();
+
+  // On Windows, executables like npm/yarn are commonly shimmed as .cmd files.
+  // Spawning them directly can throw EINVAL in some environments.
+  // Route those through cmd.exe for robustness.
+  if (process.platform === 'win32' && typeof cmd === 'string' && cmd.toLowerCase().endsWith('.cmd')) {
+    const commandLine = [cmd, ...(args || [])]
+      .map((token) => {
+        const value = String(token);
+        return /[\s"&|<>^]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+      })
+      .join(' ');
+
+    execFileSync('cmd.exe', ['/d', '/s', '/c', commandLine], {
+      cwd: resolvedCwd,
+      stdio: 'inherit'
+    });
+    return;
+  }
+
   execFileSync(cmd, args, {
-    cwd: cwd || process.cwd(),
+    cwd: resolvedCwd,
     stdio: 'inherit'
   });
 };
