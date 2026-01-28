@@ -574,6 +574,8 @@ describe('PreviewTab', () => {
     const processInfo = buildProcessInfo();
     const { previewRef } = renderPreviewTab({ processInfo });
 
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+
     const iframe = screen.getByTestId('preview-iframe');
     const iframeWindow = {};
     Object.defineProperty(iframe, 'contentWindow', {
@@ -585,6 +587,7 @@ describe('PreviewTab', () => {
       window.dispatchEvent(
         new MessageEvent('message', {
           data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/bridge-route' },
+          origin: previewOrigin,
           source: iframeWindow
         })
       );
@@ -594,6 +597,70 @@ describe('PreviewTab', () => {
       expect(screen.getByLabelText('Preview URL')).toHaveValue('http://localhost:5555/bridge-route');
     });
     expect(previewRef.current.__testHooks.getDisplayedUrl()).toBe('http://localhost/bridge-route');
+  });
+
+  test('accepts bridge READY messages and fires onPreviewNavigated', async () => {
+    const processInfo = buildProcessInfo();
+    const onPreviewNavigated = vi.fn();
+    const { previewRef } = renderPreviewTab({ processInfo, onPreviewNavigated });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = {};
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_BRIDGE_READY', href: 'http://localhost/ready-route' },
+          origin: previewOrigin,
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(onPreviewNavigated).toHaveBeenCalledWith(
+        'http://localhost/ready-route',
+        expect.objectContaining({ source: 'message', type: 'LUCIDCODER_PREVIEW_BRIDGE_READY' })
+      );
+    });
+
+    expect(previewRef.current.__testHooks.getDisplayedUrl()).toBe('http://localhost/ready-route');
+  });
+
+  test('ignores preview messages when origin does not match expected backend origin', async () => {
+    const processInfo = buildProcessInfo();
+    const onPreviewNavigated = vi.fn();
+    const { previewRef } = renderPreviewTab({ processInfo, onPreviewNavigated });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = {};
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const before = previewRef.current.__testHooks.getDisplayedUrl();
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/ignored-origin' },
+          origin: 'http://evil.invalid',
+          source: iframeWindow
+        })
+      );
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(previewRef.current.__testHooks.getDisplayedUrl()).toBe(before);
+    expect(onPreviewNavigated).not.toHaveBeenCalled();
   });
 
   test('detects proxy placeholder by title', () => {

@@ -587,6 +587,8 @@ describe('previewProxy', () => {
     const { __testOnly } = await import('../routes/previewProxy.js');
     const script = __testOnly.buildPreviewBridgeScript({ previewPrefix: null });
     expect(script).toContain("var prefix = \"\"");
+    expect(script).toContain('LUCIDCODER_PREVIEW_BRIDGE_READY');
+    expect(script).toContain('LUCIDCODER_PREVIEW_BRIDGE_PONG');
   });
 
   test('shouldBypassPreviewProxy tolerates non-string inputs', async () => {
