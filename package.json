@@ -1,6 +1,6 @@
 {
   "name": "lucidcoder-fullstack",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "A fullstack React + Vite / Node.js + Express application",
   "scripts": {
     "install-all": "npm install && npm --prefix backend install && npm --prefix frontend install",
@@ -12,9 +12,14 @@
     "coverage:e2e": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\coverage-report.ps1",
     "e2e:install": "npx playwright install chromium",
     "e2e": "npx playwright test",
+    "e2e:clean": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\tools\\e2e-clean.ps1",
+    "e2e:clean-run": "npm run e2e:clean && npm run e2e",
     "e2e:ui": "npx playwright test --ui",
     "e2e:headed": "npx playwright test --headed",
     "e2e:debug": "npx playwright test --debug",
+    "release:check": "node tools/release-check.mjs",
+    "release:gate": "npm run release:check && npm test && npm run e2e:clean-run",
+    "release:prep": "node tools/release-prep.mjs",
     "test:backend": "npm --prefix backend test",
     "test:frontend": "npm --prefix frontend test",
     "coverage:backend": "npm --prefix backend run test:coverage",
@@ -24,7 +29,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.0",
-    "baseline-browser-mapping": "^2.9.17",
+    "baseline-browser-mapping": "^2.9.18",
     "concurrently": "^8.2.2"
   },
   "keywords": [

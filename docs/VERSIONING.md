@@ -6,7 +6,8 @@ LucidCoder follows Semantic Versioning.
 
 
 
-0.3.5
+
+0.3.6
 ## Policy
 
 - MAJOR: incompatible API or workflow changes.
@@ -20,3 +21,7 @@ LucidCoder follows Semantic Versioning.
 - Human-readable version in [VERSION](VERSION)
 
 Use the version bumper to keep these in sync.
+
+You can validate version consistency (and that the changelog has an entry) from the repo root:
+
+- `npm run release:check`
