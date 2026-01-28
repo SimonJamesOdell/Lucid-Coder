@@ -1,0 +1,68 @@
+# Preview Bridge Contract (v1)
+
+LucidCoder uses a same-origin preview proxy (`/preview/:projectId/...`) to load a project's dev server inside an iframe.
+Because the iframe origin differs from the LucidCoder UI origin, coordination is done via `postMessage`.
+
+This document describes the minimal bridge contract shipped in **0.3.8** to make future dev-only preview helpers (0.4.x) reliable.
+
+## Messages (iframe → parent)
+
+All messages include:
+
+- `type` (string)
+- `prefix` (string): the `/preview/:projectId` prefix used by the proxy
+- `bridgeVersion` (number): currently `1`
+
+### `LUCIDCODER_PREVIEW_BRIDGE_READY`
+
+Sent when the injected bridge initializes.
+
+Payload:
+
+- `href` (string, optional)
+
+### `LUCIDCODER_PREVIEW_NAV`
+
+Sent whenever the iframe detects a navigation (history, hashchange, popstate, or polling fallback).
+
+Payload:
+
+- `href` (string)
+- `title` (string, optional)
+
+## Messages (parent → iframe)
+
+### `LUCIDCODER_PREVIEW_BRIDGE_PING`
+
+Used to (re)sync after parent/iframe load races.
+
+Payload:
+
+- `nonce` (string, optional)
+
+### `LUCIDCODER_PREVIEW_BRIDGE_PONG` (iframe → parent)
+
+Response to a ping.
+
+Payload:
+
+- `nonce` (string|null)
+
+### `LUCIDCODER_PREVIEW_BRIDGE_GET_LOCATION`
+
+Requests that the iframe emit its current `LUCIDCODER_PREVIEW_NAV`.
+
+## Security / validation
+
+The parent should validate:
+
+- `event.source` matches the current preview iframe `contentWindow`
+- `event.origin` matches the expected preview proxy origin when available
+
+## Navigation lifecycle
+
+The UI layer should treat `LUCIDCODER_PREVIEW_NAV` (and READY) as the canonical place to:
+
+- update the displayed preview URL
+- clear dev-only overlays on navigation/reload (future 0.4.x)
+- trigger helper state resets (future 0.4.x)

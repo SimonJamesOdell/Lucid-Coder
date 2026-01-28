@@ -40,7 +40,7 @@ export const getDevServerOriginFromWindow = ({ port, hostnameOverride } = {}) =>
 };
 
 const PreviewTab = forwardRef(
-  ({ project, processInfo, onRestartProject, autoStartOnNotRunning = true, isProjectStopped = false }, ref) => {
+  ({ project, processInfo, onRestartProject, autoStartOnNotRunning = true, isProjectStopped = false, onPreviewNavigated }, ref) => {
   const [iframeError, setIframeError] = useState(false);
   const [iframeLoading, setIframeLoading] = useState(false);
   const [pendingIframeError, setPendingIframeError] = useState(false);
@@ -310,11 +310,41 @@ const PreviewTab = forwardRef(
       const nextHref = iframe.contentWindow?.location?.href;
       if (typeof nextHref === 'string' && nextHref && nextHref !== displayedUrlRef.current) {
         setDisplayedUrl(nextHref);
+        onPreviewNavigated?.(nextHref, { source: 'poll' });
       }
     } catch {
       // Ignore cross-origin access errors. We fall back to the last known preview URL.
     }
-  }, [setDisplayedUrl]);
+  }, [setDisplayedUrl, onPreviewNavigated]);
+
+  const getExpectedPreviewOrigin = useCallback(() => {
+    const current = previewUrlRef.current;
+    if (typeof current !== 'string' || !current) {
+      return null;
+    }
+
+    try {
+      return new URL(current).origin;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const postPreviewBridgePing = useCallback(() => {
+    const iframeWindow = iframeRef.current?.contentWindow;
+    if (!iframeWindow || typeof iframeWindow.postMessage !== 'function') {
+      return;
+    }
+
+    try {
+      iframeWindow.postMessage({
+        type: 'LUCIDCODER_PREVIEW_BRIDGE_PING',
+        nonce: Math.random().toString(16).slice(2)
+      }, '*');
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const isLucidCoderProxyPlaceholderPage = () => {
     const iframe = iframeRef.current;
@@ -348,12 +378,18 @@ const PreviewTab = forwardRef(
         return;
       }
 
+      const expectedOrigin = getExpectedPreviewOrigin();
+      const origin = typeof event.origin === 'string' ? event.origin : '';
+      if (expectedOrigin && origin && origin !== expectedOrigin) {
+        return;
+      }
+
       const payload = event.data;
       if (!payload || typeof payload !== 'object') {
         return;
       }
 
-      if (payload.type !== 'LUCIDCODER_PREVIEW_NAV') {
+      if (payload.type !== 'LUCIDCODER_PREVIEW_NAV' && payload.type !== 'LUCIDCODER_PREVIEW_BRIDGE_READY') {
         return;
       }
 
@@ -364,6 +400,7 @@ const PreviewTab = forwardRef(
 
       if (href !== displayedUrlRef.current) {
         setDisplayedUrl(href);
+        onPreviewNavigated?.(href, { source: 'message', type: payload.type });
       }
 
       setHasConfirmedPreview(true);
@@ -376,7 +413,7 @@ const PreviewTab = forwardRef(
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, []);
+  }, [getExpectedPreviewOrigin, onPreviewNavigated]);
 
   const ensureNavigationPolling = () => {
     if (
@@ -434,6 +471,8 @@ const PreviewTab = forwardRef(
   };
 
   const handleIframeLoad = () => {
+    postPreviewBridgePing();
+
     // If the preview proxy is still warming up, it may briefly serve a same-origin
     // placeholder page that auto-reloads. Keep the loading overlay up so users don't
     // see error-page flashes while the dev server comes online.
