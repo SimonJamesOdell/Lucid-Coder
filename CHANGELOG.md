@@ -1,4 +1,8 @@
-# Changelog
+## 0.3.7 (2026-01-28)
+- Add backend diagnostics bundle export endpoint: `/api/diagnostics/bundle` (downloadable JSON).
+- Add request correlation IDs (`X-Correlation-Id`) and structured request logging with in-memory redacted log buffering.
+- Add performance sanity tests for core backend endpoints.
+- Fix Windows `release:prep` gate invocation reliability.
 
 ## 0.3.6 (2026-01-27)
 - Add a manual-only GitHub Actions workflow for `npm test` + Playwright E2E (kept local-first by default).

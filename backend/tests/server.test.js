@@ -33,6 +33,7 @@ vi.mock('../routes/jobs.js', () => ({ __esModule: true, default: routerStub }));
 vi.mock('../routes/goals.js', () => ({ __esModule: true, default: routerStub }));
 vi.mock('../routes/agent.js', () => ({ __esModule: true, default: routerStub }));
 vi.mock('../routes/runs.js', () => ({ __esModule: true, default: routerStub }));
+vi.mock('../routes/diagnostics.js', () => ({ __esModule: true, default: routerStub }));
 
 const attachSocketServerMock = vi.hoisted(() => vi.fn(() => ({ connected: true })));
 vi.mock('../socket/createSocketServer.js', () => ({

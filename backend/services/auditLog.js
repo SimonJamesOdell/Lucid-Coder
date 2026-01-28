@@ -142,6 +142,7 @@ export const auditHttpRequestsMiddleware = (options = {}) => {
       const durationMs = Date.now() - startedAt;
       const payload = {
         durationMs,
+        correlationId: typeof req?.correlationId === 'string' && req.correlationId.trim() ? req.correlationId.trim() : null,
         body: redactSensitiveValues(req.body),
         query: redactSensitiveValues(req.query)
       };

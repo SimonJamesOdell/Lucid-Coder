@@ -20,6 +20,10 @@ import runsRoutes from './routes/runs.js';
 import { createPreviewProxy } from './routes/previewProxy.js';
 import { attachSocketServer } from './socket/createSocketServer.js';
 import { auditHttpRequestsMiddleware } from './services/auditLog.js';
+import diagnosticsRoutes from './routes/diagnostics.js';
+import { requestContextMiddleware } from './middleware/requestContext.js';
+import { requestLoggerMiddleware } from './middleware/requestLogger.js';
+import { errorHandlerMiddleware, notFoundHandler } from './middleware/errorHandlers.js';
 import http from 'http';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -95,17 +99,14 @@ const requireLlmReady = (req, res, next) => {
 
 // Middleware
 app.use(cors());
+app.use(requestContextMiddleware());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Append-only audit logging for mutating API requests.
 app.use(auditHttpRequestsMiddleware());
 
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  next();
-});
+app.use(requestLoggerMiddleware());
 
 // Health check route
 app.get('/api/health', (req, res) => {
@@ -157,6 +158,7 @@ app.get('/api/version', (req, res) => {
 
 // Routes
 app.use('/api/llm', llmRoutes);
+app.use('/api/diagnostics', diagnosticsRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/projects/:projectId/branches', branchRoutes);
 app.use('/api/projects/:projectId/commits', commitRoutes);
@@ -196,33 +198,8 @@ app.use(
 const previewProxy = createPreviewProxy({ logger: console });
 app.use(previewProxy.middleware);
 
-// Error handling middleware
-app.use((error, req, res, next) => {
-  console.error('❌ Server error:', error);
-  
-  // Handle JSON parsing errors
-  if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid JSON format'
-    });
-  }
-  
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
-  });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Route not found',
-    path: req.originalUrl
-  });
-});
+app.use(errorHandlerMiddleware());
+app.use('*', notFoundHandler);
 
 // Initialize database and start server
 const startServer = async () => {
