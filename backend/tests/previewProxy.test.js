@@ -591,6 +591,13 @@ describe('previewProxy', () => {
     expect(script).toContain('LUCIDCODER_PREVIEW_BRIDGE_PONG');
   });
 
+  test('buildPreviewBridgeScript includes preview helper hooks when enabled', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+    const script = __testOnly.buildPreviewBridgeScript({ previewPrefix: '/preview/123', enableHelper: true });
+    expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU');
+    expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_READY');
+  });
+
   test('shouldBypassPreviewProxy tolerates non-string inputs', async () => {
     const { __testOnly } = await import('../routes/previewProxy.js');
     expect(__testOnly.shouldBypassPreviewProxy(null)).toBe(false);

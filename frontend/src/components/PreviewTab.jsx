@@ -46,6 +46,7 @@ const PreviewTab = forwardRef(
   const [pendingIframeError, setPendingIframeError] = useState(false);
   const [hasConfirmedPreview, setHasConfirmedPreview] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
+    const [previewContextMenu, setPreviewContextMenu] = useState(null);
   const [restartStatus, setRestartStatus] = useState(null);
   const [previewFailureDetails, setPreviewFailureDetails] = useState(null);
   const [startInFlight, setStartInFlight] = useState(false);
@@ -58,6 +59,7 @@ const PreviewTab = forwardRef(
   const proxyPlaceholderFirstSeenRef = useRef(0);
   const proxyPlaceholderLoadCountRef = useRef(0);
   const iframeRef = useRef(null);
+  const canvasRef = useRef(null);
 
   const guessBackendOrigin = () => {
     if (typeof window === 'undefined') {
@@ -102,6 +104,33 @@ const PreviewTab = forwardRef(
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (!previewContextMenu) {
+      return;
+    }
+
+    const handlePointerDown = () => {
+      setPreviewContextMenu(null);
+    };
+
+    const handleEscape = (event) => {
+      if (event?.key === 'Escape') {
+        setPreviewContextMenu(null);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [previewContextMenu]);
 
   const normalizeStatus = (status) => (status ? status : 'idle');
 
@@ -346,6 +375,56 @@ const PreviewTab = forwardRef(
     }
   }, []);
 
+  const buildSimpleSelector = (payload = {}) => {
+    const rawTag = typeof payload.tagName === 'string' ? payload.tagName : '';
+    const tag = rawTag ? rawTag.toLowerCase() : 'element';
+    const id = typeof payload.id === 'string' ? payload.id.trim() : '';
+    if (id) {
+      return `${tag}#${id}`;
+    }
+
+    const rawClass = typeof payload.className === 'string' ? payload.className : '';
+    const firstClass = rawClass
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter(Boolean)[0];
+    if (firstClass) {
+      return `${tag}.${firstClass}`;
+    }
+
+    return tag;
+  };
+
+  const copyTextToClipboard = async (text) => {
+    if (typeof text !== 'string' || !text) {
+      return false;
+    }
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // fall back
+    }
+
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const success = document.execCommand?.('copy');
+      document.body.removeChild(textarea);
+      return Boolean(success);
+    } catch {
+      return false;
+    }
+  };
+
   const isLucidCoderProxyPlaceholderPage = () => {
     const iframe = iframeRef.current;
     if (!iframe) {
@@ -389,6 +468,27 @@ const PreviewTab = forwardRef(
         return;
       }
 
+      if (payload.type === 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU') {
+        const iframe = iframeRef.current;
+        const canvas = canvasRef.current;
+        if (!iframe || !canvas) {
+          return;
+        }
+
+        const clientX = Number.isFinite(payload.clientX) ? payload.clientX : 0;
+        const clientY = Number.isFinite(payload.clientY) ? payload.clientY : 0;
+        const iframeRect = iframe.getBoundingClientRect();
+        const canvasRect = canvas.getBoundingClientRect();
+        const x = iframeRect.left - canvasRect.left + clientX;
+        const y = iframeRect.top - canvasRect.top + clientY;
+
+        const selector = buildSimpleSelector(payload);
+        const href = typeof payload.href === 'string' ? payload.href : '';
+
+        setPreviewContextMenu({ x, y, selector, href });
+        return;
+      }
+
       if (payload.type !== 'LUCIDCODER_PREVIEW_NAV' && payload.type !== 'LUCIDCODER_PREVIEW_BRIDGE_READY') {
         return;
       }
@@ -397,6 +497,8 @@ const PreviewTab = forwardRef(
       if (typeof href !== 'string' || !href) {
         return;
       }
+
+      setPreviewContextMenu(null);
 
       if (href !== displayedUrlRef.current) {
         setDisplayedUrl(href);
@@ -414,6 +516,45 @@ const PreviewTab = forwardRef(
       window.removeEventListener('message', handleMessage);
     };
   }, [getExpectedPreviewOrigin, onPreviewNavigated]);
+
+  const renderContextMenu = () => {
+    if (!previewContextMenu) {
+      return null;
+    }
+
+    const { x, y, selector, href } = previewContextMenu;
+
+    return (
+      <div
+        className="preview-context-menu"
+        data-testid="preview-context-menu"
+        style={{ left: Math.max(0, x), top: Math.max(0, y) }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="preview-context-menu__item"
+          onClick={async () => {
+            await copyTextToClipboard(selector);
+            setPreviewContextMenu(null);
+          }}
+        >
+          Copy selector
+        </button>
+        <button
+          type="button"
+          className="preview-context-menu__item"
+          onClick={async () => {
+            await copyTextToClipboard(href);
+            setPreviewContextMenu(null);
+          }}
+          disabled={!href}
+        >
+          Copy href
+        </button>
+      </div>
+    );
+  };
 
   const ensureNavigationPolling = () => {
     if (
@@ -897,8 +1038,9 @@ const PreviewTab = forwardRef(
     <div className="preview-tab">
       {renderStatusBanner()}
       {renderUrlBar()}
-      <div className="preview-canvas">
+      <div className="preview-canvas" ref={canvasRef}>
         {renderLoadingOverlay()}
+        {renderContextMenu()}
         <iframe
           ref={iframeRef}
           data-testid="preview-iframe"

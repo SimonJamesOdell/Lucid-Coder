@@ -633,6 +633,91 @@ describe('PreviewTab', () => {
     expect(previewRef.current.__testHooks.getDisplayedUrl()).toBe('http://localhost/ready-route');
   });
 
+  test('renders a custom context menu when the preview helper posts a context menu message', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = {};
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+            href: 'http://localhost/ctx',
+            clientX: 12,
+            clientY: 24,
+            tagName: 'DIV',
+            id: 'root',
+            className: 'app'
+          },
+          origin: previewOrigin,
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/copy selector/i)).toBeInTheDocument();
+  });
+
+  test('clears the custom context menu on preview navigation messages', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = {};
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+            href: 'http://localhost/ctx',
+            clientX: 1,
+            clientY: 2,
+            tagName: 'DIV'
+          },
+          origin: previewOrigin,
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/next' },
+          origin: previewOrigin,
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('preview-context-menu')).not.toBeInTheDocument();
+    });
+  });
+
   test('ignores preview messages when origin does not match expected backend origin', async () => {
     const processInfo = buildProcessInfo();
     const onPreviewNavigated = vi.fn();
