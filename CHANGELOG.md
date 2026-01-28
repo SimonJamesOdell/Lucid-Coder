@@ -1,3 +1,8 @@
+## 0.3.8 (2026-01-28)
+- Add preview bridge v1 messages (READY/PING/PONG/GET_LOCATION) in the preview proxy injection to make iframe navigation detection more reliable.
+- Harden PreviewTab iframe messaging by validating message source and expected origin, and exposing an `onPreviewNavigated` callback for lifecycle tooling.
+- Add unit tests + documentation for the preview bridge contract.
+
 ## 0.3.7 (2026-01-28)
 - Add backend diagnostics bundle export endpoint: `/api/diagnostics/bundle` (downloadable JSON).
 - Add request correlation IDs (`X-Correlation-Id`) and structured request logging with in-memory redacted log buffering.
