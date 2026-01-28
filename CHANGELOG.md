@@ -2,8 +2,9 @@
 
 ## 0.3.6 (2026-01-27)
 - Add a manual-only GitHub Actions workflow for `npm test` + Playwright E2E (kept local-first by default).
-- Add `npm run release:check` and `npm run release:gate` to validate versions + run local release gates.
+- Add `npm run release:check` (fails if git working tree is dirty), `npm run release:gate`, and `npm run release:prep -- <version>` for local release prep.
 - Add `npm run e2e:clean-run` to reduce Playwright port-conflict flakes.
+- Bump `baseline-browser-mapping` to reduce Playwright Baseline warnings.
 
 ## 0.3.5 (2026-01-27)
 - Expanded Playwright E2E coverage with critical journeys (create/import/close/delete project) and more robust bootstrap assertions.

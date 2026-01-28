@@ -19,6 +19,7 @@
     "e2e:debug": "npx playwright test --debug",
     "release:check": "node tools/release-check.mjs",
     "release:gate": "npm run release:check && npm test && npm run e2e:clean-run",
+    "release:prep": "node tools/release-prep.mjs",
     "test:backend": "npm --prefix backend test",
     "test:frontend": "npm --prefix frontend test",
     "coverage:backend": "npm --prefix backend run test:coverage",
@@ -28,7 +29,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.0",
-    "baseline-browser-mapping": "^2.9.17",
+    "baseline-browser-mapping": "^2.9.18",
     "concurrently": "^8.2.2"
   },
   "keywords": [

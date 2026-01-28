@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const readJson = async (filePath) => {
   const raw = await fs.readFile(filePath, 'utf8');
@@ -20,6 +21,19 @@ const fail = (message) => {
 
 const main = async () => {
   const repoRoot = process.cwd();
+
+  // Refuse to run on a dirty working tree (prevents tagging releases with uncommitted changes).
+  try {
+    const status = execFileSync('git', ['status', '--porcelain=v1'], {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    }).trim();
+    if (status.length > 0) {
+      fail('git working tree is not clean (commit or stash changes first)');
+    }
+  } catch (error) {
+    fail(`unable to check git status (${error?.message || 'unknown error'})`);
+  }
 
   const rootPackage = await readJson(path.join(repoRoot, 'package.json'));
   const backendPackage = await readJson(path.join(repoRoot, 'backend', 'package.json'));
