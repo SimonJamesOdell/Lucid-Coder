@@ -1,3 +1,8 @@
+## 0.4.0 (2026-01-29)
+- Add targeted process restart support (restart frontend/backend independently) and propagate target selection through backend routes and frontend state.
+- Improve Preview UX: more reliable “Open in new tab” behavior, error-state “Refresh + retry”, and auto-recovery controls/copy.
+- Add a custom preview context menu backdrop + interaction handling, with expanded tests to keep the strict coverage gate green.
+
 ## 0.3.8 (2026-01-28)
 - Add preview bridge v1 messages (READY/PING/PONG/GET_LOCATION) in the preview proxy injection to make iframe navigation detection more reliable.
 - Harden PreviewTab iframe messaging by validating message source and expected origin, and exposing an `onPreviewNavigated` callback for lifecycle tooling.
