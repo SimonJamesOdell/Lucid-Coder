@@ -649,54 +649,6 @@ const PreviewPanel = () => {
         </div>
 
         <div className="preview-actions">
-          {isPreviewActive && (
-            <>
-              <button
-                type="button"
-                className="preview-action-button icon-only"
-                onClick={handleReload}
-                disabled={!currentProject}
-                data-testid="reload-preview"
-                aria-label="Reload preview"
-                title="Reload"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="16"
-                  height="16"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-9.9 1H5.02A7 7 0 0 0 19 13c0-3.87-3.13-7-7-7Z"
-                  />
-                </svg>
-              </button>
-              <button
-                type="button"
-                className="preview-action-button icon-only"
-                onClick={handleOpenInNewTab}
-                disabled={!currentProject}
-                data-testid="open-preview-tab"
-                aria-label="Open preview in new tab"
-                title="Open in new tab"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="16"
-                  height="16"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z"
-                  />
-                </svg>
-              </button>
-            </>
-          )}
           {isFilesActive && (
             <button
               type="button"
@@ -740,6 +692,8 @@ const PreviewPanel = () => {
             onRestartProject={restartProject}
             onRefreshProcessStatus={refreshProcessStatus}
             isProjectStopped={Boolean(currentProject?.id && stoppedProjects?.[currentProject.id])}
+            onReloadPreview={handleReload}
+            onOpenInNewTab={handleOpenInNewTab}
           />
         </div>
         <div className={`tab-pane ${isGoalsActive ? 'is-active' : 'is-hidden'}`}>

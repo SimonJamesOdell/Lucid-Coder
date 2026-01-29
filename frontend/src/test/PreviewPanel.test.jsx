@@ -54,7 +54,16 @@ vi.mock('../components/PreviewTab', () => ({
       getDisplayedUrl: getDisplayedUrlMock,
       getOpenInNewTabUrl: getOpenInNewTabUrlMock
     }));
-    return <div data-testid="mock-preview-tab" />;
+    return (
+      <div data-testid="mock-preview-tab">
+        <button type="button" data-testid="reload-preview" onClick={props.onReloadPreview}>
+          Reload
+        </button>
+        <button type="button" data-testid="open-preview-tab" onClick={props.onOpenInNewTab}>
+          Open
+        </button>
+      </div>
+    );
   })
 }));
 

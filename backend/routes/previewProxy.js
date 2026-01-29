@@ -298,31 +298,15 @@ const getProjectIdFromRequest = (req) => {
     };
   }
 
-  const dest = typeof req?.headers?.['sec-fetch-dest'] === 'string'
-    ? req.headers['sec-fetch-dest'].toLowerCase()
-    : '';
-  const referer = typeof req?.headers?.referer === 'string' ? req.headers.referer : '';
-  // Cookie-based routing is only safe when the request is clearly preview-origin.
-  // - iframe navigations set Sec-Fetch-Dest: iframe
-  // - subresource loads typically carry a Referer pointing at /preview/:id...
-  // - some dev-server module requests may omit Referer (varies by browser + sandbox),
-  //   but can be identified by their well-known dev asset paths.
-  const shouldAllowCookieRouting =
-    dest === 'iframe' ||
-    referer.includes('/preview/') ||
-    isLikelyPreviewDevAssetPath(req.url) ||
-    isLikelyViteHmrWebSocketRequest(req);
-  if (!shouldAllowCookieRouting) {
-    return null;
-  }
-
+  // If the preview cookie is present, always proxy the request.
+  // This allows SPA navigation to work even if the path escapes the preview prefix.
   const cookies = parseCookieHeader(req.headers?.cookie);
   const cookieProject = normalizeCookieValue(cookies[COOKIE_NAME]);
   if (cookieProject) {
     return {
       source: 'cookie',
       projectId: cookieProject,
-      forwardPath: req.url
+      forwardPath: typeof req?.url === 'string' ? req.url : ''
     };
   }
 
@@ -398,6 +382,42 @@ const buildPreviewBridgeScript = ({ previewPrefix }) => {
     window.addEventListener('popstate', postNav);
     window.addEventListener('hashchange', postNav);
 
+    var navigateToHref = function(href){
+      if (!href || typeof href !== 'string') return;
+
+      try {
+        var current = readHref();
+        if (href === current) return;
+
+        var nextUrl = new URL(href, current || window.location.href);
+        var sameOrigin = nextUrl.origin === window.location.origin;
+
+        if (sameOrigin) {
+          var nextPath = nextUrl.pathname + (nextUrl.search || '') + (nextUrl.hash || '');
+          var currentPath = window.location.pathname + (window.location.search || '') + (window.location.hash || '');
+
+          if (nextPath !== currentPath && window.history && typeof window.history.pushState === 'function') {
+            window.history.pushState({}, '', nextPath);
+            try {
+              window.dispatchEvent(new PopStateEvent('popstate'));
+            } catch (e) {
+              // ignore
+            }
+            postNav();
+            return;
+          }
+        }
+
+        window.location.assign(nextUrl.href);
+      } catch (e) {
+        try {
+          window.location.href = String(href);
+        } catch (err) {
+          // ignore
+        }
+      }
+    };
+
     window.addEventListener('message', function(event){
       try {
         var data = event && event.data;
@@ -411,6 +431,11 @@ const buildPreviewBridgeScript = ({ previewPrefix }) => {
 
         if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_GET_LOCATION') {
           postNav();
+          return;
+        }
+
+        if (data.type === 'LUCIDCODER_PREVIEW_NAVIGATE') {
+          navigateToHref(data.href);
         }
       } catch (e) {
         // ignore

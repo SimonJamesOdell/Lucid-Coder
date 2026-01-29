@@ -46,6 +46,8 @@ const PreviewTab = forwardRef(
       processInfo,
       onRestartProject,
       onRefreshProcessStatus,
+      onReloadPreview,
+      onOpenInNewTab,
       autoStartOnNotRunning = true,
       isProjectStopped = false,
       onPreviewNavigated
@@ -278,18 +280,33 @@ const PreviewTab = forwardRef(
   };
 
   const previewUrl = previewUrlOverride ?? getPreviewProxyUrl();
+  // Navigation history state
   const [displayedUrl, setDisplayedUrl] = useState(previewUrl);
   const previewUrlRef = useRef(previewUrl);
   const displayedUrlRef = useRef(previewUrl);
+  const [history, setHistory] = useState([previewUrl]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const historyIndexRef = useRef(0);
+  const [urlInputValue, setUrlInputValue] = useState('');
+  const [isEditingUrl, setIsEditingUrl] = useState(false);
 
+
+  // Keep displayedUrlRef in sync
   useEffect(() => {
     displayedUrlRef.current = displayedUrl || previewUrlRef.current;
   }, [displayedUrl]);
 
   useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
+
+  // When previewUrl changes (project switch, reload, etc), reset history
+  useEffect(() => {
     if (previewUrl !== previewUrlRef.current) {
       previewUrlRef.current = previewUrl;
       setDisplayedUrl(previewUrl);
+      setHistory([previewUrl]);
+      setHistoryIndex(0);
       setHasConfirmedPreview(false);
     }
   }, [previewUrl]);
@@ -378,7 +395,16 @@ const PreviewTab = forwardRef(
     try {
       const nextHref = iframe.contentWindow?.location?.href;
       if (typeof nextHref === 'string' && nextHref && nextHref !== displayedUrlRef.current) {
+        setIsEditingUrl(false);
         setDisplayedUrl(nextHref);
+        // Only push to history if not navigating via back/forward
+        setHistory((prev) => {
+          const baseIndex = historyIndexRef.current;
+          if (prev[baseIndex] === nextHref) return prev;
+          const newHistory = prev.slice(0, baseIndex + 1).concat(nextHref);
+          setHistoryIndex(newHistory.length - 1);
+          return newHistory;
+        });
         onPreviewNavigated?.(nextHref, { source: 'poll' });
       }
     } catch {
@@ -542,7 +568,16 @@ const PreviewTab = forwardRef(
       setPreviewContextMenu(null);
 
       if (href !== displayedUrlRef.current) {
+        setIsEditingUrl(false);
         setDisplayedUrl(href);
+        // Only push to history if not navigating via back/forward
+        setHistory((prev) => {
+          const baseIndex = historyIndexRef.current;
+          if (prev[baseIndex] === href) return prev;
+          const newHistory = prev.slice(0, baseIndex + 1).concat(href);
+          setHistoryIndex(newHistory.length - 1);
+          return newHistory;
+        });
         onPreviewNavigated?.(href, { source: 'message', type: payload.type });
       }
 
@@ -969,6 +1004,9 @@ const PreviewTab = forwardRef(
       getDisplayedUrl: () => displayedUrlRef.current,
       setPreviewUrlOverride: (value) => setPreviewUrlOverride(value),
       toDevServerUrlForTests: (href) => toDevServerUrl(href),
+      toPreviewProxyUrlForTests: (href) => toPreviewProxyUrl(href),
+      normalizeUrlInputForTests: (raw, origin) => normalizeUrlInput(raw, origin),
+      getUrlOriginForTests: (value) => getUrlOrigin(value),
       setPreviewFailureDetailsForTests: (value) => {
         setPreviewFailureDetails(value);
       },
@@ -1024,6 +1062,94 @@ const PreviewTab = forwardRef(
     !isStartingProject &&
     (isFrontendReadyForPreview || !isProcessInfoCurrent);
   const effectivePreviewUrl = shouldAttemptPreview ? previewUrl : 'about:blank';
+
+  const urlBarValue = (() => {
+    const normalized = normalizedDisplayedUrl;
+    if (normalized === 'about:blank') {
+      return 'about:blank';
+    }
+
+    return toDevServerUrl(normalized) || toDevServerUrl() || '';
+  })();
+
+  const getUrlOrigin = (value) => {
+    if (!value || value === 'about:blank') return '';
+    try {
+      return new URL(value).origin;
+    } catch {
+      return '';
+    }
+  };
+
+  const toPreviewProxyUrl = (href) => {
+    if (!project?.id) return null;
+    const previewBase = previewUrlRef.current;
+    if (!previewBase) return null;
+
+    let previewOrigin = '';
+    try {
+      previewOrigin = new URL(previewBase).origin;
+    } catch {
+      return null;
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(href);
+    } catch {
+      return null;
+    }
+
+    const prefix = `/preview/${encodeURIComponent(project.id)}`;
+    let path = parsed.pathname || '/';
+    if (!path.startsWith('/')) {
+      path = `/${path}`;
+    }
+
+    let currentPath = '';
+    try {
+      const currentHref = displayedUrlRef.current || previewUrlRef.current || '';
+      currentPath = new URL(currentHref).pathname || '';
+    } catch {
+      currentPath = '';
+    }
+
+    const shouldUsePrefix = Boolean(prefix && currentPath.startsWith(prefix));
+    const finalPath = shouldUsePrefix
+      ? (path.startsWith(prefix) ? path : `${prefix}${path}`)
+      : path;
+
+    return `${previewOrigin}${finalPath}${parsed.search || ''}${parsed.hash || ''}`;
+  };
+
+  const normalizeUrlInput = (raw, origin) => {
+    if (!origin) return raw;
+    if (!raw) return `${origin}/`;
+    if (raw === 'about:blank') return raw;
+    if (raw.startsWith(origin)) return raw;
+
+    try {
+      const parsed = new URL(raw);
+      raw = `${parsed.pathname || ''}${parsed.search || ''}${parsed.hash || ''}`;
+    } catch {
+      // ignore, treat as path
+    }
+
+    let path = String(raw);
+    if (!path.startsWith('/') && !path.startsWith('?') && !path.startsWith('#')) {
+      path = `/${path}`;
+    }
+    if (path.startsWith('?') || path.startsWith('#')) {
+      path = `/${path}`;
+    }
+    return `${origin}${path}`;
+  };
+
+  useEffect(() => {
+    if (!isEditingUrl) {
+      setUrlInputValue(urlBarValue || '');
+    }
+  }, [urlBarValue, isEditingUrl]);
 
   const renderStatusBanner = () => (
     restartStatus?.type === 'error' && (
@@ -1274,25 +1400,160 @@ const PreviewTab = forwardRef(
     );
   };
 
+  const postNavigateToIframe = (url) => {
+    const iframeWindow = iframeRef.current?.contentWindow;
+    if (iframeWindow && typeof iframeWindow.postMessage === 'function') {
+      try {
+        iframeWindow.postMessage({ type: 'LUCIDCODER_PREVIEW_NAVIGATE', href: url }, '*');
+      } catch {}
+    }
+  };
+
+  const handleBack = () => {
+    if (historyIndex > 0) {
+      const prevUrl = history[historyIndex - 1];
+      setHistoryIndex(historyIndex - 1);
+      setDisplayedUrl(prevUrl);
+      postNavigateToIframe(prevUrl);
+    }
+  };
+
+  const handleForward = () => {
+    if (historyIndex < history.length - 1) {
+      const nextUrl = history[historyIndex + 1];
+      setHistoryIndex(historyIndex + 1);
+      setDisplayedUrl(nextUrl);
+      postNavigateToIframe(nextUrl);
+    }
+  };
+
+  const handleUrlInputChange = (event) => {
+    const raw = event.target.value;
+    const origin = getUrlOrigin(urlBarValue);
+    const normalized = normalizeUrlInput(raw, origin);
+    setUrlInputValue(normalized);
+  };
+
+  const handleUrlInputKeyDown = (event) => {
+    if (event.key !== 'Enter') {
+      return;
+    }
+
+    event.preventDefault();
+    const origin = getUrlOrigin(urlBarValue);
+    const devTarget = normalizeUrlInput(urlInputValue, origin);
+    if (!devTarget || devTarget === 'about:blank') {
+      return;
+    }
+
+    const proxyTarget = toPreviewProxyUrl(devTarget);
+    if (!proxyTarget) {
+      return;
+    }
+
+    setIsEditingUrl(false);
+    setUrlInputValue(devTarget);
+    setDisplayedUrl(proxyTarget);
+    setHistory((prev) => {
+      const baseIndex = historyIndexRef.current;
+      if (prev[baseIndex] === proxyTarget) return prev;
+      const newHistory = prev.slice(0, baseIndex + 1).concat(proxyTarget);
+      setHistoryIndex(newHistory.length - 1);
+      return newHistory;
+    });
+    postNavigateToIframe(proxyTarget);
+  };
+
+  const handleUrlInputFocus = (event) => {
+    setIsEditingUrl(true);
+    const origin = getUrlOrigin(urlBarValue);
+    const prefix = origin ? `${origin}/` : '';
+    const value = event.target.value || '';
+    if (origin && value.startsWith(prefix) && typeof event.target.setSelectionRange === 'function') {
+      const start = prefix.length;
+      event.target.setSelectionRange(start, value.length);
+      return;
+    }
+    if (typeof event.target.select === 'function') {
+      event.target.select();
+    }
+  };
+
+  const handleUrlInputBlur = () => {
+    setIsEditingUrl(false);
+    setUrlInputValue(urlBarValue || '');
+  };
+
   const renderUrlBar = () => (
     <div className="preview-url-bar" data-testid="preview-url-bar">
-      {(() => {
-        const normalized = normalizedDisplayedUrl;
-        const devUrl = hasConfirmedPreview && !iframeLoading && !pendingIframeError && !iframeError
-          ? (toDevServerUrl(normalized) || '')
-          : '';
-        const value = normalized === 'about:blank' ? 'about:blank' : devUrl;
-
-        return (
+      <div className="preview-url-actions preview-url-actions-left">
+        <button
+          type="button"
+          className="preview-nav-btn preview-nav-back"
+          aria-label="Back"
+          onClick={handleBack}
+          disabled={historyIndex <= 0}
+          tabIndex={historyIndex <= 0 ? -1 : 0}
+        >
+          <span className="preview-nav-icon">&#8592;</span>
+        </button>
+        <button
+          type="button"
+          className="preview-nav-btn preview-nav-forward"
+          aria-label="Forward"
+          onClick={handleForward}
+          disabled={historyIndex >= history.length - 1}
+          tabIndex={historyIndex >= history.length - 1 ? -1 : 0}
+        >
+          <span className="preview-nav-icon">&#8594;</span>
+        </button>
+      </div>
       <input
         aria-label="Preview URL"
         className="preview-url-input"
-        value={value}
-        readOnly
-        onFocus={(event) => event.target.select()}
+        value={urlInputValue}
+        readOnly={!urlBarValue || urlBarValue === 'about:blank'}
+        onChange={handleUrlInputChange}
+        onKeyDown={handleUrlInputKeyDown}
+        onFocus={handleUrlInputFocus}
+        onBlur={handleUrlInputBlur}
       />
-        );
-      })()}
+      <div className="preview-url-actions preview-url-actions-right">
+        <button
+          type="button"
+          className="preview-nav-btn preview-nav-refresh"
+          aria-label="Reload preview"
+          onClick={onReloadPreview}
+          disabled={!project || typeof onReloadPreview !== 'function'}
+          tabIndex={!project || typeof onReloadPreview !== 'function' ? -1 : 0}
+          data-testid="reload-preview"
+        >
+          <span className="preview-nav-icon preview-nav-icon--lowered">&#8635;</span>
+        </button>
+        <button
+          type="button"
+          className="preview-nav-btn preview-nav-open"
+          aria-label="Open preview in new tab"
+          onClick={onOpenInNewTab}
+          disabled={!project || typeof onOpenInNewTab !== 'function'}
+          tabIndex={!project || typeof onOpenInNewTab !== 'function' ? -1 : 0}
+          data-testid="open-preview-tab"
+        >
+          <svg
+            className="preview-nav-icon preview-nav-icon--lowered"
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              fill="currentColor"
+              d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z"
+            />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 

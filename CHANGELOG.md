@@ -1,3 +1,10 @@
+## 0.4.2 (2026-01-29)
+- Make the preview proxy always route requests when the preview cookie is present to keep SPA navigation stable.
+- Add back/forward navigation controls to the Preview URL bar with history tracking and disabled states.
+- Allow manual URL edits after the port and navigate on Enter, including preview bridge support for parent-driven navigation.
+- Move reload and open-in-new-tab actions into the Preview URL bar, styled to match navigation controls.
+- Refine Preview URL bar button spacing, shading, and icon alignment for improved legibility.
+
 ## 0.4.1 (2026-01-29)
 - Refactor backend orchestration and Branch workflow test gating into smaller helper modules to reduce file size and improve maintainability.
 - Refactor App state and Chat panel logic into focused frontend helper modules while preserving existing behavior.

@@ -666,7 +666,7 @@ describe('PreviewTab', () => {
 
     const urlInput = screen.getByLabelText('Preview URL');
     expect(screen.getByTestId('preview-url-bar')).toBeInTheDocument();
-    expect(urlInput).toHaveValue('');
+    expect(urlInput).toHaveValue('http://localhost:5555/');
 
     act(() => {
       previewRef.current.__testHooks.triggerIframeLoad();
@@ -759,11 +759,346 @@ describe('PreviewTab', () => {
 
     const urlInput = screen.getByLabelText('Preview URL');
     const selectSpy = vi.fn();
+    const setSelectionRangeSpy = vi.fn();
     urlInput.select = selectSpy;
+    urlInput.setSelectionRange = setSelectionRangeSpy;
+
+    fireEvent.focus(urlInput);
+
+    expect(selectSpy).toHaveBeenCalledTimes(0);
+    expect(setSelectionRangeSpy).toHaveBeenCalled();
+  });
+
+  test('URL bar Enter navigates to the preview proxy target', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '/about' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    expect(iframeWindow.postMessage).toHaveBeenCalledWith(
+      {
+        type: 'LUCIDCODER_PREVIEW_NAVIGATE',
+        href: `${previewOrigin}/preview/${mockProject.id}/about`
+      },
+      '*'
+    );
+    expect(urlInput).toHaveValue('http://localhost:5555/about');
+  });
+
+  test('URL bar Enter supports query-only paths', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '?q=1' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    expect(iframeWindow.postMessage).toHaveBeenCalledWith(
+      {
+        type: 'LUCIDCODER_PREVIEW_NAVIGATE',
+        href: `${previewOrigin}/preview/${mockProject.id}/?q=1`
+      },
+      '*'
+    );
+    expect(urlInput).toHaveValue('http://localhost:5555/?q=1');
+  });
+
+  test('URL bar Enter ignores about:blank', () => {
+    const processInfo = buildProcessInfo();
+    renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: 'about:blank' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    expect(iframeWindow.postMessage).not.toHaveBeenCalled();
+  });
+
+  test('URL bar ignores non-Enter key presses', () => {
+    const processInfo = buildProcessInfo();
+    renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '/ignored' } });
+    fireEvent.keyDown(urlInput, { key: 'Escape' });
+
+    expect(iframeWindow.postMessage).not.toHaveBeenCalled();
+  });
+
+  test('URL bar Enter bails when proxy URL cannot be resolved', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      previewRef.current.__testHooks.setPreviewUrlOverride('not a url');
+    });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '/about' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    expect(iframeWindow.postMessage).not.toHaveBeenCalled();
+  });
+
+  test('URL bar Enter falls back when displayed URL is not parseable', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      previewRef.current.__testHooks.setDisplayedUrlForTests('not a url');
+    });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '/about' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    expect(iframeWindow.postMessage).toHaveBeenCalledWith(
+      {
+        type: 'LUCIDCODER_PREVIEW_NAVIGATE',
+        href: `${previewOrigin}/about`
+      },
+      '*'
+    );
+  });
+
+  test('URL bar Enter prefixes paths without a leading slash', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: 'about' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    expect(iframeWindow.postMessage).toHaveBeenCalledWith(
+      {
+        type: 'LUCIDCODER_PREVIEW_NAVIGATE',
+        href: `${previewOrigin}/preview/${mockProject.id}/about`
+      },
+      '*'
+    );
+    expect(urlInput).toHaveValue('http://localhost:5555/about');
+  });
+
+  test('URL bar Enter supports hash-only paths', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '#section' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    expect(iframeWindow.postMessage).toHaveBeenCalledWith(
+      {
+        type: 'LUCIDCODER_PREVIEW_NAVIGATE',
+        href: `${previewOrigin}/preview/${mockProject.id}/#section`
+      },
+      '*'
+    );
+    expect(urlInput).toHaveValue('http://localhost:5555/#section');
+  });
+
+  test('URL bar focus falls back to select when selection range is unavailable', () => {
+    const processInfo = buildProcessInfo();
+    renderPreviewTab({ processInfo });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    const selectSpy = vi.fn();
+    urlInput.select = selectSpy;
+    urlInput.setSelectionRange = undefined;
 
     fireEvent.focus(urlInput);
 
     expect(selectSpy).toHaveBeenCalled();
+  });
+
+  test('normalizeUrlInput prefixes missing leading slash', () => {
+    const { previewRef } = renderPreviewTab({ processInfo: buildProcessInfo() });
+
+    const next = previewRef.current.__testHooks.normalizeUrlInputForTests('about', 'http://localhost:5555');
+    expect(next).toBe('http://localhost:5555/about');
+  });
+
+  test('toPreviewProxyUrl returns null when preview base is invalid', () => {
+    const { previewRef } = renderPreviewTab({ processInfo: buildProcessInfo() });
+
+    act(() => {
+      previewRef.current.__testHooks.setPreviewUrlOverride('not a url');
+    });
+
+    const next = previewRef.current.__testHooks.toPreviewProxyUrlForTests('http://localhost:5555/about');
+    expect(next).toBeNull();
+  });
+
+  test('toPreviewProxyUrl returns null when target url is invalid', () => {
+    const { previewRef } = renderPreviewTab({ processInfo: buildProcessInfo() });
+
+    const next = previewRef.current.__testHooks.toPreviewProxyUrlForTests('http://[invalid');
+    expect(next).toBeNull();
+  });
+
+  test('toPreviewProxyUrl normalizes paths without leading slash', () => {
+    const { previewRef } = renderPreviewTab({ processInfo: buildProcessInfo() });
+
+    const OriginalURL = global.URL;
+    try {
+      global.URL = class FakeURL {
+        constructor(value) {
+          const raw = String(value || '');
+          if (raw.includes('/preview/')) {
+            return { origin: 'http://localhost:5000', pathname: '/preview/123', search: '', hash: '' };
+          }
+          return { origin: 'http://localhost:5555', pathname: 'about', search: '', hash: '' };
+        }
+      };
+
+      act(() => {
+        previewRef.current.__testHooks.setPreviewUrlOverride('http://localhost:5000/preview/123');
+      });
+
+      const next = previewRef.current.__testHooks.toPreviewProxyUrlForTests('http://localhost:5555/about');
+      expect(next).toBe('http://localhost:5000/preview/123/about');
+    } finally {
+      global.URL = OriginalURL;
+    }
+  });
+
+  test('getUrlOrigin returns empty string for invalid URLs', () => {
+    const { previewRef } = renderPreviewTab({ processInfo: buildProcessInfo() });
+
+    expect(previewRef.current.__testHooks.getUrlOriginForTests('http://[invalid')).toBe('');
+  });
+
+  test('back and forward buttons navigate through history', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    const firstUrl = `${previewOrigin}/preview/${mockProject.id}/first`;
+    const secondUrl = `${previewOrigin}/preview/${mockProject.id}/second`;
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '/first' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '/second' } });
+    fireEvent.keyDown(urlInput, { key: 'Enter' });
+
+    const backButton = screen.getByRole('button', { name: 'Back' });
+    const forwardButton = screen.getByRole('button', { name: 'Forward' });
+
+    await waitFor(() => {
+      expect(backButton).toBeEnabled();
+    });
+
+    iframeWindow.postMessage.mockClear();
+
+    fireEvent.click(backButton);
+
+    expect(iframeWindow.postMessage).toHaveBeenCalledWith(
+      { type: 'LUCIDCODER_PREVIEW_NAVIGATE', href: firstUrl },
+      '*'
+    );
+
+    iframeWindow.postMessage.mockClear();
+
+    fireEvent.click(forwardButton);
+
+    expect(iframeWindow.postMessage).toHaveBeenCalledWith(
+      { type: 'LUCIDCODER_PREVIEW_NAVIGATE', href: secondUrl },
+      '*'
+    );
+  });
+
+  test('URL bar blur resets edited value to the current preview URL', () => {
+    const processInfo = buildProcessInfo();
+    renderPreviewTab({ processInfo });
+
+    const urlInput = screen.getByLabelText('Preview URL');
+    fireEvent.focus(urlInput);
+    fireEvent.change(urlInput, { target: { value: '/temp' } });
+    fireEvent.blur(urlInput);
+
+    expect(urlInput).toHaveValue('http://localhost:5555/');
   });
 
   test('falls back to about:blank when no URLs are available', () => {

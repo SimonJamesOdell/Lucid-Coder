@@ -596,6 +596,7 @@ describe('previewProxy', () => {
     const script = __testOnly.buildPreviewBridgeScript({ previewPrefix: '/preview/123' });
     expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU');
     expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_READY');
+    expect(script).toContain('LUCIDCODER_PREVIEW_NAVIGATE');
     expect(script).toContain('window.parent === window');
     expect(script).toContain('parentWindow === window');
   });
@@ -654,6 +655,10 @@ describe('previewProxy', () => {
     expect(__testOnly.isLikelyViteHmrWebSocketRequest(createReq('/ws', { upgrade: 'h2c' }))).toBe(false);
 
     expect(
+      __testOnly.isLikelyViteHmrWebSocketRequest(createReq('/ws', { upgrade: 123 }))
+    ).toBe(false);
+
+    expect(
       __testOnly.isLikelyViteHmrWebSocketRequest(createReq('/ws', { upgrade: 'websocket', 'sec-websocket-protocol': 'vite-hmr' }))
     ).toBe(true);
 
@@ -670,14 +675,32 @@ describe('previewProxy', () => {
     ).toBe(false);
   });
 
-  test('getProjectIdFromRequest denies cookie routing without preview-origin hints', async () => {
+  test('getProjectIdFromRequest routes via cookie when preview cookie is present', async () => {
     const { __testOnly } = await import('../routes/previewProxy.js');
 
     const req = createReq('/assets/app.js', {
       cookie: 'lucidcoder_preview_project=55'
     });
 
-    expect(__testOnly.getProjectIdFromRequest(req)).toBe(null);
+    expect(__testOnly.getProjectIdFromRequest(req)).toEqual({
+      source: 'cookie',
+      projectId: '55',
+      forwardPath: '/assets/app.js'
+    });
+  });
+
+  test('getProjectIdFromRequest cookie routing falls back to empty forwardPath when url is invalid', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const req = createReq(null, {
+      cookie: 'lucidcoder_preview_project=55'
+    });
+
+    expect(__testOnly.getProjectIdFromRequest(req)).toEqual({
+      source: 'cookie',
+      projectId: '55',
+      forwardPath: ''
+    });
   });
 
   test('getProjectIdFromRequest routes via cookie for iframe preview navigations', async () => {
@@ -940,7 +963,7 @@ describe('previewProxy', () => {
     expect(res.setHeader).not.toHaveBeenCalled();
   });
 
-  test('middleware does not hijack host app routes when only preview cookie is present', async () => {
+  test('middleware proxies host app routes when preview cookie is present', async () => {
     getRunningProcessEntryMock.mockReturnValue({
       processes: { frontend: { port: 6100 } },
       state: 'running'
@@ -948,6 +971,11 @@ describe('previewProxy', () => {
 
     const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
     const instance = createPreviewProxy({ logger: null });
+
+    let proxiedUrl = null;
+    proxyStub.web.mockImplementation((req) => {
+      proxiedUrl = req.url;
+    });
 
     const req = createReq('/', {
       cookie: `${__testOnly.COOKIE_NAME}=99`
@@ -957,8 +985,9 @@ describe('previewProxy', () => {
 
     await instance.middleware(req, res, next);
 
-    expect(next).toHaveBeenCalledTimes(1);
-    expect(proxyStub.web).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+    expect(proxyStub.web).toHaveBeenCalledTimes(1);
+    expect(proxiedUrl).toBe('/');
   });
 
   test('middleware proxies Vite dev asset requests when cookie is present even without referer', async () => {
