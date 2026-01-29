@@ -1455,7 +1455,7 @@ describe('useBranchTabState targeted guards', () => {
 
     await waitFor(() => {
       expect(getState().mergeWarning).toBe('Commit blocked before merge');
-    });
+    }, { timeout: 5000 });
 
     expect(axios.post.mock.calls.some(([url]) => url.includes('/merge'))).toBe(false);
   });

@@ -4819,6 +4819,136 @@ describe('Projects API with Scaffolding', () => {
 
       portSettingsSpy.mockRestore();
     });
+
+    test('returns 400 when restart target is invalid', async () => {
+      const { project } = await createPersistedProject({ name: `restart-invalid-target-${Date.now()}` });
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/restart?target=wat`);
+
+      expect(response.status).toBe(400);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toMatch(/invalid restart target/i);
+    });
+
+    test('restarts only the requested target when target is provided', async () => {
+      const { project } = await createPersistedProject({ name: `restart-target-${Date.now()}` });
+
+      const processManager = await import('../routes/projects/processManager.js');
+      processManager.runningProcesses.clear();
+      processManager.storeRunningProcesses(
+        project.id,
+        {
+          frontend: { pid: process.pid, port: 5173, status: 'running' },
+          backend: { pid: process.pid, port: 3000, status: 'running' }
+        },
+        'running',
+        { launchType: 'manual' }
+      );
+
+      const scaffoldingService = await import('../services/projectScaffolding.js');
+      vi.mocked(scaffoldingService.startProject).mockResolvedValueOnce({
+        success: true,
+        processes: {
+          frontend: { pid: process.pid, port: 6400 },
+          backend: null
+        }
+      });
+
+      const databaseModule = await import('../database.js');
+      const updatePortsSpy = vi.spyOn(databaseModule, 'updateProjectPorts');
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/restart?target=frontend`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.processes.frontend.port).toBe(6400);
+      expect(response.body.processes.backend.port).toBe(3000);
+      expect(vi.mocked(scaffoldingService.startProject)).toHaveBeenCalledWith(
+        expect.stringContaining(project.name),
+        expect.objectContaining({ target: 'frontend' })
+      );
+      expect(updatePortsSpy).toHaveBeenCalledWith(project.id, expect.objectContaining({ frontendPort: 6400 }));
+
+      updatePortsSpy.mockRestore();
+    });
+
+    test('restarts backend target and preserves the other process snapshot', async () => {
+      const { project } = await createPersistedProject({ name: `restart-target-backend-${Date.now()}` });
+
+      const processManager = await import('../routes/projects/processManager.js');
+      processManager.runningProcesses.clear();
+      processManager.storeRunningProcesses(
+        project.id,
+        {
+          frontend: { pid: process.pid, port: 5173, status: 'running' },
+          backend: { pid: process.pid, port: 3000, status: 'running' }
+        },
+        'running',
+        { launchType: 'manual' }
+      );
+
+      const scaffoldingService = await import('../services/projectScaffolding.js');
+      vi.mocked(scaffoldingService.startProject).mockResolvedValueOnce({
+        success: true,
+        processes: {
+          frontend: null,
+          backend: { pid: process.pid, port: 6500 }
+        }
+      });
+
+      const databaseModule = await import('../database.js');
+      const updatePortsSpy = vi.spyOn(databaseModule, 'updateProjectPorts');
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/restart?target=backend`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.processes.backend.port).toBe(6500);
+      expect(response.body.processes.frontend.port).toBe(5173);
+      expect(vi.mocked(scaffoldingService.startProject)).toHaveBeenCalledWith(
+        expect.stringContaining(project.name),
+        expect.objectContaining({ target: 'backend' })
+      );
+      expect(updatePortsSpy).toHaveBeenCalledWith(project.id, expect.objectContaining({ backendPort: 6500 }));
+
+      updatePortsSpy.mockRestore();
+    });
+
+    test('target restart skips port update when started port is missing and marks state stopped', async () => {
+      const { project } = await createPersistedProject({ name: `restart-target-missing-port-${Date.now()}` });
+
+      const processManager = await import('../routes/projects/processManager.js');
+      processManager.runningProcesses.clear();
+
+      const scaffoldingService = await import('../services/projectScaffolding.js');
+      vi.mocked(scaffoldingService.startProject).mockResolvedValueOnce({
+        success: true,
+        processes: {
+          frontend: null,
+          backend: null
+        }
+      });
+
+      const databaseModule = await import('../database.js');
+      const updatePortsSpy = vi.spyOn(databaseModule, 'updateProjectPorts');
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/restart?target=frontend`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.processes.frontend).toBeNull();
+      expect(response.body.processes.backend).toBeNull();
+      expect(updatePortsSpy).toHaveBeenCalledWith(project.id, {});
+
+      const entry = processManager.getRunningProcessEntry(project.id);
+      expect(entry.state).toBe('stopped');
+
+      updatePortsSpy.mockRestore();
+    });
   });
 
   describe('DELETE /api/projects/:id - Project removal', () => {

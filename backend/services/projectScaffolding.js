@@ -127,6 +127,12 @@ export const startProject = async (projectPath, options = {}) => {
   if (!projectPath || typeof projectPath !== 'string') {
     throw new Error('Invalid project path: path must be a non-empty string');
   }
+
+  const requestedTarget = options.target === 'frontend' || options.target === 'backend'
+    ? options.target
+    : null;
+  const shouldStartFrontend = !requestedTarget || requestedTarget === 'frontend';
+  const shouldStartBackend = !requestedTarget || requestedTarget === 'backend';
   
   const frontendPath = path.join(projectPath, 'frontend');
   const backendPath = path.join(projectPath, 'backend');
@@ -169,12 +175,17 @@ export const startProject = async (projectPath, options = {}) => {
   );
 
   if (isTestMode) {
+    const stub = buildStubProcesses({
+      frontendPort,
+      backendPort
+    });
+
     return {
       success: true,
-      processes: buildStubProcesses({
-        frontendPort,
-        backendPort
-      })
+      processes: {
+        frontend: shouldStartFrontend ? stub.frontend : null,
+        backend: shouldStartBackend ? stub.backend : null
+      }
     };
   }
 
@@ -184,89 +195,99 @@ export const startProject = async (projectPath, options = {}) => {
   };
 
   try {
-    // Start backend first
-    console.log('🚀 Starting backend server...');
-    
-    if (packageJsonExists) {
-      // Node.js backend
-      const backendProcess = spawn('npm', ['run', 'dev'], { 
-        cwd: backendPath, 
-        stdio: 'pipe',
-        shell: true,
-        env: { ...process.env, PORT: String(backendPort) }
-      });
-      processes.backend = createProcessInfo('backend', backendProcess, backendPort);
-    }
-
-    if (!packageJsonExists && appPyExists) {
-      // Python backend - cross-platform virtual environment handling
-      let backendProcess;
+    if (shouldStartBackend) {
+      // Start backend first
+      console.log('🚀 Starting backend server...');
       
-      if (process.platform === 'win32') {
-        // Windows
-        const activateScript = path.join(backendPath, 'venv', 'Scripts', 'activate.bat');
-        const pythonExe = path.join(backendPath, 'venv', 'Scripts', 'python.exe');
-        
-        // Check if virtual environment exists, otherwise use system python
-        try {
-          await fs.access(activateScript);
-          backendProcess = spawn('cmd', ['/c', `"${activateScript}" && python app.py`], {
-            cwd: backendPath,
-            stdio: 'pipe',
-            shell: false,
-            env: { ...process.env, PORT: String(backendPort) }
-          });
-        } catch {
-          // Fallback to system python
-          backendProcess = spawn('python', ['app.py'], {
-            cwd: backendPath,
-            stdio: 'pipe',
-            shell: false,
-            env: { ...process.env, PORT: String(backendPort) }
-          });
-        }
-      } else {
-        // Unix-like systems (Linux, macOS)
-        const activateScript = path.join(backendPath, 'venv', 'bin', 'activate');
-        
-        // Check if virtual environment exists, otherwise use system python
-        try {
-          await fs.access(activateScript);
-          backendProcess = spawn('bash', ['-c', `source "${activateScript}" && python app.py`], {
-            cwd: backendPath,
-            stdio: 'pipe',
-            shell: false,
-            env: { ...process.env, PORT: String(backendPort) }
-          });
-        } catch {
-          // Fallback to system python
-          backendProcess = spawn('python3', ['app.py'], {
-            cwd: backendPath,
-            stdio: 'pipe',
-            shell: false,
-            env: { ...process.env, PORT: String(backendPort) }
-          });
-        }
+      if (packageJsonExists) {
+        // Node.js backend
+        const backendProcess = spawn('npm', ['run', 'dev'], {
+          cwd: backendPath,
+          stdio: 'pipe',
+          shell: true,
+          env: { ...process.env, PORT: String(backendPort) }
+        });
+        processes.backend = createProcessInfo('backend', backendProcess, backendPort);
       }
-      
-      processes.backend = createProcessInfo('backend', backendProcess, backendPort);
+
+      if (!packageJsonExists && appPyExists) {
+        // Python backend - cross-platform virtual environment handling
+        let backendProcess;
+        
+        if (process.platform === 'win32') {
+          // Windows
+          const activateScript = path.join(backendPath, 'venv', 'Scripts', 'activate.bat');
+          const pythonExe = path.join(backendPath, 'venv', 'Scripts', 'python.exe');
+          void pythonExe;
+          
+          // Check if virtual environment exists, otherwise use system python
+          try {
+            await fs.access(activateScript);
+            backendProcess = spawn('cmd', ['/c', `"${activateScript}" && python app.py`], {
+              cwd: backendPath,
+              stdio: 'pipe',
+              shell: false,
+              env: { ...process.env, PORT: String(backendPort) }
+            });
+          } catch {
+            // Fallback to system python
+            backendProcess = spawn('python', ['app.py'], {
+              cwd: backendPath,
+              stdio: 'pipe',
+              shell: false,
+              env: { ...process.env, PORT: String(backendPort) }
+            });
+          }
+        } else {
+          // Unix-like systems (Linux, macOS)
+          const activateScript = path.join(backendPath, 'venv', 'bin', 'activate');
+          
+          // Check if virtual environment exists, otherwise use system python
+          try {
+            await fs.access(activateScript);
+            backendProcess = spawn('bash', ['-c', `source "${activateScript}" && python app.py`], {
+              cwd: backendPath,
+              stdio: 'pipe',
+              shell: false,
+              env: { ...process.env, PORT: String(backendPort) }
+            });
+          } catch {
+            // Fallback to system python
+            backendProcess = spawn('python3', ['app.py'], {
+              cwd: backendPath,
+              stdio: 'pipe',
+              shell: false,
+              env: { ...process.env, PORT: String(backendPort) }
+            });
+          }
+        }
+        
+        processes.backend = createProcessInfo('backend', backendProcess, backendPort);
+      }
     }
 
-    // Give backend a moment to start
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    if (shouldStartFrontend) {
+      // Give backend a moment to start when we're launching both.
+      if (shouldStartBackend) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
 
-    // Start frontend
-    console.log('🚀 Starting frontend development server...');
-    const frontendProcess = spawn('npm', ['run', 'dev', '--', '--port', String(frontendPort)], { 
-      cwd: frontendPath, 
-      stdio: 'pipe',
-      shell: true 
-    });
-    processes.frontend = createProcessInfo('frontend', frontendProcess, frontendPort);
+      console.log('🚀 Starting frontend development server...');
+      const frontendProcess = spawn('npm', ['run', 'dev', '--', '--port', String(frontendPort)], {
+        cwd: frontendPath,
+        stdio: 'pipe',
+        shell: true
+      });
+      processes.frontend = createProcessInfo('frontend', frontendProcess, frontendPort);
+    }
 
     console.log('✅ Project started successfully');
-    console.log(`Frontend: http://localhost:${processes.frontend.port}`);
-    console.log(`Backend: http://localhost:${processes.backend.port}`);
+    if (processes.frontend && typeof processes.frontend.port === 'number') {
+      console.log(`Frontend: http://localhost:${processes.frontend.port}`);
+    }
+    if (processes.backend && typeof processes.backend.port === 'number') {
+      console.log(`Backend: http://localhost:${processes.backend.port}`);
+    }
 
     return { success: true, processes };
   } catch (error) {
@@ -404,4 +425,140 @@ export const __testing = {
   generateBackendFiles,
   templates,
   snapshotReservedPorts
+};
+
+export const startProjectTarget = async (projectPath, target, options = {}) => {
+  if (!projectPath || typeof projectPath !== 'string') {
+    throw new Error('Invalid project path: path must be a non-empty string');
+  }
+
+  const normalizedTarget = target === 'frontend' || target === 'backend' ? target : null;
+  if (!normalizedTarget) {
+    throw new Error('Invalid start target');
+  }
+
+  const frontendPath = path.join(projectPath, 'frontend');
+  const backendPath = path.join(projectPath, 'backend');
+
+  const packageJsonPath = path.join(backendPath, 'package.json');
+  const appPyPath = path.join(backendPath, 'app.py');
+  const packageJsonExists = await fs.access(packageJsonPath).then(() => true).catch(() => false);
+  const appPyExists = await fs.access(appPyPath).then(() => true).catch(() => false);
+
+  const hasExplicitFrontendBase = Object.prototype.hasOwnProperty.call(options, 'frontendPortBase');
+  const hasExplicitBackendBase = Object.prototype.hasOwnProperty.call(options, 'backendPortBase');
+
+  let frontendPort = null;
+  let backendPort = null;
+
+  if (normalizedTarget === 'frontend') {
+    let preferredFrontendPort = normalizePortCandidate(options.frontendPort);
+    if (preferredFrontendPort && RESERVED_FRONTEND_PORTS.has(preferredFrontendPort)) {
+      preferredFrontendPort = null;
+    }
+
+    const resolvedFrontendPortBase = normalizePortBase(options.frontendPortBase, DEFAULT_FRONTEND_PORT_BASE);
+    if (preferredFrontendPort && preferredFrontendPort < resolvedFrontendPortBase && hasExplicitFrontendBase) {
+      preferredFrontendPort = null;
+    }
+
+    frontendPort = await findAvailablePort(preferredFrontendPort, resolvedFrontendPortBase, RESERVED_FRONTEND_PORTS);
+  }
+
+  if (normalizedTarget === 'backend') {
+    let preferredBackendPort = normalizePortCandidate(options.backendPort);
+    const resolvedBackendPortBase = normalizePortBase(options.backendPortBase, DEFAULT_BACKEND_PORT_BASE);
+    const backendDefaultPort = packageJsonExists ? 3000 : 5000;
+    if (preferredBackendPort && preferredBackendPort < resolvedBackendPortBase && hasExplicitBackendBase) {
+      preferredBackendPort = null;
+    }
+
+    let backendPreferred = preferredBackendPort;
+    if (!backendPreferred) {
+      backendPreferred = backendDefaultPort >= resolvedBackendPortBase ? backendDefaultPort : null;
+    }
+
+    backendPort = await findAvailablePort(backendPreferred, resolvedBackendPortBase, RESERVED_BACKEND_PORTS);
+  }
+
+  if (isTestMode) {
+    const stubs = buildStubProcesses({
+      frontendPort: frontendPort ?? 5173,
+      backendPort: backendPort ?? 3000
+    });
+    return {
+      success: true,
+      process: stubs[normalizedTarget],
+      port: normalizedTarget === 'frontend' ? frontendPort : backendPort
+    };
+  }
+
+  if (normalizedTarget === 'frontend') {
+    const proc = spawn('npm', ['run', 'dev', '--', '--port', String(frontendPort)], {
+      cwd: frontendPath,
+      stdio: 'pipe',
+      shell: true
+    });
+
+    const processInfo = createProcessInfo('frontend', proc, frontendPort);
+    return { success: true, process: processInfo, port: frontendPort };
+  }
+
+  // backend
+  if (packageJsonExists) {
+    const backendProcess = spawn('npm', ['run', 'dev'], {
+      cwd: backendPath,
+      stdio: 'pipe',
+      shell: true,
+      env: { ...process.env, PORT: String(backendPort) }
+    });
+    const processInfo = createProcessInfo('backend', backendProcess, backendPort);
+    return { success: true, process: processInfo, port: backendPort };
+  }
+
+  if (!packageJsonExists && appPyExists) {
+    let backendProcess;
+    if (process.platform === 'win32') {
+      const activateScript = path.join(backendPath, 'venv', 'Scripts', 'activate.bat');
+      try {
+        await fs.access(activateScript);
+        backendProcess = spawn('cmd', ['/c', `"${activateScript}" && python app.py`], {
+          cwd: backendPath,
+          stdio: 'pipe',
+          shell: false,
+          env: { ...process.env, PORT: String(backendPort) }
+        });
+      } catch {
+        backendProcess = spawn('python', ['app.py'], {
+          cwd: backendPath,
+          stdio: 'pipe',
+          shell: false,
+          env: { ...process.env, PORT: String(backendPort) }
+        });
+      }
+    } else {
+      const activateScript = path.join(backendPath, 'venv', 'bin', 'activate');
+      try {
+        await fs.access(activateScript);
+        backendProcess = spawn('bash', ['-c', `source "${activateScript}" && python app.py`], {
+          cwd: backendPath,
+          stdio: 'pipe',
+          shell: false,
+          env: { ...process.env, PORT: String(backendPort) }
+        });
+      } catch {
+        backendProcess = spawn('python3', ['app.py'], {
+          cwd: backendPath,
+          stdio: 'pipe',
+          shell: false,
+          env: { ...process.env, PORT: String(backendPort) }
+        });
+      }
+    }
+
+    const processInfo = createProcessInfo('backend', backendProcess, backendPort);
+    return { success: true, process: processInfo, port: backendPort };
+  }
+
+  throw new Error('No supported backend entrypoint found');
 };

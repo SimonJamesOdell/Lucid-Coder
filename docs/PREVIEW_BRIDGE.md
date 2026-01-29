@@ -30,6 +30,32 @@ Payload:
 - `href` (string)
 - `title` (string, optional)
 
+## Preview helper (0.4.x)
+
+0.4.x introduces a preview helper that is injected into the proxied preview HTML.
+It is intended as a mainstream feature.
+
+### `LUCIDCODER_PREVIEW_HELPER_READY` (iframe → parent)
+
+Sent when the helper initializes.
+
+Payload:
+
+- `href` (string, optional)
+
+### `LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU` (iframe → parent)
+
+Sent when the user right-clicks inside the preview iframe. Holding **Shift** bypasses the helper and shows the browser’s default context menu.
+
+Payload:
+
+- `href` (string)
+- `clientX` (number)
+- `clientY` (number)
+- `tagName` (string, optional)
+- `id` (string, optional)
+- `className` (string, optional)
+
 ## Messages (parent → iframe)
 
 ### `LUCIDCODER_PREVIEW_BRIDGE_PING`

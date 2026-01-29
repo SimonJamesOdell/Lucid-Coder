@@ -289,6 +289,7 @@ export const stopProjectProcessTarget = async ({ projectId, target, trackedFetch
 
 export const restartProjectProcesses = async ({
   projectId,
+  target,
   trackedFetch,
   applyProcessSnapshot,
   refreshProcessStatus,
@@ -298,7 +299,10 @@ export const restartProjectProcesses = async ({
     throw new Error('Select a project before restarting processes');
   }
 
-  const response = await trackedFetch(`/api/projects/${projectId}/restart`, {
+  const normalizedTarget = target === 'frontend' || target === 'backend' ? target : null;
+
+  const suffix = normalizedTarget ? `?target=${encodeURIComponent(normalizedTarget)}` : '';
+  const response = await trackedFetch(`/api/projects/${projectId}/restart${suffix}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
