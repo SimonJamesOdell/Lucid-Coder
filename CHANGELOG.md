@@ -1,3 +1,8 @@
+## 0.4.1 (2026-01-29)
+- Refactor backend orchestration and Branch workflow test gating into smaller helper modules to reduce file size and improve maintainability.
+- Refactor App state and Chat panel logic into focused frontend helper modules while preserving existing behavior.
+- Add targeted unit tests to keep the strict 100% coverage gate green.
+
 ## 0.4.0 (2026-01-29)
 - Add targeted process restart support (restart frontend/backend independently) and propagate target selection through backend routes and frontend state.
 - Improve Preview UX: more reliable “Open in new tab” behavior, error-state “Refresh + retry”, and auto-recovery controls/copy.

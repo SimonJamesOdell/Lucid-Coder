@@ -18,41 +18,16 @@ import { handlePlanOnlyFeature, handleRegularFeature, processGoals } from '../se
 import { isNaturalLanguageCancel, isNaturalLanguagePause, isNaturalLanguageResume, handleChatCommand } from '../utils/chatCommandHelpers';
 import { shouldSkipAutomationTests as shouldSkipAutomationTestsHelper } from './chatPanelCssOnly';
 import { useAutopilotSession } from './chatPanel/useAutopilotSession';
+import {
+  formatAgentStepMessage,
+  parseClarificationOptions,
+  persistChatMessages,
+  readStoredChatMessages
+} from './chatPanel/chatPanelUtils';
+import { buildAutopilotJobLogLines } from './chatPanel/jobLogs.js';
+import { updateChatPanelTestHooks } from './chatPanel/testHooks.js';
 
-export const formatAgentStepMessage = (step) => {
-  if (!step || typeof step !== 'object') {
-    return null;
-  }
-
-  if (step.type === 'action') {
-    if (step.action === 'read_file') {
-      const target = step.target || 'a file';
-      if (step.reason) {
-        return `Agent is reading ${target} (${step.reason}).`;
-      }
-      return `Agent is reading ${target}.`;
-    }
-    return `Agent is performing action: ${step.action}.`;
-  }
-
-  if (step.type === 'observation') {
-    if (step.action === 'read_file') {
-      if (step.error) {
-        return `Agent could not read ${step.target || 'file'}: ${step.error}`;
-      }
-      return null;
-    }
-    if (step.error) {
-      return `Agent observation error: ${step.error}`;
-    }
-    return `Agent observation: ${step.summary || 'No details provided.'}`;
-  }
-
-  return null;
-};
-
-const MAX_JOB_LOG_LINES_PER_JOB = 60;
-const MAX_TOTAL_JOB_LOG_LINES = 200;
+export { formatAgentStepMessage };
 
 const ChatPanel = ({
   width = 320,
@@ -122,39 +97,7 @@ const ChatPanel = ({
   });
 
   const extractClarificationOptions = useCallback((question) => {
-    if (typeof question !== 'string') {
-      return [];
-    }
-
-    const lines = question.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const bulletOptions = lines
-      .map((line) => line.replace(/^[-*•]\s+/, '').trim())
-      .filter((line) => line && !/^[-*•]/.test(line));
-
-    const bulletOnly = lines
-      .filter((line) => /^[-*•]\s+/.test(line))
-      .map((line) => line.replace(/^[-*•]\s+/, '').trim())
-      .filter(Boolean);
-
-    let options = bulletOnly.length > 0 ? bulletOnly : [];
-
-    if (options.length === 0) {
-      const inlineMatch = question.match(/\(([^)]+)\)/);
-      if (inlineMatch && inlineMatch[1]) {
-        options = inlineMatch[1].split(/\s*[|/]\s*/).map((item) => item.trim()).filter(Boolean);
-      }
-    }
-
-    if (options.length === 0) {
-      const optionLine = lines.find((line) => /^(options|choices|choose|pick)\b/i.test(line));
-      if (optionLine) {
-        const parts = optionLine.split(/[:,-]\s*/).slice(1).join(' ');
-        options = parts.split(/\s*(?:,|\/|\bor\b)\s*/i).map((item) => item.trim()).filter(Boolean);
-      }
-    }
-
-    const unique = Array.from(new Set(options.filter(Boolean)));
-    return unique.length >= 2 && unique.length <= 5 ? unique : [];
+    return parseClarificationOptions(question);
   }, []);
   const messagesContainerRef = useRef(null);
   const autoScrollEnabledRef = useRef(true);
@@ -271,44 +214,11 @@ const ChatPanel = ({
   }, []);
 
   const readStoredChat = useCallback((projectId) => {
-    if (typeof window === 'undefined' || !projectId) {
-      return [];
-    }
-    try {
-      const raw = window.localStorage?.getItem?.(`lucidcoder.chat.${projectId}`);
-      if (!raw) {
-        return [];
-      }
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) {
-        return [];
-      }
-      return parsed.map((item) => ({
-        ...item,
-        timestamp: item?.timestamp ? new Date(item.timestamp) : new Date()
-      }));
-    } catch {
-      return [];
-    }
+    return readStoredChatMessages(projectId);
   }, []);
 
   const persistChat = useCallback((projectId, nextMessages) => {
-    if (typeof window === 'undefined' || !projectId) {
-      return;
-    }
-    try {
-      const trimmed = Array.isArray(nextMessages) ? nextMessages.slice(-200) : [];
-      const payload = trimmed.map((item) => ({
-        id: item.id,
-        text: item.text,
-        sender: item.sender,
-        variant: item.variant || null,
-        timestamp: item.timestamp ? new Date(item.timestamp).toISOString() : new Date().toISOString()
-      }));
-      window.localStorage?.setItem?.(`lucidcoder.chat.${projectId}`, JSON.stringify(payload));
-    } catch {
-      // Ignore storage failures
-    }
+    persistChatMessages(projectId, nextMessages);
   }, []);
 
   useEffect(() => {
@@ -463,38 +373,28 @@ const ChatPanel = ({
     }, 0);
   }, [autopilotIsActive]);
 
-  if (ChatPanel.__testHooks) {
-    // Surface critical autopilot handlers so tests can exercise guard rails.
-    ChatPanel.__testHooks.handlers = {
-      startAutopilot: handleStartAutopilot,
-      changeDirectionPrompt: handleChangeDirectionPrompt,
-      undoLastChangePrompt: handleUndoLastChangePrompt,
-      autopilotMessage: handleAutopilotMessage,
-      autopilotControl: handleAutopilotControl
-    };
-    ChatPanel.__testHooks.latestInstance = {
-      autopilotResumeAttemptedRef,
-      isMessagesScrolledToBottom,
-      messagesRef,
-      messagesContainerRef,
-      scrollMessagesToBottom,
-      refreshAutopilotStatus,
-      stopAutopilotPoller,
-      setAutopilotSession,
-      setAutopilotEvents
-    };
-    ChatPanel.__testHooks.storage = {
-      clearStoredAutopilotSession,
-      persistAutopilotSession,
-      loadStoredAutopilotSession,
-      applyAutopilotSummary,
-      stopAutopilotPoller
-    };
-    ChatPanel.__testHooks.chatStorage = {
-      persistChat,
-      readStoredChat
-    };
-  }
+  updateChatPanelTestHooks(ChatPanel, {
+    handleStartAutopilot,
+    handleChangeDirectionPrompt,
+    handleUndoLastChangePrompt,
+    handleAutopilotMessage,
+    handleAutopilotControl,
+    autopilotResumeAttemptedRef,
+    isMessagesScrolledToBottom,
+    messagesRef,
+    messagesContainerRef,
+    scrollMessagesToBottom,
+    refreshAutopilotStatus,
+    stopAutopilotPoller,
+    setAutopilotSession,
+    setAutopilotEvents,
+    clearStoredAutopilotSession,
+    persistAutopilotSession,
+    loadStoredAutopilotSession,
+    applyAutopilotSummary,
+    persistChat,
+    readStoredChat
+  });
 
   const autopilotJobLogs = useMemo(() => {
     if (!autopilotIsActive || !currentProject?.id) {
@@ -506,39 +406,7 @@ const ChatPanel = ({
       return [];
     }
 
-    const lines = [];
-    let totalLines = 0;
-
-    jobs.forEach((job, jobIndex) => {
-      if (!job || job.type !== 'test-run' || !Array.isArray(job.logs) || job.logs.length === 0) {
-        return;
-      }
-
-      const logSlice = job.logs.slice(-MAX_JOB_LOG_LINES_PER_JOB);
-      if (logSlice.length === 0) {
-        return;
-      }
-
-      lines.push({
-        key: `job-${jobIndex}-header`,
-        text: `${job.displayName || 'Test Run'} • ${job.status || 'pending'}`,
-        variant: 'header'
-      });
-
-      logSlice.forEach((entry, entryIdx) => {
-        if (totalLines >= MAX_TOTAL_JOB_LOG_LINES) {
-          return;
-        }
-        totalLines += 1;
-        lines.push({
-          key: `job-${jobIndex}-log-${entryIdx}`,
-          text: entry?.message || '',
-          stream: entry?.stream || 'stdout'
-        });
-      });
-    });
-
-    return lines;
+    return buildAutopilotJobLogLines(jobs);
   }, [autopilotIsActive, currentProject?.id, jobState]);
 
   const autopilotStatusValue = autopilotSession?.status || 'idle';

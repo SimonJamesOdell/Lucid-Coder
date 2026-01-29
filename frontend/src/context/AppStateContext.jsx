@@ -53,6 +53,11 @@ import {
   clearStagedChanges as clearStagedChangesAction,
   stageAiChange as stageAiChangeAction
 } from './appState/branches.js';
+import {
+  normalizePreviewTab as normalizePreviewTabValue,
+  computeNextFollowAutomation
+} from './appState/previewPanel.js';
+import { isBackendUnreachableResponse } from './appState/backendConnectivity.js';
 
 const isTestEnv = typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
 
@@ -201,42 +206,7 @@ export const AppStateProvider = ({ children }) => {
     };
   }
 
-  const normalizePreviewTab = useCallback((value) => {
-    if (typeof value !== 'string') {
-      return '';
-    }
-
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return '';
-    }
-
-    const lower = trimmed.toLowerCase();
-    const aliases = {
-      tests: 'test',
-      branches: 'branch',
-      goals: 'goals',
-      runs: 'runs',
-      'llm usage': 'llm-usage',
-      llmusage: 'llm-usage'
-    };
-
-    const normalized = aliases[lower] || lower;
-    const allowed = new Set([
-      'preview',
-      'goals',
-      'runs',
-      'files',
-      'branch',
-      'test',
-      'commits',
-      'git',
-      'packages',
-      'processes',
-      'llm-usage'
-    ]);
-    return allowed.has(normalized) ? normalized : '';
-  }, []);
+  const normalizePreviewTab = useCallback(normalizePreviewTabValue, []);
 
   const setPreviewPanelTab = useCallback(
     (tab, options = {}) => {
@@ -251,17 +221,11 @@ export const AppStateProvider = ({ children }) => {
 
       setPreviewPanelState((prev) => {
         const nextActiveTab = normalized;
-        const nextFollowAutomation = (() => {
-          if (source === 'automation' || source === 'agent') {
-            return true;
-          }
-          if (source === 'user') {
-            // Only treat an explicit user click on the Goals tab as “pause automation”.
-            // (Other manual tab changes should not disable agent actions.)
-            return nextActiveTab === 'goals' ? false : prev.followAutomation;
-          }
-          return prev.followAutomation;
-        })();
+        const nextFollowAutomation = computeNextFollowAutomation(
+          prev.followAutomation,
+          nextActiveTab,
+          source
+        );
 
         if (prev.activeTab === nextActiveTab && prev.followAutomation === nextFollowAutomation) {
           return prev;
@@ -341,25 +305,6 @@ export const AppStateProvider = ({ children }) => {
     const message = error?.message || (typeof error === 'string' ? error : null) || 'Backend unreachable';
     setBackendConnectivity({ status: 'offline', lastError: message });
   }, []);
-
-  const isBackendUnreachableResponse = (response, requestUrl) => {
-    const status = Number(response?.status);
-    if (status === 502 || status === 503 || status === 504) {
-      return true;
-    }
-
-    const url = typeof requestUrl === 'string' ? requestUrl : '';
-    const isConnectivityProbe = url === '/api/llm/status' || url === '/api/projects';
-
-    // When running the frontend dev server, a missing backend can present as a 404
-    // (because the proxy cannot reach the upstream). Treat that as "offline" for
-    // critical probe endpoints.
-    if (isConnectivityProbe && status === 404) {
-      return true;
-    }
-
-    return false;
-  };
 
   const trackedFetch = useCallback(async (...args) => {
     try {

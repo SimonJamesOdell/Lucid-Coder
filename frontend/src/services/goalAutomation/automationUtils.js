@@ -1,5 +1,22 @@
 import axios from 'axios';
 
+import { createApplyEditsModule } from './automationUtils/applyEdits.js';
+import {
+  buildFallbackBranchNameFromPrompt,
+  extractBranchName,
+  isBranchNameRelevantToPrompt,
+  isValidBranchName,
+  parseBranchNameFromLLMText
+} from './automationUtils/branchNames.js';
+
+export {
+  buildFallbackBranchNameFromPrompt,
+  extractBranchName,
+  isBranchNameRelevantToPrompt,
+  isValidBranchName,
+  parseBranchNameFromLLMText
+};
+
 export const automationLog = (label, details) => {
   try {
     console.log(`[automation] ${label}`, details);
@@ -64,143 +81,6 @@ export const parseTextFromLLMResponse = (response) => {
     return response.data.content;
   }
   return '';
-};
-
-export const extractBranchName = (raw, fallbackName) => {
-  const fallback = String(fallbackName).trim();
-
-  const slugify = (value) =>
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+/, '')
-      .replace(/-+$/, '')
-      .slice(0, 40);
-
-  const text = String(raw).trim();
-  if (!text) {
-    return fallback;
-  }
-
-  const quoted = text.match(/['"]([a-z0-9]+(?:-[a-z0-9]+)+)['"]/i);
-  if (quoted?.[1]) {
-    const candidate = slugify(quoted[1]);
-    if (candidate) return candidate;
-  }
-
-  const tokens = text.match(/[a-z0-9]+(?:-[a-z0-9]+)+/gi) || [];
-  const token = tokens.map((t) => slugify(t)).find(Boolean);
-  if (token) return token;
-
-  return slugify(text) || fallback;
-};
-
-export const parseBranchNameFromLLMText = (text) => {
-  const trimmed = text.trim();
-  if (!trimmed) return '';
-
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      const candidate = parsed?.branch ?? parsed?.name;
-      return typeof candidate === 'string' ? candidate.trim() : '';
-    } catch {
-      // Fall through to treat it as plain text.
-    }
-  }
-
-  return trimmed;
-};
-
-export const isValidBranchName = (name) => {
-  const trimmed = String(name).trim();
-  if (trimmed === 'kebab-case') return false;
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)+$/.test(trimmed)) return false;
-  const parts = trimmed.split('-');
-  return parts.length >= 2 && parts.length <= 5;
-};
-
-export const buildFallbackBranchNameFromPrompt = (prompt, fallbackName) => {
-  const fallback = String(fallbackName || '').trim();
-  const raw = String(prompt || '').toLowerCase();
-  if (!raw.trim()) {
-    return fallback;
-  }
-
-  const stopwords = new Set([
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by',
-    'can', 'could', 'do', 'does', 'for', 'from', 'have', 'has', 'had',
-    'how', 'i', 'if', 'in', 'into', 'is', 'it', "it's", 'its',
-    'let', "let's", 'make', 'of', 'on', 'or', 'our', 'please',
-    'should', 'so', 'some', 'that', 'the', 'their', 'then', 'there',
-    'this', 'to', 'up', 'we', 'with', 'would', 'you', 'your'
-  ]);
-
-  const words = raw
-    .replace(/[^a-z0-9\s-]+/g, ' ')
-    .split(/[\s-]+/)
-    .map((w) => w.trim())
-    .filter(Boolean)
-    .filter((w) => !stopwords.has(w))
-    .filter((w) => !/^\d+$/.test(w));
-
-  const picked = [];
-  for (const word of words) {
-    picked.push(word);
-    if (picked.length >= 4) {
-      break;
-    }
-  }
-
-  if (picked.length < 2) {
-    return fallback;
-  }
-
-  const candidate = picked.join('-');
-  return extractBranchName(candidate, fallback);
-};
-
-export const isBranchNameRelevantToPrompt = (branchName, prompt) => {
-  const normalize = (value) => String(value || '')
-    .toLowerCase()
-    .replace(/\//g, ' ')
-    .replace(/[^a-z0-9\s-]+/g, ' ');
-
-  const stopwords = new Set([
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by',
-    'can', 'could', 'do', 'does', 'for', 'from', 'have', 'has', 'had',
-    'how', 'i', 'if', 'in', 'into', 'is', 'it', "it's", 'its',
-    'let', "let's", 'make', 'of', 'on', 'or', 'our', 'please',
-    'should', 'so', 'some', 'that', 'the', 'their', 'then', 'there',
-    'this', 'to', 'up', 'we', 'with', 'would', 'you', 'your'
-  ]);
-
-  const tokenize = (value) => normalize(value)
-    .split(/[\s-]+/)
-    .map((w) => w.trim())
-    .filter(Boolean)
-    .filter((w) => !stopwords.has(w))
-    .filter((w) => !/^\d+$/.test(w));
-
-  const promptTokens = new Set(tokenize(prompt));
-  const branchTokens = new Set(tokenize(branchName));
-
-  if (promptTokens.size === 0 || branchTokens.size === 0) {
-    return true;
-  }
-
-  // If the prompt is too short (e.g. just "test" or "refactor"), we don't have
-  // enough signal to reliably judge relevance.
-  if (promptTokens.size < 2) {
-    return true;
-  }
-
-  for (const token of branchTokens) {
-    if (promptTokens.has(token)) {
-      return true;
-    }
-  }
-  return false;
 };
 
 export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
@@ -1486,30 +1366,18 @@ export const buildRelevantFilesContext = async ({
   return `\n\nRelevant file contents (read-only context):\n\n${sections.join('\n\n')}`;
 };
 
-const applyEditsDeps = {
+const { applyEdits, __setApplyEditsTestDeps } = createApplyEditsModule({
   readProjectFile,
   applyReplacements,
   tryRepairModifyEdit,
   tryRewriteFileWithLLM,
   upsertProjectFile,
   deleteProjectPath,
-  stageProjectFile
-};
-
-export const __setApplyEditsTestDeps = (overrides = {}) => {
-  const restore = {};
-  Object.entries(overrides).forEach(([key, value]) => {
-    if (typeof value === 'function' && applyEditsDeps[key]) {
-      restore[key] = applyEditsDeps[key];
-      applyEditsDeps[key] = value;
-    }
-  });
-  return () => {
-    Object.entries(restore).forEach(([key, value]) => {
-      applyEditsDeps[key] = value;
-    });
-  };
-};
+  stageProjectFile,
+  automationLog,
+  normalizeRepoPath,
+  isReplacementResolutionError
+});
 
 export const __automationUtilsTestHooks = {
   formatTestFailureContext,
@@ -1522,185 +1390,4 @@ export const __automationUtilsTestHooks = {
   isTestFilePath
 };
 
-export const applyEdits = async ({
-  projectId,
-  edits,
-  source = 'ai',
-  knownPathsSet,
-  goalPrompt,
-  stage,
-  onFileApplied,
-  syncBranchOverview
-}) => {
-  if (!projectId || !Array.isArray(edits) || edits.length === 0) {
-    return { applied: 0, skipped: 0 };
-  }
-
-  const useKnownPaths = knownPathsSet instanceof Set && knownPathsSet.size > 0;
-
-  let applied = 0;
-  let skipped = 0;
-
-  for (const edit of edits) {
-    const rawPath = edit?.path;
-    const type = edit?.type;
-    const normalizedPath = normalizeRepoPath(rawPath);
-
-    if (!normalizedPath) {
-      skipped += 1;
-      automationLog('skipping edit (missing/invalid path)', { type, path: rawPath });
-      continue;
-    }
-
-    if (type === 'modify') {
-      const original = await applyEditsDeps.readProjectFile({ projectId, filePath: normalizedPath });
-      if (original === null) {
-        throw new Error('File not found');
-      }
-
-      let updated;
-      try {
-        updated = applyEditsDeps.applyReplacements(original, edit?.replacements);
-      } catch (error) {
-        const fallbackMessage =
-          typeof error?.message === 'string' && error.message.trim().length > 0
-            ? error.message
-            : String(error || 'Replacement failed');
-        const replacementError = error instanceof Error ? error : new Error(fallbackMessage);
-        if (replacementError && !replacementError.message) {
-          replacementError.message = fallbackMessage;
-        }
-        const replacementPreview = []
-          .concat(edit?.replacements)
-          .filter((r) => r && typeof r === 'object')
-          .slice(0, 2)
-          .map((r) => ({
-            searchPreview: typeof r?.search === 'string' ? r.search.slice(0, 160) : null
-          }));
-
-        replacementError.__lucidcoderReplacementFailure = {
-          path: normalizedPath,
-          stage,
-          message: replacementError.message,
-          searchSnippet: replacementPreview[0]?.searchPreview || null
-        };
-
-        automationLog('applyEdits:modify:replacementError', {
-          path: normalizedPath,
-          message: replacementError?.message,
-          preview: replacementPreview
-        });
-
-        if (isReplacementResolutionError(replacementError) && typeof goalPrompt === 'string' && goalPrompt.trim().length > 0) {
-          const repaired = await applyEditsDeps.tryRepairModifyEdit({
-            projectId,
-            goalPrompt,
-            stage,
-            filePath: normalizedPath,
-            originalContent: original,
-            failedEdit: edit,
-            error: replacementError
-          });
-
-          if (repaired?.type === 'modify' && repaired?.replacements) {
-            try {
-              updated = applyEditsDeps.applyReplacements(original, repaired.replacements);
-              edit.replacements = repaired.replacements;
-            } catch (repairApplyError) {
-              automationLog('applyEdits:modify:repair:applyError', {
-                path: normalizedPath,
-                message: repairApplyError?.message
-              });
-              throw replacementError;
-            }
-          } else if (repaired?.type === 'upsert' && typeof repaired?.content === 'string') {
-            updated = repaired.content;
-          } else {
-              const rewriteEdit = await applyEditsDeps.tryRewriteFileWithLLM({
-              goalPrompt,
-              stage,
-              filePath: normalizedPath,
-              originalContent: original,
-              errorMessage: replacementError?.message || 'Unknown replacement failure'
-            });
-
-            if (rewriteEdit?.type === 'upsert' && typeof rewriteEdit?.content === 'string') {
-              updated = rewriteEdit.content;
-              edit.replacements = undefined;
-            } else if (rewriteEdit?.type === 'modify' && rewriteEdit?.replacements) {
-              try {
-                updated = applyEditsDeps.applyReplacements(original, rewriteEdit.replacements);
-                edit.replacements = rewriteEdit.replacements;
-              } catch (rewriteApplyError) {
-                automationLog('applyEdits:modify:rewrite:applyError', {
-                  path: normalizedPath,
-                  message: rewriteApplyError?.message
-                });
-                throw replacementError;
-              }
-            } else {
-              throw replacementError;
-            }
-          }
-        } else {
-          throw replacementError;
-        }
-      }
-      if (updated === original) {
-        skipped += 1;
-        automationLog('skipping edit (no-op modify)', { type, path: normalizedPath });
-        continue;
-      }
-
-      await applyEditsDeps.upsertProjectFile({
-        projectId,
-        filePath: normalizedPath,
-        content: updated,
-        knownPathsSet: useKnownPaths ? knownPathsSet : undefined
-      });
-      const stagePayload = await applyEditsDeps.stageProjectFile({ projectId, filePath: normalizedPath, source });
-      if (typeof syncBranchOverview === 'function' && stagePayload?.overview) {
-        syncBranchOverview(projectId, stagePayload.overview);
-      }
-      if (typeof onFileApplied === 'function') {
-        await onFileApplied(normalizedPath, { type: 'modify' });
-      }
-      applied += 1;
-      continue;
-    }
-
-    if (type === 'delete') {
-      await applyEditsDeps.deleteProjectPath({ projectId, targetPath: normalizedPath, recursive: edit?.recursive === true });
-      const stagePayload = await applyEditsDeps.stageProjectFile({ projectId, filePath: normalizedPath, source });
-      if (typeof syncBranchOverview === 'function' && stagePayload?.overview) {
-        syncBranchOverview(projectId, stagePayload.overview);
-      }
-      applied += 1;
-      continue;
-    }
-
-    const content = edit?.content;
-    if (typeof content !== 'string') {
-      skipped += 1;
-      automationLog('skipping edit (upsert content not a string)', { type, path: normalizedPath });
-      continue;
-    }
-
-    await applyEditsDeps.upsertProjectFile({
-      projectId,
-      filePath: normalizedPath,
-      content,
-      knownPathsSet: useKnownPaths ? knownPathsSet : undefined
-    });
-    const stagePayload = await applyEditsDeps.stageProjectFile({ projectId, filePath: normalizedPath, source });
-    if (typeof syncBranchOverview === 'function' && stagePayload?.overview) {
-      syncBranchOverview(projectId, stagePayload.overview);
-    }
-    if (typeof onFileApplied === 'function') {
-      await onFileApplied(normalizedPath, { type: 'upsert' });
-    }
-    applied += 1;
-  }
-
-  return { applied, skipped };
-};
+export { applyEdits, __setApplyEditsTestDeps };
