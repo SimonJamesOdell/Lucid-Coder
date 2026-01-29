@@ -24,11 +24,10 @@ import {
   persistChatMessages,
   readStoredChatMessages
 } from './chatPanel/chatPanelUtils';
+import { buildAutopilotJobLogLines } from './chatPanel/jobLogs.js';
+import { updateChatPanelTestHooks } from './chatPanel/testHooks.js';
 
 export { formatAgentStepMessage };
-
-const MAX_JOB_LOG_LINES_PER_JOB = 60;
-const MAX_TOTAL_JOB_LOG_LINES = 200;
 
 const ChatPanel = ({
   width = 320,
@@ -374,38 +373,28 @@ const ChatPanel = ({
     }, 0);
   }, [autopilotIsActive]);
 
-  if (ChatPanel.__testHooks) {
-    // Surface critical autopilot handlers so tests can exercise guard rails.
-    ChatPanel.__testHooks.handlers = {
-      startAutopilot: handleStartAutopilot,
-      changeDirectionPrompt: handleChangeDirectionPrompt,
-      undoLastChangePrompt: handleUndoLastChangePrompt,
-      autopilotMessage: handleAutopilotMessage,
-      autopilotControl: handleAutopilotControl
-    };
-    ChatPanel.__testHooks.latestInstance = {
-      autopilotResumeAttemptedRef,
-      isMessagesScrolledToBottom,
-      messagesRef,
-      messagesContainerRef,
-      scrollMessagesToBottom,
-      refreshAutopilotStatus,
-      stopAutopilotPoller,
-      setAutopilotSession,
-      setAutopilotEvents
-    };
-    ChatPanel.__testHooks.storage = {
-      clearStoredAutopilotSession,
-      persistAutopilotSession,
-      loadStoredAutopilotSession,
-      applyAutopilotSummary,
-      stopAutopilotPoller
-    };
-    ChatPanel.__testHooks.chatStorage = {
-      persistChat,
-      readStoredChat
-    };
-  }
+  updateChatPanelTestHooks(ChatPanel, {
+    handleStartAutopilot,
+    handleChangeDirectionPrompt,
+    handleUndoLastChangePrompt,
+    handleAutopilotMessage,
+    handleAutopilotControl,
+    autopilotResumeAttemptedRef,
+    isMessagesScrolledToBottom,
+    messagesRef,
+    messagesContainerRef,
+    scrollMessagesToBottom,
+    refreshAutopilotStatus,
+    stopAutopilotPoller,
+    setAutopilotSession,
+    setAutopilotEvents,
+    clearStoredAutopilotSession,
+    persistAutopilotSession,
+    loadStoredAutopilotSession,
+    applyAutopilotSummary,
+    persistChat,
+    readStoredChat
+  });
 
   const autopilotJobLogs = useMemo(() => {
     if (!autopilotIsActive || !currentProject?.id) {
@@ -417,39 +406,7 @@ const ChatPanel = ({
       return [];
     }
 
-    const lines = [];
-    let totalLines = 0;
-
-    jobs.forEach((job, jobIndex) => {
-      if (!job || job.type !== 'test-run' || !Array.isArray(job.logs) || job.logs.length === 0) {
-        return;
-      }
-
-      const logSlice = job.logs.slice(-MAX_JOB_LOG_LINES_PER_JOB);
-      if (logSlice.length === 0) {
-        return;
-      }
-
-      lines.push({
-        key: `job-${jobIndex}-header`,
-        text: `${job.displayName || 'Test Run'} • ${job.status || 'pending'}`,
-        variant: 'header'
-      });
-
-      logSlice.forEach((entry, entryIdx) => {
-        if (totalLines >= MAX_TOTAL_JOB_LOG_LINES) {
-          return;
-        }
-        totalLines += 1;
-        lines.push({
-          key: `job-${jobIndex}-log-${entryIdx}`,
-          text: entry?.message || '',
-          stream: entry?.stream || 'stdout'
-        });
-      });
-    });
-
-    return lines;
+    return buildAutopilotJobLogLines(jobs);
   }, [autopilotIsActive, currentProject?.id, jobState]);
 
   const autopilotStatusValue = autopilotSession?.status || 'idle';

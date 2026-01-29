@@ -1,3 +1,12 @@
+import { isRelevantSourceFile, normalizePathForCompare } from './testsApi/workspacePathUtils.js';
+import { buildChangedFilesGateForWorkspace } from './testsApi/changedFilesCoverageGate.js';
+import { extractUncoveredLines } from './testsApi/coverageUtils.js';
+import { readJsonIfExists as readJsonIfExistsInFs } from './testsApi/fsUtils.js';
+import { discoverWorkspaces, selectWorkspacesForScope } from './testsApi/workspaceSelection.js';
+import { resolveChangedPaths } from './testsApi/changedPaths.js';
+import { getChangedSourceFilesForWorkspace } from './testsApi/changedFilesForWorkspace.js';
+import { readNodeWorkspaceCoverage } from './testsApi/nodeCoverageReader.js';
+
 export const createBranchWorkflowTests = (core) => {
   const {
     AUTO_TEST_DEBOUNCE_MS,
@@ -206,23 +215,7 @@ export const createBranchWorkflowTests = (core) => {
       return completed;
     };
 
-    const readJsonIfExists = async (filePath) => {
-      try {
-        const raw = await fs.readFile(filePath, 'utf8');
-        return JSON.parse(raw);
-      } catch {
-        return null;
-      }
-    };
-
-    const pathExists = async (targetPath) => {
-      try {
-        await fs.access(targetPath);
-        return true;
-      } catch {
-        return false;
-      }
-    };
+    const readJsonIfExists = (filePath) => readJsonIfExistsInFs(fs, filePath);
 
     const collectWorkspaceResults = async (projectContext) => {
       const context = projectContext || (await getProjectContext(projectId));
@@ -230,261 +223,33 @@ export const createBranchWorkflowTests = (core) => {
         throw withStatusCode(new Error('Project path not found'), 400);
       }
 
-      const normalizePathForCompare = (value) => String(value).replace(/\\/g, '/');
-      const isRelevantSourceFile = (filePath) => {
-        const normalized = normalizePathForCompare(filePath).toLowerCase();
-        return (
-          normalized.endsWith('.js') ||
-          normalized.endsWith('.jsx') ||
-          normalized.endsWith('.ts') ||
-          normalized.endsWith('.tsx') ||
-          normalized.endsWith('.mjs') ||
-          normalized.endsWith('.cjs') ||
-          normalized.endsWith('.vue')
-        );
-      };
-
-      const resolveChangedPaths = async () => {
-        const explicit = options.changedFiles ?? options.changedPaths;
-        if (Array.isArray(explicit)) {
-          return explicit.map((entry) => String(entry || '').trim()).filter(Boolean);
-        }
-
-        if (context.gitReady) {
-          try {
-            const changed = await listBranchChangedPaths(context, { baseRef: 'main', branchRef: branch.name });
-            if (Array.isArray(changed) && changed.length) {
-              return changed;
-            }
-          } catch {
-            // ignore git diff failures
-          }
-        }
-
-        const stagedFiles = parseStagedFiles(branch.staged_files);
-        if (Array.isArray(stagedFiles) && stagedFiles.length) {
-          return stagedFiles
-            .map((entry) => String(entry?.path || '').trim())
-            .filter(Boolean);
-        }
-
-        return [];
-      };
 
       const projectRoot = context.projectPath;
-      const frontendPath = path.join(projectRoot, 'frontend');
-      const backendPath = path.join(projectRoot, 'backend');
-
-      const hasFrontend = await pathExists(path.join(frontendPath, 'package.json'));
-      const hasBackendPackage = await pathExists(path.join(backendPath, 'package.json'));
-      const hasBackendPython = !hasBackendPackage && (await pathExists(path.join(backendPath, 'requirements.txt')));
-
-      const workspaces = [];
-      if (hasFrontend) workspaces.push({ name: 'frontend', cwd: frontendPath, kind: 'node' });
-      if (hasBackendPackage) workspaces.push({ name: 'backend', cwd: backendPath, kind: 'node' });
-      if (hasBackendPython) workspaces.push({ name: 'backend', cwd: backendPath, kind: 'python' });
-
-      if (!workspaces.length) {
-        // Fallback: try running at project root if no conventional workspaces exist.
-        const rootHasPackage = await pathExists(path.join(projectRoot, 'package.json'));
-        if (rootHasPackage) {
-          workspaces.push({ name: 'root', cwd: projectRoot, kind: 'node' });
-        }
-      }
+      const { workspaces, nodeWorkspaceNames } = await discoverWorkspaces({ projectRoot, fs, path });
 
       if (!workspaces.length) {
         throw withStatusCode(new Error('Test runner not configured (no package.json or requirements.txt found)'), 400);
       }
 
       const { globalThresholds: thresholds, changedFileThresholds, enforceChangedFileCoverage } = resolveCoveragePolicy(options);
-      const changedPaths = await resolveChangedPaths();
+      const changedPaths = await resolveChangedPaths({
+        options,
+        context,
+        branch,
+        listBranchChangedPaths,
+        parseStagedFiles
+      });
 
-      const workspaceScope = typeof options.workspaceScope === 'string' ? options.workspaceScope : 'all';
-      let selectedWorkspaces = workspaces;
-      if (workspaceScope === 'changed' && workspaces.length > 1 && changedPaths.length > 0) {
-        const normalizePathForCompare = (value) => String(value).replace(/\\/g, '/');
-        const normalizedChanged = changedPaths.map(normalizePathForCompare);
-        const workspaceNames = workspaces.map((workspace) => String(workspace.name));
-
-        const isPrefixedByWorkspace = (value) => workspaceNames.some((name) => value.startsWith(`${name}/`));
-        const hasUnscopedChanges = normalizedChanged.some((value) => !isPrefixedByWorkspace(value));
-
-        if (!hasUnscopedChanges) {
-          const relevantNames = new Set(
-            normalizedChanged
-              .map((value) => workspaceNames.find((name) => value.startsWith(`${name}/`)))
-              .filter(Boolean)
-          );
-
-          selectedWorkspaces = workspaces.filter((workspace) => relevantNames.has(String(workspace.name)));
-        }
-      }
-
-      const nodeWorkspaceNames = workspaces.filter((workspace) => workspace.kind === 'node').map((workspace) => workspace.name);
-
-      const buildChangedFilesGateForWorkspace = ({ workspaceName, workspaceCoverageSummary }) => {
-        const gate = {
-          workspace: workspaceName,
-          thresholds: changedFileThresholds,
-          passed: true,
-          missing: [],
-          totals: null,
-          skipped: false,
-          reason: null
-        };
-
-        if (!enforceChangedFileCoverage) {
-          gate.skipped = true;
-          gate.reason = 'disabled';
-          return gate;
-        }
-
-        const fileKeys = workspaceCoverageSummary && typeof workspaceCoverageSummary === 'object'
-          ? Object.keys(workspaceCoverageSummary).filter((key) => key && key !== 'total')
-          : [];
-
-        if (fileKeys.length === 0) {
-          gate.skipped = true;
-          gate.reason = 'per_file_coverage_unavailable';
-          return gate;
-        }
-
-        const normalizedWorkspacePrefix = `${normalizePathForCompare(workspaceName)}/`;
-        const changedForWorkspace = changedPaths
-          .map(normalizePathForCompare)
-          .filter((value) => {
-            if (nodeWorkspaceNames.length <= 1) {
-              return true;
-            }
-            return value.startsWith(normalizedWorkspacePrefix);
-          })
-          .map((value) => (value.startsWith(normalizedWorkspacePrefix) ? value.slice(normalizedWorkspacePrefix.length) : value))
-          .filter(isRelevantSourceFile);
-
-        if (changedForWorkspace.length === 0) {
-          return gate;
-        }
-
-        const byFile = new Map();
-        for (const key of fileKeys) {
-          const normalized = normalizePathForCompare(key);
-          const entry = workspaceCoverageSummary[key];
-          if (entry && typeof entry === 'object') {
-            byFile.set(normalized, entry);
-          }
-        }
-
-        const resolveCoverageEntry = (relativePath) => {
-          const normalized = normalizePathForCompare(relativePath);
-          if (byFile.has(normalized)) {
-            return byFile.get(normalized);
-          }
-          for (const [key, entry] of byFile.entries()) {
-            if (key === normalized || key.endsWith(`/${normalized}`)) {
-              return entry;
-            }
-          }
-          return null;
-        };
-
-        let totals = {
-          lines: 100,
-          statements: 100,
-          functions: 100,
-          branches: 100
-        };
-        for (const relativePath of changedForWorkspace) {
-          const entry = resolveCoverageEntry(relativePath);
-          if (!entry) {
-            gate.missing.push(`${workspaceName}/${relativePath}`);
-            continue;
-          }
-
-          const linesPct = Number(entry?.lines?.pct);
-          const statementsPct = Number(entry?.statements?.pct);
-          const functionsPct = Number(entry?.functions?.pct);
-          const branchesPct = Number(entry?.branches?.pct);
-
-          if (
-            !Number.isFinite(linesPct) ||
-            !Number.isFinite(statementsPct) ||
-            !Number.isFinite(functionsPct) ||
-            !Number.isFinite(branchesPct)
-          ) {
-            gate.missing.push(`${workspaceName}/${relativePath}`);
-            continue;
-          }
-
-          totals = {
-            lines: Math.min(totals.lines, linesPct),
-            statements: Math.min(totals.statements, statementsPct),
-            functions: Math.min(totals.functions, functionsPct),
-            branches: Math.min(totals.branches, branchesPct)
-          };
-        }
-
-        gate.totals = totals;
-        gate.passed =
-          gate.missing.length === 0 &&
-          totals.lines >= changedFileThresholds.lines &&
-          totals.statements >= changedFileThresholds.statements &&
-          totals.functions >= changedFileThresholds.functions &&
-          totals.branches >= changedFileThresholds.branches;
-
-        return gate;
-      };
+      const selectedWorkspaces = selectWorkspacesForScope({
+        workspaces,
+        workspaceScope: options.workspaceScope,
+        changedPaths
+      });
 
       const workspaceRuns = [];
       const coverageSummaries = [];
       const changedFilesGates = [];
       const uncoveredLines = [];
-
-      const extractUncoveredLines = (coverageEntry) => {
-        if (!coverageEntry || typeof coverageEntry !== 'object') {
-          return [];
-        }
-
-        const lineMap = coverageEntry.l;
-        if (lineMap && typeof lineMap === 'object') {
-          const lines = Object.entries(lineMap)
-            .map(([line, count]) => ({ line: Number(line), count: Number(count) }))
-            .filter((entry) => Number.isFinite(entry.line) && entry.count === 0)
-            .map((entry) => entry.line)
-            .sort((a, b) => a - b);
-          return Array.from(new Set(lines));
-        }
-
-        const statementMap = coverageEntry.statementMap;
-        const statementCounts = coverageEntry.s;
-        if (!statementMap || typeof statementMap !== 'object' || !statementCounts || typeof statementCounts !== 'object') {
-          return [];
-        }
-
-        const lines = [];
-        for (const key of Object.keys(statementMap)) {
-          const hitCount = Number(statementCounts[key]);
-          if (Number.isFinite(hitCount) && hitCount > 0) {
-            continue;
-          }
-          const loc = statementMap[key];
-          const startLine = Number(loc?.start?.line);
-          const endLine = Number(loc?.end?.line);
-          if (!Number.isFinite(startLine)) {
-            continue;
-          }
-          if (!Number.isFinite(endLine) || endLine === startLine) {
-            lines.push(startLine);
-            continue;
-          }
-          const boundedEnd = Math.min(endLine, startLine + 25);
-          for (let line = startLine; line <= boundedEnd; line += 1) {
-            lines.push(line);
-          }
-        }
-
-        lines.sort((a, b) => a - b);
-        return Array.from(new Set(lines));
-      };
 
       for (const workspace of selectedWorkspaces) {
         const startedAt = Date.now();
@@ -522,70 +287,28 @@ export const createBranchWorkflowTests = (core) => {
 
         // Attempt to parse coverage summary.
         if (workspace.kind === 'node') {
-          const summaryPath = path.join(workspace.cwd, 'coverage', 'coverage-summary.json');
-          const parsed = await readJsonIfExists(summaryPath);
-          const totals = parsed?.total;
-          if (totals) {
-            coverageSummary = {
-              lines: totals.lines?.pct,
-              statements: totals.statements?.pct,
-              functions: totals.functions?.pct,
-              branches: totals.branches?.pct
-            };
-          }
+          const { coverageSummaryJson, coverageSummary: nodeCoverageSummary, uncoveredLines: nodeUncoveredLines } =
+            await readNodeWorkspaceCoverage({
+              path,
+              workspace,
+              changedPaths,
+              nodeWorkspaceNames,
+              readJsonIfExists
+            });
 
-          const normalizedWorkspacePrefix = `${normalizePathForCompare(workspace.name)}/`;
-          const changedForWorkspace = changedPaths
-            .map(normalizePathForCompare)
-            .filter((value) => {
-              if (nodeWorkspaceNames.length <= 1) {
-                return true;
-              }
-              return value.startsWith(normalizedWorkspacePrefix);
-            })
-            .map((value) => (value.startsWith(normalizedWorkspacePrefix) ? value.slice(normalizedWorkspacePrefix.length) : value))
-            .filter(isRelevantSourceFile);
-
-          if (changedForWorkspace.length) {
-            const finalPath = path.join(workspace.cwd, 'coverage', 'coverage-final.json');
-            const finalCoverage = await readJsonIfExists(finalPath);
-            if (finalCoverage && typeof finalCoverage === 'object') {
-              const byFile = new Map();
-              for (const key of Object.keys(finalCoverage)) {
-                const normalized = normalizePathForCompare(key);
-                const entry = finalCoverage[key];
-                if (entry && typeof entry === 'object') {
-                  byFile.set(normalized, entry);
-                }
-              }
-
-              const resolveCoverageEntry = (relativePath) => {
-                const normalized = normalizePathForCompare(relativePath);
-                if (byFile.has(normalized)) {
-                  return byFile.get(normalized);
-                }
-                for (const [key, entry] of byFile.entries()) {
-                  if (key.endsWith(`/${normalized}`)) {
-                    return entry;
-                  }
-                }
-                return null;
-              };
-
-              for (const relativePath of changedForWorkspace) {
-                const entry = resolveCoverageEntry(relativePath);
-                const lines = extractUncoveredLines(entry);
-                if (lines.length) {
-                  uncoveredLines.push({ workspace: workspace.name, file: relativePath, lines });
-                }
-              }
-            }
+          coverageSummary = nodeCoverageSummary;
+          if (Array.isArray(nodeUncoveredLines) && nodeUncoveredLines.length) {
+            uncoveredLines.push(...nodeUncoveredLines);
           }
 
           changedFilesGates.push(
             buildChangedFilesGateForWorkspace({
               workspaceName: workspace.name,
-              workspaceCoverageSummary: parsed
+              workspaceCoverageSummary: coverageSummaryJson,
+              changedPaths,
+              changedFileThresholds,
+              enforceChangedFileCoverage,
+              nodeWorkspaceNames
             })
           );
         } else {
