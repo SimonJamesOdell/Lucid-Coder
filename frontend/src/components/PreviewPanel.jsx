@@ -394,6 +394,12 @@ const PreviewPanel = () => {
       return;
     }
 
+    const directUrl = previewRef.current.getOpenInNewTabUrl?.();
+    if (directUrl && directUrl !== 'about:blank') {
+      window.open(directUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
     const targetUrl =
       previewRef.current.getDisplayedUrl?.() ||
       previewRef.current.getPreviewUrl?.();
@@ -732,6 +738,7 @@ const PreviewPanel = () => {
             project={currentProject}
             processInfo={projectProcesses}
             onRestartProject={restartProject}
+            onRefreshProcessStatus={refreshProcessStatus}
             isProjectStopped={Boolean(currentProject?.id && stoppedProjects?.[currentProject.id])}
           />
         </div>

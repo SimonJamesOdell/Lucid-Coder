@@ -596,6 +596,8 @@ describe('previewProxy', () => {
     const script = __testOnly.buildPreviewBridgeScript({ previewPrefix: '/preview/123' });
     expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU');
     expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_READY');
+    expect(script).toContain('window.parent === window');
+    expect(script).toContain('parentWindow === window');
   });
 
   test('shouldBypassPreviewProxy tolerates non-string inputs', async () => {

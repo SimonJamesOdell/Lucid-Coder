@@ -187,7 +187,7 @@ const ProcessesTab = ({ project, processInfo, onRefreshStatus, onRestartProject,
     }
     setRestartingState((prev) => ({ ...prev, [target]: true }));
     try {
-      await onRestartProject(project.id);
+      await onRestartProject(project.id, target);
     } finally {
       setRestartingState((prev) => ({ ...prev, [target]: false }));
     }

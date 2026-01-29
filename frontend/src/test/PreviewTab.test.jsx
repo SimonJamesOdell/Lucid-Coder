@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { createRef } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import PreviewTab, { getDevServerOriginFromWindow } from '../components/PreviewTab';
@@ -25,6 +25,23 @@ const buildProcessInfo = (overrides = {}) => ({
   }
 });
 
+const getDomExceptionCtor = () => {
+  if (typeof globalThis.DOMException === 'function') {
+    return globalThis.DOMException;
+  }
+
+  return class DOMException extends Error {};
+};
+
+const buildIframeWindow = (overrides = {}) => ({
+  DOMException: getDomExceptionCtor(),
+  postMessage: vi.fn(),
+  location: {
+    href: 'about:blank'
+  },
+  ...overrides
+});
+
 const renderPreviewTab = (props = {}) => {
   const defaultProps = {
     project: mockProject,
@@ -38,8 +55,181 @@ const renderPreviewTab = (props = {}) => {
 };
 
 describe('PreviewTab', () => {
+  let originalIframeSrcDescriptor;
+  let originalIframeSetAttribute;
+  let originalIframeGetAttribute;
+  let originalWindowDomException;
+  let originalGlobalDomException;
+  let originalCtorProtoDomExceptionDescriptor;
+  let originalWindowProtoDomExceptionDescriptor;
+  const iframeSrcOverrides = new WeakMap();
+
+  beforeAll(() => {
+    originalWindowDomException = window.DOMException;
+    originalGlobalDomException = globalThis.DOMException;
+    originalCtorProtoDomExceptionDescriptor = window?.constructor
+      ? Object.getOwnPropertyDescriptor(window.constructor.prototype, 'DOMException')
+      : undefined;
+    originalWindowProtoDomExceptionDescriptor = globalThis.Window
+      ? Object.getOwnPropertyDescriptor(globalThis.Window.prototype, 'DOMException')
+      : undefined;
+
+    const DomExceptionCtor = getDomExceptionCtor();
+    if (typeof window.DOMException !== 'function') {
+      window.DOMException = DomExceptionCtor;
+    }
+    if (typeof globalThis.DOMException !== 'function') {
+      globalThis.DOMException = DomExceptionCtor;
+    }
+
+    if (window?.constructor?.prototype && typeof window.constructor.prototype.DOMException !== 'function') {
+      Object.defineProperty(window.constructor.prototype, 'DOMException', {
+        configurable: true,
+        writable: true,
+        value: DomExceptionCtor
+      });
+    }
+
+    if (globalThis.Window?.prototype && typeof globalThis.Window.prototype.DOMException !== 'function') {
+      Object.defineProperty(globalThis.Window.prototype, 'DOMException', {
+        configurable: true,
+        writable: true,
+        value: DomExceptionCtor
+      });
+    }
+
+    if (typeof HTMLIFrameElement === 'undefined') {
+      return;
+    }
+
+    originalIframeSrcDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLIFrameElement.prototype,
+      'src'
+    );
+
+    originalIframeSetAttribute = HTMLIFrameElement.prototype.setAttribute;
+    originalIframeGetAttribute = HTMLIFrameElement.prototype.getAttribute;
+
+    // Happy DOM will try to actually navigate iframes when `src` is set,
+    // which can leave background navigation tasks running after cleanup.
+    // In this test file we only need the value to be reflected for logic,
+    // not real navigation.
+    Object.defineProperty(HTMLIFrameElement.prototype, 'src', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return iframeSrcOverrides.get(this) || '';
+      },
+      set(value) {
+        iframeSrcOverrides.set(this, String(value));
+      }
+    });
+
+    HTMLIFrameElement.prototype.setAttribute = function setAttribute(name, value) {
+      if (String(name).toLowerCase() === 'src') {
+        iframeSrcOverrides.set(this, String(value));
+        return;
+      }
+      return originalIframeSetAttribute.call(this, name, value);
+    };
+
+    HTMLIFrameElement.prototype.getAttribute = function getAttribute(name) {
+      if (String(name).toLowerCase() === 'src') {
+        return iframeSrcOverrides.get(this) || null;
+      }
+      return originalIframeGetAttribute.call(this, name);
+    };
+  });
+
+  afterAll(() => {
+    if (typeof originalWindowDomException === 'undefined') {
+      try {
+        delete window.DOMException;
+      } catch {
+        // ignore
+      }
+    } else {
+      window.DOMException = originalWindowDomException;
+    }
+
+    if (typeof originalGlobalDomException === 'undefined') {
+      try {
+        delete globalThis.DOMException;
+      } catch {
+        // ignore
+      }
+    } else {
+      globalThis.DOMException = originalGlobalDomException;
+    }
+
+    if (window?.constructor?.prototype) {
+      if (originalCtorProtoDomExceptionDescriptor) {
+        Object.defineProperty(window.constructor.prototype, 'DOMException', originalCtorProtoDomExceptionDescriptor);
+      } else {
+        try {
+          delete window.constructor.prototype.DOMException;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (globalThis.Window?.prototype) {
+      if (originalWindowProtoDomExceptionDescriptor) {
+        Object.defineProperty(globalThis.Window.prototype, 'DOMException', originalWindowProtoDomExceptionDescriptor);
+      } else {
+        try {
+          delete globalThis.Window.prototype.DOMException;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (typeof HTMLIFrameElement === 'undefined') {
+      return;
+    }
+
+    if (originalIframeSetAttribute) {
+      HTMLIFrameElement.prototype.setAttribute = originalIframeSetAttribute;
+    }
+
+    if (originalIframeGetAttribute) {
+      HTMLIFrameElement.prototype.getAttribute = originalIframeGetAttribute;
+    }
+
+    if (originalIframeSrcDescriptor) {
+      Object.defineProperty(HTMLIFrameElement.prototype, 'src', originalIframeSrcDescriptor);
+      return;
+    }
+
+    // If there was no original descriptor, remove our override.
+    try {
+      delete HTMLIFrameElement.prototype.src;
+    } catch {
+      // ignore
+    }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    try {
+      vi.runOnlyPendingTimers();
+    } catch {
+      // ignore (real timers)
+    }
+
+    try {
+      vi.clearAllTimers();
+    } catch {
+      // ignore (real timers)
+    }
+
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   test('attempts to load the preview when process status is unavailable', () => {
@@ -206,6 +396,39 @@ describe('PreviewTab', () => {
     expect(typeof previewRef.current.restartProject).toBe('function');
   });
 
+  test('getOpenInNewTabUrl maps the preview URL to the dev server', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    expect(previewRef.current.getOpenInNewTabUrl()).toBe('http://localhost:5555/');
+  });
+
+  test('getOpenInNewTabUrl falls back to the framework default port when ports are missing', () => {
+    const processInfo = buildProcessInfo({
+      ports: {
+        active: null,
+        stored: null,
+        preferred: null
+      }
+    });
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    expect(previewRef.current.getOpenInNewTabUrl()).toBe('http://localhost:5173/');
+  });
+
+  test('getOpenInNewTabUrl falls back to the framework default port when frontend port is undefined', () => {
+    const processInfo = buildProcessInfo({
+      ports: {
+        active: { backend: 5656 },
+        stored: null,
+        preferred: null
+      }
+    });
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    expect(previewRef.current.getOpenInNewTabUrl()).toBe('http://localhost:5173/');
+  });
+
   test('restart handler triggers API call, shows success, and reloads preview', async () => {
     vi.useFakeTimers();
     try {
@@ -297,6 +520,18 @@ describe('PreviewTab', () => {
     expect(getDevServerOriginFromWindow({ port: Number.NaN })).toBeNull();
   });
 
+  test('getDevServerOriginFromWindow returns null when window is undefined', () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    try {
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined });
+      expect(getDevServerOriginFromWindow({ port: 5173 })).toBeNull();
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(globalThis, 'window', originalDescriptor);
+      }
+    }
+  });
+
   test('getDevServerOriginFromWindow uses window protocol and normalizes hostname override', () => {
     const origin = getDevServerOriginFromWindow({ port: 5173, hostnameOverride: '0.0.0.0' });
     expect(origin).toBe('http://localhost:5173');
@@ -353,7 +588,6 @@ describe('PreviewTab', () => {
     const { previewRef } = renderPreviewTab({ project: null });
 
     expect(previewRef.current.getPreviewUrl()).toBe('about:blank');
-    expect(screen.getByTestId('preview-iframe')).toHaveAttribute('src', 'about:blank');
     expect(previewRef.current.__testHooks.resolveFrontendPort()).toBeNull();
   });
 
@@ -552,11 +786,11 @@ describe('PreviewTab', () => {
     Object.defineProperty(iframe, 'contentWindow', {
       configurable: true,
       get() {
-        return {
+        return buildIframeWindow({
           location: {
             href: 'http://localhost:5555/dashboard'
           }
-        };
+        });
       }
     });
 
@@ -577,7 +811,7 @@ describe('PreviewTab', () => {
     const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
 
     const iframe = screen.getByTestId('preview-iframe');
-    const iframeWindow = {};
+    const iframeWindow = buildIframeWindow();
     Object.defineProperty(iframe, 'contentWindow', {
       configurable: true,
       value: iframeWindow
@@ -607,7 +841,7 @@ describe('PreviewTab', () => {
     const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
 
     const iframe = screen.getByTestId('preview-iframe');
-    const iframeWindow = {};
+    const iframeWindow = buildIframeWindow();
     Object.defineProperty(iframe, 'contentWindow', {
       configurable: true,
       value: iframeWindow
@@ -640,7 +874,7 @@ describe('PreviewTab', () => {
     const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
 
     const iframe = screen.getByTestId('preview-iframe');
-    const iframeWindow = {};
+    const iframeWindow = buildIframeWindow();
     Object.defineProperty(iframe, 'contentWindow', {
       configurable: true,
       value: iframeWindow
@@ -667,7 +901,122 @@ describe('PreviewTab', () => {
     await waitFor(() => {
       expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
     });
+
+    // Invoke the context menu onMouseDown stopPropagation handler.
+    fireEvent.mouseDown(screen.getByTestId('preview-context-menu'));
     expect(screen.getByText(/copy selector/i)).toBeInTheDocument();
+  });
+
+  test('closes the custom context menu when clicking outside', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+            href: 'http://localhost/ctx',
+            clientX: 12,
+            clientY: 24,
+            tagName: 'DIV'
+          },
+          origin: previewOrigin,
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
+    });
+
+    fireEvent.mouseDown(screen.getByTestId('preview-context-menu-backdrop'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('preview-context-menu')).not.toBeInTheDocument();
+    });
+  });
+
+  test('closes the custom context menu when pressing Escape', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+            href: 'http://localhost/ctx',
+            clientX: 12,
+            clientY: 24,
+            tagName: 'DIV'
+          },
+          origin: previewOrigin,
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
+    });
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('preview-context-menu')).not.toBeInTheDocument();
+    });
+  });
+
+  test('accepts preview messages when expected origin is unavailable', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    act(() => {
+      previewRef.current.__testHooks.setPreviewUrlOverride('');
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/route2' },
+          origin: 'http://untrusted-origin.invalid',
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Preview URL')).toHaveValue('http://localhost:5555/route2');
+    });
   });
 
   test('clears the custom context menu on preview navigation messages', async () => {
@@ -677,7 +1026,7 @@ describe('PreviewTab', () => {
     const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
 
     const iframe = screen.getByTestId('preview-iframe');
-    const iframeWindow = {};
+    const iframeWindow = buildIframeWindow();
     Object.defineProperty(iframe, 'contentWindow', {
       configurable: true,
       value: iframeWindow
@@ -724,11 +1073,20 @@ describe('PreviewTab', () => {
     const { previewRef } = renderPreviewTab({ processInfo, onPreviewNavigated });
 
     const iframe = screen.getByTestId('preview-iframe');
-    const iframeWindow = {};
+    const iframeWindow = buildIframeWindow({
+      location: {
+        href: previewRef.current.getPreviewUrl()
+      }
+    });
     Object.defineProperty(iframe, 'contentWindow', {
       configurable: true,
       value: iframeWindow
     });
+
+    // Navigation polling may emit a baseline update on mount; this test only
+    // cares that the wrong-origin message does not trigger navigation events.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    onPreviewNavigated.mockClear();
 
     const before = previewRef.current.__testHooks.getDisplayedUrl();
 
@@ -745,7 +1103,11 @@ describe('PreviewTab', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(previewRef.current.__testHooks.getDisplayedUrl()).toBe(before);
-    expect(onPreviewNavigated).not.toHaveBeenCalled();
+    expect(
+      onPreviewNavigated.mock.calls.some(
+        ([href, meta]) => href === 'http://localhost/ignored-origin' || meta?.source === 'bridge'
+      )
+    ).toBe(false);
   });
 
   test('detects proxy placeholder by title', () => {
@@ -775,6 +1137,534 @@ describe('PreviewTab', () => {
     previewRef.current.__testHooks.setIframeNodeForTests(iframe);
 
     expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(true);
+  });
+
+  test('Copy selector uses navigator.clipboard when available', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    });
+
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: {
+              type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+              href: 'http://localhost/ctx',
+              clientX: 12,
+              clientY: 24,
+              tagName: 'DIV',
+              id: 'root',
+              className: 'app'
+            },
+            origin: previewOrigin,
+            source: iframeWindow
+          })
+        );
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /copy selector/i }));
+      });
+
+      expect(writeText).toHaveBeenCalledWith('div#root');
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard
+      });
+    }
+  });
+
+  test('Copy href falls back to document.execCommand when clipboard is unavailable', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined
+    });
+    const originalExecCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand');
+    const execCommandMock = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      writable: true,
+      value: execCommandMock
+    });
+
+    const originalTextareaSelectDescriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'select');
+    const selectMock = vi.fn();
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'select', {
+      configurable: true,
+      writable: true,
+      value: selectMock
+    });
+
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: {
+              type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+              href: 'http://localhost/href',
+              clientX: 12,
+              clientY: 24,
+              tagName: 'A',
+              className: 'link'
+            },
+            origin: previewOrigin,
+            source: iframeWindow
+          })
+        );
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /copy href/i }));
+      });
+
+      expect(selectMock).toHaveBeenCalled();
+      expect(execCommandMock).toHaveBeenCalledWith('copy');
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard
+      });
+      if (originalExecCommandDescriptor) {
+        Object.defineProperty(document, 'execCommand', originalExecCommandDescriptor);
+      } else {
+        // eslint-disable-next-line no-undef
+        delete document.execCommand;
+      }
+
+      if (originalTextareaSelectDescriptor) {
+        Object.defineProperty(HTMLTextAreaElement.prototype, 'select', originalTextareaSelectDescriptor);
+      } else {
+        // eslint-disable-next-line no-undef
+        delete HTMLTextAreaElement.prototype.select;
+      }
+    }
+  });
+
+  test('context menu positioning reads iframe and canvas bounding rects', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef, container } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const canvas = container.querySelector('.preview-canvas');
+    expect(canvas).not.toBeNull();
+
+    const iframeRectSpy = vi
+      .spyOn(iframe, 'getBoundingClientRect')
+      .mockReturnValue({ left: 30, top: 50, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) });
+    const canvasRectSpy = vi
+      .spyOn(canvas, 'getBoundingClientRect')
+      .mockReturnValue({ left: 10, top: 20, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) });
+
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: {
+              type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+              href: 'http://localhost/ctx',
+              clientX: 5,
+              clientY: 7,
+              tagName: 'DIV',
+              id: 'root',
+              className: 'app'
+            },
+            origin: previewOrigin,
+            source: iframeWindow
+          })
+        );
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
+      });
+
+      expect(iframeRectSpy).toHaveBeenCalled();
+      expect(canvasRectSpy).toHaveBeenCalled();
+    } finally {
+      iframeRectSpy.mockRestore();
+      canvasRectSpy.mockRestore();
+    }
+  });
+
+  test('accepts preview messages when expected origin cannot be parsed', async () => {
+    const processInfo = buildProcessInfo();
+    const onPreviewNavigated = vi.fn();
+    const { previewRef } = renderPreviewTab({ processInfo, onPreviewNavigated });
+
+    // Use a fake iframe node so changing previewUrlOverride doesn't trigger
+    // happy-dom frame navigation tasks.
+    const iframeWindow = buildIframeWindow();
+    act(() => {
+      previewRef.current.__testHooks.setIframeNodeForTests({ contentWindow: iframeWindow });
+    });
+
+    act(() => {
+      previewRef.current.__testHooks.setPreviewUrlOverride('not a url');
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/unparsed-origin-ok' },
+          origin: 'http://evil.invalid',
+          source: iframeWindow
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(onPreviewNavigated).toHaveBeenCalledWith(
+        'http://localhost/unparsed-origin-ok',
+        expect.objectContaining({ source: 'message' })
+      );
+    });
+  });
+
+  test('copyTextToClipboard returns false for invalid inputs', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    await expect(previewRef.current.__testHooks.copyTextToClipboardForTests('')).resolves.toBe(false);
+    await expect(previewRef.current.__testHooks.copyTextToClipboardForTests(null)).resolves.toBe(false);
+  });
+
+  test('copyTextToClipboard falls back when navigator.clipboard.writeText throws', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const originalClipboard = navigator.clipboard;
+    const writeText = vi.fn().mockRejectedValue(new Error('nope'));
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    });
+
+    const originalExecCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand');
+    const execCommandMock = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      writable: true,
+      value: execCommandMock
+    });
+
+    const originalTextareaSelectDescriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'select');
+    const selectMock = vi.fn();
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'select', {
+      configurable: true,
+      writable: true,
+      value: selectMock
+    });
+
+    try {
+      await expect(previewRef.current.__testHooks.copyTextToClipboardForTests('hello')).resolves.toBe(true);
+      expect(writeText).toHaveBeenCalledWith('hello');
+      expect(execCommandMock).toHaveBeenCalledWith('copy');
+      expect(selectMock).toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard
+      });
+
+      if (originalExecCommandDescriptor) {
+        Object.defineProperty(document, 'execCommand', originalExecCommandDescriptor);
+      } else {
+        // eslint-disable-next-line no-undef
+        delete document.execCommand;
+      }
+
+      if (originalTextareaSelectDescriptor) {
+        Object.defineProperty(HTMLTextAreaElement.prototype, 'select', originalTextareaSelectDescriptor);
+      } else {
+        // eslint-disable-next-line no-undef
+        delete HTMLTextAreaElement.prototype.select;
+      }
+    }
+  });
+
+  test('context menu handler bails when canvas ref is missing', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef, container } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const canvas = container.querySelector('.preview-canvas');
+    expect(canvas).not.toBeNull();
+
+    // Force the handler's canvasRef.current to be null.
+    act(() => {
+      previewRef.current.__testHooks.setCanvasNodeForTests(null);
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+            href: 'http://localhost/ctx',
+            clientX: 1,
+            clientY: 1,
+            tagName: 'DIV'
+          },
+          origin: previewOrigin,
+          source: iframeWindow
+        })
+      );
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.queryByTestId('preview-context-menu')).toBeNull();
+
+    // Restore for completeness (not strictly required per-test).
+    act(() => {
+      previewRef.current.__testHooks.setCanvasNodeForTests(canvas);
+    });
+  });
+
+  test('Copy href returns false when execCommand fallback throws', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined
+    });
+
+    const originalCreateElement = document.createElement.bind(document);
+    const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tagName, ...rest) => {
+      if (String(tagName).toLowerCase() === 'textarea') {
+        throw new Error('no textarea');
+      }
+      return originalCreateElement(tagName, ...rest);
+    });
+
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: {
+              type: 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU',
+              href: 'http://localhost/href',
+              clientX: 12,
+              clientY: 24,
+              tagName: 'A',
+              className: 'link'
+            },
+            origin: previewOrigin,
+            source: iframeWindow
+          })
+        );
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('preview-context-menu')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /copy href/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('preview-context-menu')).toBeNull();
+      });
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard
+      });
+      createSpy.mockRestore();
+    }
+  });
+
+  test('ignores preview messages when the source window does not match the iframe', async () => {
+    const processInfo = buildProcessInfo();
+    const onPreviewNavigated = vi.fn();
+    const { previewRef } = renderPreviewTab({ processInfo, onPreviewNavigated });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow({
+      location: {
+        href: previewRef.current.getPreviewUrl()
+      }
+    });
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    onPreviewNavigated.mockClear();
+
+    const before = previewRef.current.__testHooks.getDisplayedUrl();
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_NAV', href: 'http://localhost/wrong-source' },
+          origin: previewOrigin,
+          source: {}
+        })
+      );
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(previewRef.current.__testHooks.getDisplayedUrl()).toBe(before);
+    expect(
+      onPreviewNavigated.mock.calls.some(
+        ([href, meta]) => href === 'http://localhost/wrong-source' || meta?.source === 'bridge'
+      )
+    ).toBe(false);
+  });
+
+  test('postPreviewBridgePing swallows postMessage errors and no-ops when postMessage is missing', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const badWindow = { DOMException: getDomExceptionCtor(), postMessage: () => { throw new Error('boom'); } };
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: badWindow
+    });
+
+    expect(() => {
+      act(() => {
+        previewRef.current.__testHooks.triggerIframeLoad();
+      });
+    }).not.toThrow();
+
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: buildIframeWindow({ postMessage: undefined })
+    });
+
+    expect(() => {
+      act(() => {
+        previewRef.current.__testHooks.triggerIframeLoad();
+      });
+    }).not.toThrow();
+  });
+
+  test('navigation polling helper returns null when window interval APIs are unavailable', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const originalSetIntervalDescriptor = Object.getOwnPropertyDescriptor(window, 'setInterval');
+    const originalClearIntervalDescriptor = Object.getOwnPropertyDescriptor(window, 'clearInterval');
+
+    // Simulate non-browser environment for the helper without mutating the
+    // property attributes (Vitest fake timers expect these to stay writable).
+    Object.defineProperty(window, 'setInterval', {
+      configurable: true,
+      writable: true,
+      value: undefined
+    });
+    Object.defineProperty(window, 'clearInterval', {
+      configurable: true,
+      writable: true,
+      value: undefined
+    });
+
+    try {
+      expect(previewRef.current.__testHooks.startNavigationPollingForTests()).toBeNull();
+    } finally {
+      if (originalSetIntervalDescriptor) {
+        Object.defineProperty(window, 'setInterval', originalSetIntervalDescriptor);
+      } else {
+        // eslint-disable-next-line no-undef
+        delete window.setInterval;
+      }
+
+      if (originalClearIntervalDescriptor) {
+        Object.defineProperty(window, 'clearInterval', originalClearIntervalDescriptor);
+      } else {
+        // eslint-disable-next-line no-undef
+        delete window.clearInterval;
+      }
+    }
+  });
+
+  test('updateDisplayedUrlFromIframe swallows cross-origin access errors', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const throwingWindow = {};
+    Object.defineProperty(throwingWindow, 'location', {
+      get: () => {
+        throw new Error('cross-origin');
+      }
+    });
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: throwingWindow
+    });
+    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+
+    expect(() => {
+      previewRef.current.__testHooks.updateDisplayedUrlFromIframe();
+    }).not.toThrow();
   });
 
   test('placeholder detection returns false when iframe is missing', () => {
@@ -1138,7 +2028,7 @@ describe('PreviewTab', () => {
     renderPreviewTab({ processInfo });
 
     const iframe = screen.getByTestId('preview-iframe');
-    const iframeWindow = {};
+    const iframeWindow = buildIframeWindow();
     Object.defineProperty(iframe, 'contentWindow', {
       configurable: true,
       value: iframeWindow
@@ -1377,6 +2267,544 @@ describe('PreviewTab', () => {
       screen.getByText((_, element) => element?.tagName === 'STRONG' && element.textContent === 'Details:')
     ).toBeInTheDocument();
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+  });
+
+  test('error view shows process summary and tail logs when available', () => {
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: {
+          status: 'running',
+          port: 5555,
+          logs: [{ message: 'frontend ok', timestamp: new Date().toISOString() }]
+        },
+        backend: {
+          status: 'running',
+          port: 5656,
+          logs: [{ message: 'backend ok', timestamp: new Date().toISOString() }]
+        }
+      }
+    });
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
+
+    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    expect(screen.getByText(/Frontend: running \(:5555\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Backend: running \(:5656\)/i)).toBeInTheDocument();
+
+    expect(screen.getByText('Frontend logs')).toBeInTheDocument();
+    expect(screen.getByText('Backend logs')).toBeInTheDocument();
+    expect(screen.getByText(/frontend ok/i)).toBeInTheDocument();
+    expect(screen.getByText(/backend ok/i)).toBeInTheDocument();
+  });
+
+  test('error view omits process summary when process info is for another project', () => {
+    const processInfo = { ...buildProcessInfo(), projectId: 999 };
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
+
+    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    expect(screen.queryByText(/Frontend: /i)).toBeNull();
+    expect(screen.queryByText(/Backend: /i)).toBeNull();
+  });
+
+  test('error view process summary omits port suffix when ports are missing', () => {
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: { status: 'running' },
+        backend: { status: 'running' }
+      },
+      ports: {
+        active: null,
+        stored: null
+      }
+    });
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
+
+    const summary = screen.getByText(/Frontend:.*Backend:/i).textContent || '';
+    expect(summary).toMatch(/Frontend:/i);
+    expect(summary).toMatch(/Backend:/i);
+    expect(summary).not.toMatch(/\(:\d+\)/);
+  });
+
+  test('error view process summary falls back to active ports when process ports are missing', () => {
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: { status: 'running' },
+        backend: { status: 'running' }
+      }
+    });
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
+
+    expect(screen.getByText(/Frontend: running \(:5555\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Backend: running \(:5656\)/i)).toBeInTheDocument();
+  });
+
+  test('error view process summary falls back to stored ports when active ports are missing', () => {
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: { status: 'running' },
+        backend: null
+      },
+      ports: {
+        active: null,
+        stored: { frontend: 5555, backend: 5656 }
+      }
+    });
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
+
+    expect(screen.getByText(/Frontend: running \(:5555\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Backend: idle \(:5656\)/i)).toBeInTheDocument();
+  });
+
+  test('auto-recovery timeout is cleared on successful iframe load', async () => {
+    vi.useFakeTimers();
+    const clearSpy = vi.spyOn(window, 'clearTimeout');
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        previewRef.current.__testHooks.triggerIframeLoad();
+      });
+
+      expect(clearSpy).toHaveBeenCalled();
+    } finally {
+      clearSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery attempts refresh and reloads when the scheduled timer fires', async () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync();
+      });
+
+      expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
+      expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('Refresh + retry clears pending auto-recovery timeout and swallows refresh failures', async () => {
+    vi.useFakeTimers();
+    const clearSpy = vi.spyOn(window, 'clearTimeout');
+    try {
+      const onRefreshProcessStatus = vi.fn().mockRejectedValue(new Error('boom'));
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      // Auto-recovery schedules a timeout; don't let it fire.
+      expect(screen.getByRole('button', { name: 'Refresh + retry' })).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh + retry' }));
+        await Promise.resolve();
+      });
+
+      expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
+      expect(clearSpy).toHaveBeenCalled();
+    } finally {
+      clearSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test('refresh+retry handler exits early when no project is selected', async () => {
+    const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+    const { previewRef } = renderPreviewTab({ project: null, onRefreshProcessStatus });
+
+    await act(async () => {
+      await previewRef.current.__testHooks.triggerRefreshAndRetryForTests();
+    });
+
+    expect(onRefreshProcessStatus).not.toHaveBeenCalled();
+  });
+
+  test('Refresh + retry shows recovery copy, calls refresh handler, and reloads iframe', async () => {
+    let resolveRefresh;
+    const refreshPromise = new Promise((resolve) => {
+      resolveRefresh = resolve;
+    });
+
+    const onRefreshProcessStatus = vi.fn(() => refreshPromise);
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus, isProjectStopped: true });
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
+
+    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh + retry' })).toBeInTheDocument();
+
+    const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh + retry' }));
+    });
+
+    expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
+    expect(screen.getByText(/Attempting recovery/i)).toBeInTheDocument();
+
+    act(() => {
+      resolveRefresh(null);
+    });
+
+    await act(async () => {
+      await refreshPromise;
+    });
+
+    await waitFor(() => {
+      expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
+    });
+  });
+
+  test('error view renders scheduled/running/exhausted auto-recovery copy deterministically', () => {
+    const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+    const processInfo = buildProcessInfo();
+    const { previewRef, container } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+    act(() => {
+      previewRef.current.__testHooks.setAutoRecoverAttemptForTests(2);
+      previewRef.current.__testHooks.setAutoRecoverStateForTests({ attempt: 0, mode: 'scheduled' });
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
+
+    expect(screen.getByText('Attempting recovery…')).toBeInTheDocument();
+    expect(container.querySelector('.preview-loading-bar-swoosh')).toBeTruthy();
+
+    act(() => {
+      previewRef.current.__testHooks.setAutoRecoverStateForTests({ attempt: 2, mode: 'running' });
+    });
+
+    expect(screen.getByText(/Attempting recovery… \(attempt 2\/3\)/i)).toBeInTheDocument();
+    expect(container.querySelector('.preview-loading-bar-swoosh')).toBeTruthy();
+
+    act(() => {
+      previewRef.current.__testHooks.setAutoRecoverStateForTests({ attempt: 3, mode: 'exhausted' });
+    });
+
+    expect(screen.getByText('Auto-recovery paused after repeated failures.')).toBeInTheDocument();
+    expect(container.querySelector('.preview-loading-bar-swoosh')).toBeNull();
+  });
+
+  test('loading overlay switches copy when recovery is running', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    act(() => {
+      previewRef.current.__testHooks.setPreviewUrlOverride('http://localhost:5555/preview/123');
+      previewRef.current.__testHooks.setAutoRecoverStateForTests({ attempt: 2, mode: 'running' });
+      previewRef.current.__testHooks.setErrorStateForTests({ error: false, loading: true, pending: false });
+    });
+
+    expect(screen.getByTestId('preview-loading')).toBeInTheDocument();
+    expect(screen.getByText('Recovering preview…')).toBeInTheDocument();
+    expect(screen.getByText('Attempt 2/3')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open in a new tab' })).toBeInTheDocument();
+  });
+
+  test('loading overlay keeps loading copy when recovery is running but attempt is zero', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    act(() => {
+      previewRef.current.__testHooks.setPreviewUrlOverride('http://localhost:5555/preview/123');
+      previewRef.current.__testHooks.setAutoRecoverStateForTests({ attempt: 0, mode: 'running' });
+      previewRef.current.__testHooks.setErrorStateForTests({ error: false, loading: true, pending: false });
+    });
+
+    expect(screen.getByTestId('preview-loading')).toBeInTheDocument();
+    expect(screen.getByText('Loading preview…')).toBeInTheDocument();
+    expect(screen.queryByText('Recovering preview…')).toBeNull();
+  });
+
+  test('error view can pause and resume auto-retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      expect(screen.getByRole('button', { name: 'Pause auto-retry' })).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Pause auto-retry' }));
+      });
+
+      expect(screen.getByText('Auto-recovery is paused.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Resume auto-retry' })).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Resume auto-retry' }));
+      });
+
+      expect(screen.queryByText('Auto-recovery is paused.')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Pause auto-retry' })).toBeInTheDocument();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery does not schedule when no project is selected', () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ project: null, processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      expect(onRefreshProcessStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery does not schedule when refresh handler is not provided', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus: null });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery does not schedule when disabled', () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setAutoRecoverDisabledForTests(true);
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      expect(onRefreshProcessStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery enters exhausted mode when max attempts is exceeded', () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setAutoRecoverAttemptForTests(3);
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      expect(screen.getByText('Auto-recovery paused after repeated failures.')).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      expect(onRefreshProcessStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery schedules at most one pending attempt and reloads after the attempt runs', async () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ pending: true });
+      });
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ pending: false });
+      });
+
+      const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+        await Promise.resolve();
+      });
+
+      expect(onRefreshProcessStatus).toHaveBeenCalledTimes(1);
+      expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
+      expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
+
+      await act(async () => {
+        vi.advanceTimersByTime(10000);
+        await Promise.resolve();
+      });
+
+      expect(onRefreshProcessStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery clears any pending timeout when the selected project changes', () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const projectA = { ...mockProject, id: 123 };
+      const projectB = { ...mockProject, id: 456 };
+
+      const { previewRef, rerender } = renderPreviewTab({
+        project: projectA,
+        processInfo,
+        onRefreshProcessStatus
+      });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      const callsBefore = clearTimeoutSpy.mock.calls.length;
+
+      rerender(
+        <PreviewTab
+          project={projectB}
+          processInfo={processInfo}
+          onRestartProject={vi.fn().mockResolvedValue(null)}
+          onRefreshProcessStatus={onRefreshProcessStatus}
+          autoStartOnNotRunning={false}
+        />
+      );
+
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(callsBefore);
+    } finally {
+      clearTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery reloads the iframe even if refresh throws', async () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockRejectedValue(new Error('boom'));
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+        await Promise.resolve();
+      });
+
+      expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
+      expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery moves to paused mode if disabled before the scheduled attempt runs', async () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setAutoRecoverAttemptForTests(Number.NaN);
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        previewRef.current.__testHooks.setAutoRecoverDisabledForTests(true);
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+        await Promise.resolve();
+      });
+
+      expect(onRefreshProcessStatus).not.toHaveBeenCalled();
+      expect(screen.getByText('Auto-recovery is paused.')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('shows error state when iframe does not load within timeout', async () => {

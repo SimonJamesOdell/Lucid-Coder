@@ -940,9 +940,10 @@ export const AppStateProvider = ({ children }) => {
   );
 
   const restartProject = useCallback(
-    async (projectId = currentProject?.id) => {
+    async (projectId = currentProject?.id, target = null) => {
       const result = await restartProjectProcesses({
         projectId,
+        target,
         trackedFetch,
         applyProcessSnapshot,
         refreshProcessStatus,

@@ -11,6 +11,13 @@
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 
+.preview-context-menu-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: transparent;
+}
+
 .preview-context-menu__item {
   appearance: none;
   border: none;

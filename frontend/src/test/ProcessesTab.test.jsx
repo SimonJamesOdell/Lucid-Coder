@@ -217,7 +217,7 @@ describe('ProcessesTab', () => {
     const button = screen.getByTestId('process-restart-backend');
     await user.click(button);
 
-    expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
+    expect(onRestartProject).toHaveBeenCalledWith(mockProject.id, 'backend');
     await waitFor(() => expect(button).not.toBeDisabled());
   });
 

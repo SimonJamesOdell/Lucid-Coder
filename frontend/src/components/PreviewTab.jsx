@@ -40,7 +40,18 @@ export const getDevServerOriginFromWindow = ({ port, hostnameOverride } = {}) =>
 };
 
 const PreviewTab = forwardRef(
-  ({ project, processInfo, onRestartProject, autoStartOnNotRunning = true, isProjectStopped = false, onPreviewNavigated }, ref) => {
+  (
+    {
+      project,
+      processInfo,
+      onRestartProject,
+      onRefreshProcessStatus,
+      autoStartOnNotRunning = true,
+      isProjectStopped = false,
+      onPreviewNavigated
+    },
+    ref
+  ) => {
   const [iframeError, setIframeError] = useState(false);
   const [iframeLoading, setIframeLoading] = useState(false);
   const [pendingIframeError, setPendingIframeError] = useState(false);
@@ -52,14 +63,26 @@ const PreviewTab = forwardRef(
   const [startInFlight, setStartInFlight] = useState(false);
   const [hostnameOverride, setHostnameOverride] = useState(null);
   const [previewUrlOverride, setPreviewUrlOverride] = useState(null);
+  const [autoRecoverState, setAutoRecoverState] = useState({
+    attempt: 0,
+    mode: 'idle'
+  });
+  const [autoRecoverDisabled, setAutoRecoverDisabled] = useState(false);
+  const autoRecoverDisabledRef = useRef(autoRecoverDisabled);
   const reloadTimeoutRef = useRef(null);
   const loadTimeoutRef = useRef(null);
   const errorConfirmTimeoutRef = useRef(null);
+  const autoRecoverTimeoutRef = useRef(null);
+  const autoRecoverAttemptRef = useRef(0);
   const errorGraceUntilRef = useRef(0);
   const proxyPlaceholderFirstSeenRef = useRef(0);
   const proxyPlaceholderLoadCountRef = useRef(0);
   const iframeRef = useRef(null);
   const canvasRef = useRef(null);
+
+  useEffect(() => {
+    autoRecoverDisabledRef.current = autoRecoverDisabled;
+  }, [autoRecoverDisabled]);
 
   const guessBackendOrigin = () => {
     if (typeof window === 'undefined') {
@@ -102,10 +125,20 @@ const PreviewTab = forwardRef(
         clearTimeout(errorConfirmTimeoutRef.current);
         errorConfirmTimeoutRef.current = null;
       }
+
+      if (autoRecoverTimeoutRef.current) {
+        clearTimeout(autoRecoverTimeoutRef.current);
+        autoRecoverTimeoutRef.current = null;
+      }
     };
   }, []);
 
   useEffect(() => {
+    autoRecoverAttemptRef.current = Number(autoRecoverState.attempt) || 0;
+  }, [autoRecoverState.attempt]);
+
+  useEffect(() => {
+    /* v8 ignore next */
     if (typeof window === 'undefined') {
       return;
     }
@@ -180,6 +213,13 @@ const PreviewTab = forwardRef(
     const projectId = project?.id ?? null;
     if (autoStartAttemptRef.current.projectId !== projectId) {
       autoStartAttemptRef.current = { projectId, attempted: false };
+      if (autoRecoverTimeoutRef.current) {
+        clearTimeout(autoRecoverTimeoutRef.current);
+        autoRecoverTimeoutRef.current = null;
+      }
+      autoRecoverAttemptRef.current = 0;
+      setAutoRecoverState({ attempt: 0, mode: 'idle' });
+      setAutoRecoverDisabled(false);
     }
   }, [project?.id]);
 
@@ -447,6 +487,7 @@ const PreviewTab = forwardRef(
   };
 
   useEffect(() => {
+    /* v8 ignore next */
     if (typeof window === 'undefined') {
       return;
     }
@@ -525,34 +566,41 @@ const PreviewTab = forwardRef(
     const { x, y, selector, href } = previewContextMenu;
 
     return (
-      <div
-        className="preview-context-menu"
-        data-testid="preview-context-menu"
-        style={{ left: Math.max(0, x), top: Math.max(0, y) }}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <button
-          type="button"
-          className="preview-context-menu__item"
-          onClick={async () => {
-            await copyTextToClipboard(selector);
-            setPreviewContextMenu(null);
-          }}
+      <>
+        <div
+          className="preview-context-menu-backdrop"
+          data-testid="preview-context-menu-backdrop"
+          onMouseDown={() => setPreviewContextMenu(null)}
+        />
+        <div
+          className="preview-context-menu"
+          data-testid="preview-context-menu"
+          style={{ left: Math.max(0, x), top: Math.max(0, y) }}
+          onMouseDown={(event) => event.stopPropagation()}
         >
-          Copy selector
-        </button>
-        <button
-          type="button"
-          className="preview-context-menu__item"
-          onClick={async () => {
-            await copyTextToClipboard(href);
-            setPreviewContextMenu(null);
-          }}
-          disabled={!href}
-        >
-          Copy href
-        </button>
-      </div>
+          <button
+            type="button"
+            className="preview-context-menu__item"
+            onClick={async () => {
+              await copyTextToClipboard(selector);
+              setPreviewContextMenu(null);
+            }}
+          >
+            Copy selector
+          </button>
+          <button
+            type="button"
+            className="preview-context-menu__item"
+            onClick={async () => {
+              await copyTextToClipboard(href);
+              setPreviewContextMenu(null);
+            }}
+            disabled={!href}
+          >
+            Copy href
+          </button>
+        </div>
+      </>
     );
   };
 
@@ -669,6 +717,14 @@ const PreviewTab = forwardRef(
     proxyPlaceholderFirstSeenRef.current = 0;
     proxyPlaceholderLoadCountRef.current = 0;
     setPreviewFailureDetails(null);
+
+    if (autoRecoverTimeoutRef.current) {
+      clearTimeout(autoRecoverTimeoutRef.current);
+      autoRecoverTimeoutRef.current = null;
+    }
+    autoRecoverAttemptRef.current = 0;
+    setAutoRecoverState({ attempt: 0, mode: 'idle' });
+
     updateDisplayedUrlFromIframe();
   };
 
@@ -685,6 +741,75 @@ const PreviewTab = forwardRef(
     setPreviewFailureDetails(null);
     setIframeKey((prev) => prev + 1);
   };
+
+  const scheduleAutoRecoveryAttempt = useCallback(() => {
+    const projectId = project?.id;
+    if (!projectId) {
+      return;
+    }
+
+    if (typeof onRefreshProcessStatus !== 'function') {
+      return;
+    }
+
+    if (autoRecoverDisabledRef.current) {
+      return;
+    }
+
+    if (autoRecoverTimeoutRef.current) {
+      return;
+    }
+
+    const MAX_ATTEMPTS = 3;
+    const nextAttempt = autoRecoverAttemptRef.current + 1;
+    if (nextAttempt > MAX_ATTEMPTS) {
+      setAutoRecoverState((prev) => ({ ...prev, mode: 'exhausted' }));
+      return;
+    }
+
+    const delayMs = Math.min(8000, 900 * Math.pow(2, Math.max(0, nextAttempt - 1)));
+    setAutoRecoverState({ attempt: autoRecoverAttemptRef.current, mode: 'scheduled' });
+
+    autoRecoverTimeoutRef.current = setTimeout(async () => {
+      autoRecoverTimeoutRef.current = null;
+
+      if (autoRecoverDisabledRef.current) {
+        setAutoRecoverState((prev) => ({ ...prev, mode: 'paused' }));
+        return;
+      }
+
+      setAutoRecoverState({ attempt: nextAttempt, mode: 'running' });
+      autoRecoverAttemptRef.current = nextAttempt;
+
+      try {
+        await onRefreshProcessStatus(projectId);
+      } catch {
+        // ignore
+      }
+
+      reloadIframe();
+    }, delayMs);
+  }, [project?.id, onRefreshProcessStatus]);
+
+  useEffect(() => {
+    if (!iframeError || iframeLoading || pendingIframeError) {
+      return;
+    }
+
+    if (showNotRunningState || isStartingProject || isProjectStopped) {
+      return;
+    }
+
+    scheduleAutoRecoveryAttempt();
+  }, [
+    iframeError,
+    iframeLoading,
+    pendingIframeError,
+    showNotRunningState,
+    isStartingProject,
+    isProjectStopped,
+    scheduleAutoRecoveryAttempt
+  ]);
 
   const buildPreviewHelpPrompt = () => {
     const projectLabel = project?.name ? `${project.name} (${project.id})` : String(project?.id || 'unknown');
@@ -780,6 +905,33 @@ const PreviewTab = forwardRef(
     }
   };
 
+  const handleRefreshAndRetry = async () => {
+    if (!project?.id) {
+      return;
+    }
+
+    if (autoRecoverTimeoutRef.current) {
+      clearTimeout(autoRecoverTimeoutRef.current);
+      autoRecoverTimeoutRef.current = null;
+    }
+
+    setRestartStatus(null);
+
+    // Surface a helpful loading copy while we refresh.
+    setAutoRecoverState((prev) => ({
+      attempt: Math.max(1, Number(prev.attempt) || 0),
+      mode: 'running'
+    }));
+
+    try {
+      await onRefreshProcessStatus?.(project.id);
+    } catch {
+      // ignore
+    }
+
+    reloadIframe();
+  };
+
   const handleStartProject = async () => {
     setStartInFlight(true);
     setRestartStatus(null);
@@ -804,9 +956,11 @@ const PreviewTab = forwardRef(
     restartProject: handleRestartProject,
     getPreviewUrl: () => previewUrlRef.current,
     getDisplayedUrl: () => displayedUrlRef.current,
+    getOpenInNewTabUrl: () => toDevServerUrl(displayedUrlRef.current) || toDevServerUrl(),
     __testHooks: {
       triggerIframeError: handleIframeError,
       triggerIframeLoad: handleIframeLoad,
+      triggerRefreshAndRetryForTests: handleRefreshAndRetry,
       normalizeHostname,
       resolveFrontendPort: chooseFrontendPort,
       applyHostnameOverride,
@@ -821,6 +975,10 @@ const PreviewTab = forwardRef(
       setIframeNodeForTests: (node) => {
         iframeRef.current = node;
       },
+      setCanvasNodeForTests: (node) => {
+        canvasRef.current = node;
+      },
+      copyTextToClipboardForTests: (value) => copyTextToClipboard(value),
       isProxyPlaceholderPageForTests: () => isLucidCoderProxyPlaceholderPage(),
       setHasConfirmedPreviewForTests: (value) => {
         setHasConfirmedPreview(Boolean(value));
@@ -829,6 +987,16 @@ const PreviewTab = forwardRef(
         setErrorGracePeriod(value);
       },
       getErrorGraceUntilForTests: () => errorGraceUntilRef.current,
+      setAutoRecoverDisabledForTests: (value) => {
+        setAutoRecoverDisabled(Boolean(value));
+      },
+      setAutoRecoverStateForTests: (value) => {
+        setAutoRecoverState(value);
+      },
+      setAutoRecoverAttemptForTests: (value) => {
+        const nextValue = Number(value);
+        autoRecoverAttemptRef.current = Number.isFinite(nextValue) ? nextValue : 0;
+      },
       setErrorStateForTests: ({ error, loading, pending } = {}) => {
         if (typeof error === 'boolean') {
           setIframeError(error);
@@ -893,45 +1061,109 @@ const PreviewTab = forwardRef(
   if (iframeError && !iframeLoading && !pendingIframeError) {
     const expectedUrl = previewUrl;
     const canRestart = Boolean(project?.id && onRestartProject);
+    const canRefresh = Boolean(project?.id && typeof onRefreshProcessStatus === 'function');
+    const canAutoRecover = canRefresh && !autoRecoverDisabled;
+    const showAutoRecoverSwoosh = canAutoRecover && (autoRecoverState.mode === 'scheduled' || autoRecoverState.mode === 'running');
 
     const currentHostname = normalizeHostname(window.location.hostname);
     const canSuggestLocalhost = currentHostname !== 'localhost' && !currentHostname.startsWith('127.');
+
+    const expectedNewTabUrl = toDevServerUrl(expectedUrl) || expectedUrl;
+    const processSummary = (() => {
+      if (!isProcessInfoCurrent) {
+        return null;
+      }
+
+      const frontendPort = frontendProcess?.port ?? resolvedPorts?.active?.frontend ?? resolvedPorts?.stored?.frontend ?? null;
+      const backendProcess = processInfo?.processes?.backend || null;
+      const backendPort = backendProcess?.port ?? resolvedPorts?.active?.backend ?? resolvedPorts?.stored?.backend ?? null;
+
+      const frontendLabel = `Frontend: ${frontendDisplayStatus}${frontendPort ? ` (:${frontendPort})` : ''}`;
+      const backendLabel = `Backend: ${normalizeStatus(backendProcess?.status)}${backendPort ? ` (:${backendPort})` : ''}`;
+      return `${frontendLabel} • ${backendLabel}`;
+    })();
+    const autoRecoverCopy = (() => {
+      if (!canRefresh) {
+        return null;
+      }
+      if (autoRecoverDisabled) {
+        return 'Auto-recovery is paused.';
+      }
+      if (autoRecoverState.mode === 'exhausted') {
+        return 'Auto-recovery paused after repeated failures.';
+      }
+      if (autoRecoverState.mode === 'running') {
+        return `Attempting recovery… (attempt ${autoRecoverAttemptRef.current}/3)`;
+      }
+      if (autoRecoverState.mode === 'scheduled') {
+        return 'Attempting recovery…';
+      }
+      return null;
+    })();
 
     return (
       <div className="preview-tab">
         {renderStatusBanner()}
         <div className="preview-error">
-          <div className="error-content">
+          <div className="preview-loading-card">
             <h3>Failed to load preview</h3>
+
+            {showAutoRecoverSwoosh && (
+              <div className="preview-loading-bar" aria-hidden="true">
+                <span className="preview-loading-bar-swoosh" />
+              </div>
+            )}
+
+            {autoRecoverCopy ? (
+              <p className="expected-url">{autoRecoverCopy}</p>
+            ) : null}
+
             {previewFailureDetails?.message && (
               <p className="expected-url">
                 <strong>{previewFailureDetails.title || 'Details'}:</strong> {previewFailureDetails.message}
               </p>
             )}
+
             <p>
               The preview didn’t finish loading. This can happen if the dev server crashed, the URL is
               unreachable, or the app blocks embedding via security headers.
             </p>
+
             <p className="expected-url">
               Expected URL: <code>{expectedUrl}</code>
             </p>
+
+            {processSummary ? (
+              <p className="expected-url">{processSummary}</p>
+            ) : null}
+
             <p className="expected-url">
-              <a href={expectedUrl} target="_blank" rel="noopener noreferrer">
+              <a href={expectedNewTabUrl} target="_blank" rel="noopener noreferrer">
                 Open preview in a new tab
               </a>
             </p>
+
             <div className="preview-error-actions">
+              {canRefresh && (
+                <button type="button" className="retry-button" onClick={handleRefreshAndRetry}>
+                  Refresh + retry
+                </button>
+              )}
+
+              <button type="button" className="retry-button" onClick={reloadIframe}>
+                Retry
+              </button>
+
               {canRestart && (
                 <button type="button" className="retry-button" onClick={handleRestartProject}>
                   Restart project
                 </button>
               )}
+
               <button type="button" className="retry-button" onClick={prefillChatWithPreviewHelp}>
                 Ask AI to fix
               </button>
-              <button type="button" className="retry-button" onClick={reloadIframe}>
-                Retry
-              </button>
+
               {canSuggestLocalhost && (
                 <button
                   type="button"
@@ -941,6 +1173,7 @@ const PreviewTab = forwardRef(
                   Try localhost
                 </button>
               )}
+
               {canSuggestLocalhost && (
                 <button
                   type="button"
@@ -948,6 +1181,30 @@ const PreviewTab = forwardRef(
                   onClick={() => applyHostnameOverride('127.0.0.1')}
                 >
                   Try 127.0.0.1
+                </button>
+              )}
+
+              {canAutoRecover && (
+                <button
+                  type="button"
+                  className="retry-button"
+                  onClick={() => setAutoRecoverDisabled(true)}
+                >
+                  Pause auto-retry
+                </button>
+              )}
+
+              {canRefresh && autoRecoverDisabled && (
+                <button
+                  type="button"
+                  className="retry-button"
+                  onClick={() => {
+                    setAutoRecoverDisabled(false);
+                    autoRecoverAttemptRef.current = 0;
+                    setAutoRecoverState({ attempt: 0, mode: 'idle' });
+                  }}
+                >
+                  Resume auto-retry
                 </button>
               )}
             </div>
@@ -988,24 +1245,29 @@ const PreviewTab = forwardRef(
       return null;
     }
 
+    const newTabUrl = toDevServerUrl(normalizedDisplayedUrl) || toDevServerUrl();
+
+    const showRecoveryCopy = autoRecoverState.mode === 'running' && (Number(autoRecoverState.attempt) || 0) > 0;
+    const title = showRecoveryCopy ? 'Recovering preview…' : 'Loading preview…';
+    const subtitle = showRecoveryCopy ? `Attempt ${autoRecoverState.attempt}/3` : null;
+
     return (
       <div className="preview-loading" data-testid="preview-loading">
         <div className="preview-loading-card">
-          <h3>Loading preview…</h3>
+          <h3>{title}</h3>
           <div className="preview-loading-bar" aria-hidden="true">
             <span className="preview-loading-bar-swoosh" />
           </div>
+          {subtitle ? <p className="expected-url">{subtitle}</p> : null}
           <p className="expected-url">
             URL: <code>{normalizedDisplayedUrl}</code>
           </p>
           <p className="expected-url">
-            <a
-              href={toDevServerUrl(normalizedDisplayedUrl) || normalizedDisplayedUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Open in a new tab
-            </a>
+            {newTabUrl ? (
+              <a href={newTabUrl} target="_blank" rel="noopener noreferrer">
+                Open in a new tab
+              </a>
+            ) : null}
           </p>
         </div>
       </div>

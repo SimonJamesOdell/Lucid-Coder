@@ -268,7 +268,7 @@ export function registerProjectProcessRoutes(router) {
 
       if (startResult.success) {
         storeRunningProcesses(id, startResult.processes, 'running', { launchType: 'manual' });
-        await updateProjectPorts(id, extractProcessPorts(startResult.processes));
+        await updateProjectPorts(project.id, extractProcessPorts(startResult.processes));
       }
 
       res.json({
@@ -334,6 +334,14 @@ export function registerProjectProcessRoutes(router) {
   router.post('/:id/restart', async (req, res) => {
     try {
       const { id } = req.params;
+      const rawTarget = (req.query?.target ?? req.body?.target ?? null);
+      const target = rawTarget === 'frontend' || rawTarget === 'backend' ? rawTarget : null;
+      if (rawTarget && !target) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid restart target'
+        });
+      }
       const project = await getProject(id);
 
       if (!project) {
@@ -357,7 +365,11 @@ export function registerProjectProcessRoutes(router) {
         });
       }
 
-      await terminateRunningProcesses(id, { project });
+      if (target) {
+        await terminateRunningProcesses(id, { project, target, waitForRelease: true });
+      } else {
+        await terminateRunningProcesses(id, { project });
+      }
 
       const portHints = getProjectPortHints(project);
       const portSettings = await getPortSettings();
@@ -373,12 +385,42 @@ export function registerProjectProcessRoutes(router) {
       const startResult = await startProject(project.path, {
         frontendPort: forceFrontendReassignment ? null : portHints.frontend,
         backendPort: forceBackendReassignment ? null : portHints.backend,
+        ...(target ? { target } : {}),
         ...portOverrides
       });
 
       if (startResult.success) {
+        if (target) {
+          const { processes: existingProcesses } = getRunningProcessEntry(id);
+          const nextProcesses = {
+            frontend: existingProcesses?.frontend || null,
+            backend: existingProcesses?.backend || null
+          };
+          nextProcesses[target] = startResult.processes?.[target] || null;
+
+          const hasAnyLive = hasLiveProcess(nextProcesses.frontend) || hasLiveProcess(nextProcesses.backend);
+          storeRunningProcesses(id, nextProcesses, hasAnyLive ? 'running' : 'stopped', { launchType: 'manual' });
+
+          const nextPorts = {};
+          const startedPort = startResult.processes?.[target]?.port;
+          if (Number.isInteger(startedPort) && startedPort > 0) {
+            if (target === 'frontend') {
+              nextPorts.frontendPort = startedPort;
+            } else {
+              nextPorts.backendPort = startedPort;
+            }
+          }
+          await updateProjectPorts(project.id, nextPorts);
+
+          return res.json({
+            success: true,
+            message: `${target} restarted successfully`,
+            processes: nextProcesses
+          });
+        }
+
         storeRunningProcesses(id, startResult.processes, 'running', { launchType: 'manual' });
-        await updateProjectPorts(id, extractProcessPorts(startResult.processes));
+        await updateProjectPorts(project.id, extractProcessPorts(startResult.processes));
       }
 
       res.json({

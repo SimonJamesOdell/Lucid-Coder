@@ -493,6 +493,258 @@ describe('generateProjectFiles', () => {
   });
 });
 
+describe('startProjectTarget', () => {
+  const getSpawnCall = () => spawnMock.mock.calls.at(-1);
+
+  const withPlatform = async (platform, fn) => {
+    const originalPlatform = process.platform;
+    try {
+      Object.defineProperty(process, 'platform', { value: platform });
+      await fn();
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+    }
+  };
+
+  const ensureDirs = async (projectPath) => {
+    await fs.mkdir(path.join(projectPath, 'frontend'), { recursive: true });
+    await fs.mkdir(path.join(projectPath, 'backend'), { recursive: true });
+  };
+
+  test('returns stub process in test mode', async () => {
+    const projectPath = path.join(tempDir, 'target-stub');
+    await ensureDirs(projectPath);
+
+    const result = await projectScaffolding.startProjectTarget(projectPath, 'frontend', {
+      frontendPort: 61333,
+      frontendPortBase: 61333
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.process).toEqual(expect.objectContaining({ type: 'frontend', isStub: true }));
+    expect(Number.isInteger(result.port)).toBe(true);
+  });
+
+  test('rejects missing project paths', async () => {
+    await expect(projectScaffolding.startProjectTarget('', 'frontend')).rejects.toThrow(/invalid project path/i);
+  });
+
+  test('rejects invalid start targets', async () => {
+    const projectPath = path.join(tempDir, 'target-invalid-target');
+    await ensureDirs(projectPath);
+    await expect(projectScaffolding.startProjectTarget(projectPath, 'wat')).rejects.toThrow(/invalid start target/i);
+  });
+
+  test('drops reserved frontend ports before scanning (coverage)', async () => {
+    const projectPath = path.join(tempDir, 'target-stub-reserved-frontend');
+    await ensureDirs(projectPath);
+
+    const base = 62100;
+    const result = await projectScaffolding.startProjectTarget(projectPath, 'frontend', {
+      frontendPort: 5173,
+      frontendPortBase: base
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.process).toEqual(expect.objectContaining({ type: 'frontend', isStub: true }));
+    expect(result.port).toBeGreaterThanOrEqual(base);
+  });
+
+  test('drops preferred frontend ports below an explicit base (coverage)', async () => {
+    const projectPath = path.join(tempDir, 'target-stub-below-base-frontend');
+    await ensureDirs(projectPath);
+
+    const base = 62200;
+    const result = await projectScaffolding.startProjectTarget(projectPath, 'frontend', {
+      frontendPort: 6100,
+      frontendPortBase: base
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.port).toBeGreaterThanOrEqual(base);
+  });
+
+  test('drops preferred backend ports below an explicit base and ignores low defaults (coverage)', async () => {
+    const projectPath = path.join(tempDir, 'target-stub-below-base-backend-node');
+    await ensureDirs(projectPath);
+    await ensurePkg(path.join(projectPath, 'backend', 'package.json'), { name: 'backend', scripts: { dev: 'node index.js' } });
+
+    const base = 63000;
+    const result = await projectScaffolding.startProjectTarget(projectPath, 'backend', {
+      backendPort: 5400,
+      backendPortBase: base
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.process).toEqual(expect.objectContaining({ type: 'backend', isStub: true }));
+    expect(result.port).toBeGreaterThanOrEqual(base);
+  });
+
+  test('prefers backend defaults when base allows them (coverage)', async () => {
+    const projectPath = path.join(tempDir, 'target-stub-default-backend');
+    await ensureDirs(projectPath);
+
+    const base = 2000;
+    const result = await projectScaffolding.startProjectTarget(projectPath, 'backend', {
+      backendPort: null,
+      backendPortBase: base
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.process).toEqual(expect.objectContaining({ type: 'backend', isStub: true }));
+    expect(result.port).toBeGreaterThanOrEqual(base);
+  });
+
+  test('starts frontend dev server in real mode', async () => {
+    const projectPath = path.join(tempDir, 'target-frontend-real');
+    await ensureDirs(projectPath);
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      const result = await startProjectTarget(projectPath, 'frontend', {
+        frontendPort: 61444,
+        frontendPortBase: 61444
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.process).toEqual(expect.objectContaining({ type: 'frontend', status: 'running' }));
+
+      const call = getSpawnCall();
+      expect(call?.[0]).toBe('npm');
+      expect(call?.[1]).toEqual(expect.arrayContaining(['run', 'dev', '--', '--port']));
+      expect(call?.[2]).toEqual(expect.objectContaining({ shell: true }));
+    });
+  });
+
+  test('starts node backend in real mode when backend/package.json exists', async () => {
+    const projectPath = path.join(tempDir, 'target-backend-node');
+    await ensureDirs(projectPath);
+
+    await ensurePkg(path.join(projectPath, 'backend', 'package.json'), { name: 'backend', scripts: { dev: 'node index.js' } });
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      const result = await startProjectTarget(projectPath, 'backend', {
+        backendPort: 61555,
+        backendPortBase: 61555
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.process).toEqual(expect.objectContaining({ type: 'backend', status: 'running' }));
+
+      const call = getSpawnCall();
+      expect(call?.[0]).toBe('npm');
+      expect(call?.[1]).toEqual(expect.arrayContaining(['run', 'dev']));
+      expect(call?.[2]).toEqual(expect.objectContaining({
+        shell: true,
+        env: expect.objectContaining({ PORT: expect.any(String) })
+      }));
+    });
+  });
+
+  test('starts python backend via venv activation on Windows when activation script exists', async () => {
+    const projectPath = path.join(tempDir, 'target-backend-python-win');
+    await ensureDirs(projectPath);
+
+    await writeTextFile(path.join(projectPath, 'backend', 'app.py'), 'print("hello")');
+    await writeTextFile(path.join(projectPath, 'backend', 'venv', 'Scripts', 'activate.bat'), '@echo off');
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      await withPlatform('win32', async () => {
+        const result = await startProjectTarget(projectPath, 'backend', {
+          backendPort: 61666,
+          backendPortBase: 61666
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.process).toEqual(expect.objectContaining({ type: 'backend', status: 'running' }));
+
+        const call = getSpawnCall();
+        expect(call?.[0]).toBe('cmd');
+        expect(call?.[1]?.[0]).toBe('/c');
+        expect(call?.[2]).toEqual(expect.objectContaining({ shell: false }));
+      });
+    });
+  });
+
+  test('falls back to system python on Windows when activation script is missing', async () => {
+    const projectPath = path.join(tempDir, 'target-backend-python-win-fallback');
+    await ensureDirs(projectPath);
+
+    await writeTextFile(path.join(projectPath, 'backend', 'app.py'), 'print("hello")');
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      await withPlatform('win32', async () => {
+        const result = await startProjectTarget(projectPath, 'backend', {
+          backendPort: 61777,
+          backendPortBase: 61777
+        });
+
+        expect(result.success).toBe(true);
+        const call = getSpawnCall();
+        expect(call?.[0]).toBe('python');
+        expect(call?.[1]).toEqual(['app.py']);
+        expect(call?.[2]).toEqual(expect.objectContaining({ shell: false }));
+      });
+    });
+  });
+
+  test('starts python backend via venv activation on Unix when activation script exists', async () => {
+    const projectPath = path.join(tempDir, 'target-backend-python-unix');
+    await ensureDirs(projectPath);
+
+    await writeTextFile(path.join(projectPath, 'backend', 'app.py'), 'print("hello")');
+    await writeTextFile(path.join(projectPath, 'backend', 'venv', 'bin', 'activate'), '#!/bin/sh');
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      await withPlatform('linux', async () => {
+        const result = await startProjectTarget(projectPath, 'backend', {
+          backendPort: 61888,
+          backendPortBase: 61888
+        });
+
+        expect(result.success).toBe(true);
+        const call = getSpawnCall();
+        expect(call?.[0]).toBe('bash');
+        expect(call?.[1]?.[0]).toBe('-c');
+        expect(call?.[2]).toEqual(expect.objectContaining({ shell: false }));
+      });
+    });
+  });
+
+  test('falls back to python3 on Unix when activation script is missing', async () => {
+    const projectPath = path.join(tempDir, 'target-backend-python-unix-fallback');
+    await ensureDirs(projectPath);
+
+    await writeTextFile(path.join(projectPath, 'backend', 'app.py'), 'print("hello")');
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      await withPlatform('linux', async () => {
+        const result = await startProjectTarget(projectPath, 'backend', {
+          backendPort: 61999,
+          backendPortBase: 61999
+        });
+
+        expect(result.success).toBe(true);
+        const call = getSpawnCall();
+        expect(call?.[0]).toBe('python3');
+        expect(call?.[1]).toEqual(['app.py']);
+        expect(call?.[2]).toEqual(expect.objectContaining({ shell: false }));
+      });
+    });
+  });
+
+  test('throws when no supported backend entrypoint exists', async () => {
+    const projectPath = path.join(tempDir, 'target-backend-unsupported');
+    await ensureDirs(projectPath);
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      await expect(startProjectTarget(projectPath, 'backend', {
+        backendPort: 62010,
+        backendPortBase: 62010
+      })).rejects.toThrow(/no supported backend entrypoint/i);
+    });
+  });
+});
+
 describe('installDependencies', () => {
   test('installs frontend and backend npm packages', async () => {
     const projectPath = path.join(tempDir, 'node-stack');
@@ -530,12 +782,12 @@ describe('installDependencies', () => {
     await fs.mkdir(path.join(projectPath, 'backend'), { recursive: true });
     await fs.writeFile(path.join(projectPath, 'backend', 'requirements.txt'), 'flask==3.0.0');
 
-    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
-
+    const originalPlatform = process.platform;
     try {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
       await projectScaffolding.installDependencies(projectPath);
     } finally {
-      platformSpy.mockRestore();
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
     }
 
     const activateCmd = 'source ' + path.join('venv', 'bin', 'activate') + ' && pip install -r requirements.txt';
@@ -650,6 +902,26 @@ describe('startProject', () => {
 
   test('validates project path input', async () => {
     await expect(projectScaffolding.startProject('', {})).rejects.toThrow('Invalid project path');
+  });
+
+  test('in test mode, target=frontend returns only frontend processes (coverage)', async () => {
+    const projectPath = await createProjectFolders();
+
+    const result = await projectScaffolding.startProject(projectPath, { target: 'frontend' });
+
+    expect(result.success).toBe(true);
+    expect(result.processes.frontend).toEqual(expect.objectContaining({ type: 'frontend', isStub: true }));
+    expect(result.processes.backend).toBeNull();
+  });
+
+  test('in test mode, target=backend returns only backend processes (coverage)', async () => {
+    const projectPath = await createProjectFolders();
+
+    const result = await projectScaffolding.startProject(projectPath, { target: 'backend' });
+
+    expect(result.success).toBe(true);
+    expect(result.processes.backend).toEqual(expect.objectContaining({ type: 'backend', isStub: true }));
+    expect(result.processes.frontend).toBeNull();
   });
 
   test('drops preferred frontend port when below explicit base', async () => {
@@ -772,6 +1044,34 @@ describe('startProject', () => {
         await realModule.startProject(projectPath);
       })
     ).rejects.toThrow('Failed to start project: spawn crash');
+  });
+
+  test('starts only the frontend when target=frontend (coverage)', async () => {
+    const projectPath = await createProjectFolders();
+
+    await runRealStart(projectPath, 'linux', async (realModule) => {
+      const result = await realModule.startProject(projectPath, { target: 'frontend' });
+      expect(result.success).toBe(true);
+      expect(result.processes.backend).toBeNull();
+      expect(result.processes.frontend).toEqual(expect.objectContaining({ type: 'frontend' }));
+    });
+
+    const spawnCommands = spawnMock.mock.calls.map(([cmd]) => cmd);
+    expect(spawnCommands).toContain('npm');
+    expect(spawnCommands).not.toContain('cmd');
+    expect(spawnCommands).not.toContain('python');
+    expect(spawnCommands).not.toContain('python3');
+  });
+
+  test('starts only the backend when target=backend (coverage)', async () => {
+    const projectPath = await createProjectFolders();
+
+    await runRealStart(projectPath, 'linux', async (realModule) => {
+      const result = await realModule.startProject(projectPath, { target: 'backend' });
+      expect(result.success).toBe(true);
+      expect(result.processes.frontend).toBeNull();
+      expect(result.processes.backend).toEqual(expect.objectContaining({ type: 'backend' }));
+    });
   });
 });
 

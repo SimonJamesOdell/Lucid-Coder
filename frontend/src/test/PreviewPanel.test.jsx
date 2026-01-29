@@ -19,6 +19,7 @@ let provideReloadPreview = true;
 const restartProjectMock = vi.fn();
 const getPreviewUrlMock = vi.fn(() => 'http://localhost:5173');
 const getDisplayedUrlMock = vi.fn(() => null);
+const getOpenInNewTabUrlMock = vi.fn(() => null);
 const previewTabPropsRef = { current: null };
 const filesTabControls = {
   onFileSaved: null,
@@ -50,7 +51,8 @@ vi.mock('../components/PreviewTab', () => ({
       reloadPreview: provideReloadPreview ? reloadPreviewMock : null,
       restartProject: restartProjectMock,
       getPreviewUrl: getPreviewUrlMock,
-      getDisplayedUrl: getDisplayedUrlMock
+      getDisplayedUrl: getDisplayedUrlMock,
+      getOpenInNewTabUrl: getOpenInNewTabUrlMock
     }));
     return <div data-testid="mock-preview-tab" />;
   })
@@ -156,6 +158,8 @@ describe('PreviewPanel', () => {
     getPreviewUrlMock.mockReturnValue('http://localhost:5173');
     getDisplayedUrlMock.mockClear();
     getDisplayedUrlMock.mockReturnValue(null);
+    getOpenInNewTabUrlMock.mockClear();
+    getOpenInNewTabUrlMock.mockReturnValue(null);
     previewTabPropsRef.current = null;
     filesTabControls.onFileSaved = null;
     filesTabControls.registerSaveHandler = null;
@@ -965,7 +969,7 @@ describe('PreviewPanel', () => {
   });
 
   test('opens preview in new tab when button is clicked', async () => {
-    getDisplayedUrlMock.mockReturnValue('http://localhost:5173/about');
+    getOpenInNewTabUrlMock.mockReturnValue('http://localhost:5173/about');
     useAppState.mockReturnValue(
       createAppState({ currentProject: { id: 1, name: 'Test Project' } })
     );
@@ -982,8 +986,7 @@ describe('PreviewPanel', () => {
   });
 
   test('opens preview url when displayed url is unavailable', async () => {
-    getDisplayedUrlMock.mockReturnValue(null);
-    getPreviewUrlMock.mockReturnValue('http://localhost:5173');
+    getOpenInNewTabUrlMock.mockReturnValue('http://localhost:5173/');
     useAppState.mockReturnValue(
       createAppState({ currentProject: { id: 101, name: 'Fallback Project' } })
     );
@@ -996,10 +999,11 @@ describe('PreviewPanel', () => {
 
     await user.click(button);
 
-    expect(window.open).toHaveBeenCalledWith('http://localhost:5173', '_blank', 'noopener,noreferrer');
+    expect(window.open).toHaveBeenCalledWith('http://localhost:5173/', '_blank', 'noopener,noreferrer');
   });
 
   test('does not open a new tab when preview URL is blank', async () => {
+    getOpenInNewTabUrlMock.mockReturnValue(null);
     getDisplayedUrlMock.mockReturnValue(null);
     getPreviewUrlMock.mockReturnValue('about:blank');
     useAppState.mockReturnValue(
@@ -1015,6 +1019,25 @@ describe('PreviewPanel', () => {
     await user.click(button);
 
     expect(window.open).not.toHaveBeenCalled();
+  });
+
+  test('falls back to displayed/preview url when getOpenInNewTabUrl returns null', async () => {
+    getOpenInNewTabUrlMock.mockReturnValue(null);
+    getDisplayedUrlMock.mockReturnValue('http://localhost:5000/preview/1');
+    getPreviewUrlMock.mockReturnValue('http://localhost:5000/preview/1');
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 1, name: 'Fallback Displayed URL' } })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    const button = screen.getByTestId('open-preview-tab');
+    expect(button).toBeEnabled();
+
+    await user.click(button);
+
+    expect(window.open).toHaveBeenCalledWith('http://localhost:5000/preview/1', '_blank', 'noopener,noreferrer');
   });
 
   test('shows git tab content when selected', async () => {

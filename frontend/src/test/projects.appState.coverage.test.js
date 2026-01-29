@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { selectProjectWithProcesses } from '../context/appState/projects.js';
+import { selectProjectWithProcesses, restartProjectProcesses } from '../context/appState/projects.js';
 
 const makeTrackedFetch = (handlers = {}) =>
   vi.fn(async (url, options) => {
@@ -140,5 +140,31 @@ describe('appState/projects coverage', () => {
     expect(trackedFetch).not.toHaveBeenCalledWith('/api/agent/autopilot/resume', expect.anything());
 
     globalThis.window = originalWindow;
+  });
+
+  it('restartProjectProcesses treats invalid JSON as a failure (parseError catch)', async () => {
+    const trackedFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error('invalid json');
+      }
+    }));
+
+    await expect(
+      restartProjectProcesses({
+        projectId: 1,
+        target: 'frontend',
+        trackedFetch,
+        applyProcessSnapshot: vi.fn(),
+        refreshProcessStatus: vi.fn(),
+        resetProjectProcesses: vi.fn()
+      })
+    ).rejects.toThrow(/HTTP error! status: 200/i);
+
+    expect(trackedFetch).toHaveBeenCalledWith(
+      '/api/projects/1/restart?target=frontend',
+      expect.objectContaining({ method: 'POST' })
+    );
   });
 });

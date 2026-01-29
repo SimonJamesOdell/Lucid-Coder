@@ -22,6 +22,8 @@ const AUTO_RESTART_COOLDOWN_MS = 30_000;
 const autoRestartStateByProject = new Map();
 const autoRestartInFlightByProject = new Map();
 
+const PREVIEW_PROXY_TIMEOUT_MS = 7_000;
+
 const isProxyConnectionFailure = (error) => {
   const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
   if (
@@ -336,7 +338,151 @@ const buildSetCookieHeader = (projectId) => {
 const buildPreviewBridgeScript = ({ previewPrefix }) => {
   const safePrefix = typeof previewPrefix === 'string' ? previewPrefix : '';
 
-  return `\n<script>\n(function(){\n  try {\n    var prefix = ${JSON.stringify(safePrefix)};\n    var BRIDGE_VERSION = 1;\n\n    var lastHref = '';\n\n    var send = function(type, extra){\n      try {\n        var payload = extra && typeof extra === 'object' ? extra : {};\n        payload.type = type;\n        payload.prefix = prefix;\n        payload.bridgeVersion = BRIDGE_VERSION;\n        window.parent && window.parent.postMessage(payload, '*');\n      } catch (e) {\n        // ignore\n      }\n    };\n\n    var readHref = function(){\n      return window.location && window.location.href ? String(window.location.href) : '';\n    };\n\n    var postNav = function(){\n      var href = readHref();\n      if (!href || href === lastHref) return;\n      lastHref = href;\n      send('LUCIDCODER_PREVIEW_NAV', {\n        href: href,\n        title: (document && typeof document.title === 'string' ? document.title : '')\n      });\n    };\n\n    var postReady = function(){\n      send('LUCIDCODER_PREVIEW_BRIDGE_READY', {\n        href: readHref()\n      });\n    };\n\n    var wrapHistory = function(method){\n      var original = window.history && window.history[method];\n      if (!original) return;\n      window.history[method] = function(){\n        var result = original.apply(this, arguments);\n        postNav();\n        return result;\n      };\n    };\n\n    wrapHistory('pushState');\n    wrapHistory('replaceState');\n    window.addEventListener('popstate', postNav);\n    window.addEventListener('hashchange', postNav);\n\n    window.addEventListener('message', function(event){\n      try {\n        var data = event && event.data;\n        if (!data || typeof data !== 'object') return;\n\n        if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_PING') {\n          send('LUCIDCODER_PREVIEW_BRIDGE_PONG', { nonce: data.nonce || null });\n          postNav();\n          return;\n        }\n\n        if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_GET_LOCATION') {\n          postNav();\n        }\n      } catch (e) {\n        // ignore\n      }\n    });\n\n    window.addEventListener('contextmenu', function(event){\n      try {\n        if (!event) return;\n        if (event.shiftKey) return;\n\n        if (typeof event.preventDefault === 'function') event.preventDefault();\n        if (typeof event.stopPropagation === 'function') event.stopPropagation();\n\n        var target = event.target;\n        var tagName = target && typeof target.tagName === 'string' ? target.tagName : '';\n        var id = target && typeof target.id === 'string' ? target.id : '';\n        var className = target && typeof target.className === 'string' ? target.className : '';\n\n        send('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU', {\n          href: readHref(),\n          clientX: typeof event.clientX === 'number' ? event.clientX : 0,\n          clientY: typeof event.clientY === 'number' ? event.clientY : 0,\n          tagName: tagName,\n          id: id,\n          className: className\n        });\n      } catch (e) {\n        // ignore\n      }\n    }, true);\n\n    send('LUCIDCODER_PREVIEW_HELPER_READY', { href: readHref() });\n\n    // Fall back: poll for safety (covers frameworks that bypass history wrappers).\n    window.setInterval(postNav, 500);\n\n    postReady();\n    postNav();\n  } catch (e) {\n    // ignore\n  }\n})();\n</script>\n`;
+  return `
+<script>
+(function(){
+  try {
+    var prefix = ${JSON.stringify(safePrefix)};
+    var BRIDGE_VERSION = 1;
+
+    var lastHref = '';
+    var lastContextMenuAt = 0;
+
+    var send = function(type, extra){
+      try {
+        var parentWindow = window.parent;
+        if (!parentWindow || parentWindow === window) return;
+
+        var payload = extra && typeof extra === 'object' ? extra : {};
+        payload.type = type;
+        payload.prefix = prefix;
+        payload.bridgeVersion = BRIDGE_VERSION;
+        parentWindow.postMessage(payload, '*');
+      } catch (e) {
+        // ignore
+      }
+    };
+
+    var readHref = function(){
+      return window.location && window.location.href ? String(window.location.href) : '';
+    };
+
+    var postNav = function(){
+      var href = readHref();
+      if (!href || href === lastHref) return;
+      lastHref = href;
+      send('LUCIDCODER_PREVIEW_NAV', {
+        href: href,
+        title: (document && typeof document.title === 'string' ? document.title : '')
+      });
+    };
+
+    var postReady = function(){
+      send('LUCIDCODER_PREVIEW_BRIDGE_READY', {
+        href: readHref()
+      });
+    };
+
+    var wrapHistory = function(method){
+      var original = window.history && window.history[method];
+      if (!original) return;
+      window.history[method] = function(){
+        var result = original.apply(this, arguments);
+        postNav();
+        return result;
+      };
+    };
+
+    wrapHistory('pushState');
+    wrapHistory('replaceState');
+    window.addEventListener('popstate', postNav);
+    window.addEventListener('hashchange', postNav);
+
+    window.addEventListener('message', function(event){
+      try {
+        var data = event && event.data;
+        if (!data || typeof data !== 'object') return;
+
+        if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_PING') {
+          send('LUCIDCODER_PREVIEW_BRIDGE_PONG', { nonce: data.nonce || null });
+          postNav();
+          return;
+        }
+
+        if (data.type === 'LUCIDCODER_PREVIEW_BRIDGE_GET_LOCATION') {
+          postNav();
+        }
+      } catch (e) {
+        // ignore
+      }
+    });
+
+    var emitContextMenu = function(event){
+      try {
+        if (!event) return;
+        if (event.shiftKey) return;
+
+        // If the user opened the preview in a new tab (top-level browsing
+        // context), do not interfere with the native context menu (Inspect).
+        if (window.parent === window) return;
+
+        var isNativeContextMenuEvent = event.type === 'contextmenu';
+
+        // Always suppress the native browser menu when we see the real
+        // 'contextmenu' event.
+        if (isNativeContextMenuEvent) {
+          if (typeof event.preventDefault === 'function') event.preventDefault();
+          if (typeof event.stopPropagation === 'function') event.stopPropagation();
+        }
+
+        // Some hosts/webviews do not fire 'contextmenu'. Use mousedown as a
+        // fallback signal but only for right-click.
+        if (event.type === 'mousedown' && typeof event.button === 'number' && event.button !== 2) return;
+
+        var now = Date.now();
+        if (now - lastContextMenuAt < 75) return;
+        lastContextMenuAt = now;
+
+        // If we used mousedown as the signal, still suppress default behavior.
+        if (!isNativeContextMenuEvent) {
+          if (typeof event.preventDefault === 'function') event.preventDefault();
+          if (typeof event.stopPropagation === 'function') event.stopPropagation();
+        }
+
+        var target = event.target;
+        var tagName = target && typeof target.tagName === 'string' ? target.tagName : '';
+        var id = target && typeof target.id === 'string' ? target.id : '';
+        var className = target && typeof target.className === 'string' ? target.className : '';
+
+        send('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU', {
+          href: readHref(),
+          clientX: typeof event.clientX === 'number' ? event.clientX : 0,
+          clientY: typeof event.clientY === 'number' ? event.clientY : 0,
+          tagName: tagName,
+          id: id,
+          className: className
+        });
+      } catch (e) {
+        // ignore
+      }
+    };
+
+    window.addEventListener('contextmenu', emitContextMenu, true);
+    window.addEventListener('mousedown', emitContextMenu, true);
+
+    send('LUCIDCODER_PREVIEW_HELPER_READY', { href: readHref() });
+
+    // Fall back: poll for safety (covers frameworks that bypass history wrappers).
+    window.setInterval(postNav, 500);
+
+    postReady();
+    postNav();
+  } catch (e) {
+    // ignore
+  }
+})();
+</script>
+`;
 };
 
 const injectPreviewBridge = (html, { previewPrefix } = {}) => {
@@ -434,7 +580,11 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
   const proxy = httpProxy.createProxyServer({
     ws: true,
     xfwd: true,
-    changeOrigin: true
+    changeOrigin: true,
+    // Fail fast when the upstream dev server hangs (prevents iframe from waiting
+    // forever and causing a "preview didn’t finish loading" zombie state).
+    proxyTimeout: PREVIEW_PROXY_TIMEOUT_MS,
+    timeout: PREVIEW_PROXY_TIMEOUT_MS
   });
 
   proxy.on('error', (error, req, res) => {
