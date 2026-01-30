@@ -4,6 +4,19 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 
+vi.mock('axios', () => ({
+  default: {
+    post: vi.fn(),
+    get: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+  },
+  post: vi.fn(),
+  get: vi.fn(),
+  put: vi.fn(),
+  delete: vi.fn(),
+}))
+
 import RunsTab from '../components/RunsTab.jsx';
 
 describe('RunsTab', () => {
@@ -60,10 +73,10 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('run-row-12');
 
     // Cover minute+seconds duration formatting
-    expect(screen.getByText('1m 2s')).toBeInTheDocument();
+    expect(await screen.findByText('1m 2s')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('run-row-12'));
 
@@ -178,7 +191,7 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('run-row-2');
 
     await user.click(screen.getByTestId('run-row-2'));
     expect(await screen.findByTestId('runs-detail-title')).toHaveTextContent('Second');
@@ -248,7 +261,7 @@ describe('RunsTab', () => {
       const user = userEvent.setup();
       render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-      expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+      await screen.findByTestId('run-row-9');
 
       // Cover statusClass branches via list badges
       expect(screen.getAllByText(/cancelled|running/i).length).toBeGreaterThan(0);
@@ -299,7 +312,7 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('run-row-1');
 
     await user.click(screen.getByTestId('run-row-1'));
 
@@ -330,7 +343,7 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('run-row-101');
     await user.click(screen.getByTestId('run-row-101'));
 
     expect(await screen.findByTestId('runs-error')).toHaveTextContent('Failed to load run');
@@ -367,7 +380,7 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('run-row-202');
     await user.click(screen.getByTestId('run-row-202'));
 
     // response.data is treated as the run object when `data.run` is missing
@@ -396,7 +409,7 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('run-row-303');
     await user.click(screen.getByTestId('run-row-303'));
 
     expect(await screen.findByTestId('runs-detail-missing')).toBeInTheDocument();
@@ -438,7 +451,7 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('run-row-33');
 
     await user.click(screen.getByTestId('run-row-33'));
     expect(await screen.findByTestId('runs-events-list')).toBeInTheDocument();
@@ -475,9 +488,7 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
-
-    const row = screen.getByTestId('run-row-7');
+    const row = await screen.findByTestId('run-row-7');
     const statusChip = within(row).getByText('queued');
     expect(statusChip.className).toMatch(/is-pending/);
 
@@ -524,7 +535,7 @@ describe('RunsTab', () => {
     const user = userEvent.setup();
     render(<RunsTab project={{ id: 123, name: 'Demo' }} />);
 
-    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('run-row-5');
 
     // Covers the `runId ? ... : undefined` branch for data-testid
     expect(screen.queryByTestId('run-row-null')).not.toBeInTheDocument();

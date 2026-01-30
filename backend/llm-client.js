@@ -173,7 +173,20 @@ export class LLMClient {
       const config = await db_operations.getActiveLLMConfig();
       if (config) {
         this.config = config;
-        this.apiKey = config.api_key_encrypted ? decryptApiKey(config.api_key_encrypted) : null;
+        const requiresApiKey = Boolean(config.requires_api_key);
+        this.apiKey = config.api_key_encrypted
+          ? decryptApiKey(config.api_key_encrypted, { quiet: true })
+          : null;
+
+        if (requiresApiKey && !this.apiKey) {
+          if (config.api_key_encrypted) {
+            console.warn('⚠️  LLM API key could not be decrypted. Please reconfigure the LLM settings.');
+          } else {
+            console.warn('⚠️  LLM API key is missing. Please configure an API key.');
+          }
+          return false;
+        }
+
         console.log(`✅ LLM API initialized: ${config.provider}/${config.model}`);
         return true;
       } else {

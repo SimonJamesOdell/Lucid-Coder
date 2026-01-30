@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import crypto from 'crypto';
-import { encryptApiKey, decryptApiKey, hashData, verifyHash } from '../encryption.js';
+import { encryptApiKey, decryptApiKey, hashData, verifyHash, setEncryptionKey, getEncryptionKeyStatus } from '../encryption.js';
 
 describe('encryption helpers', () => {
   afterEach(() => {
@@ -52,22 +52,70 @@ describe('encryption helpers', () => {
     expect(consoleSpy).toHaveBeenCalledWith('Decryption error:', expect.any(Error));
   });
 
-  it('falls back to default encryption key when env is unset', async () => {
+  it('does not log decryption errors when quiet', () => {
+    setEncryptionKey('x'.repeat(32), 'unit');
+    const encrypted = encryptApiKey('explode');
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    vi.spyOn(crypto, 'createDecipheriv').mockImplementationOnce(() => {
+      throw new Error('forced decipher failure');
+    });
+
+    expect(decryptApiKey(encrypted, { quiet: true })).toBeNull();
+    expect(consoleSpy).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('returns null when encryption key is missing', async () => {
     const originalKey = process.env.ENCRYPTION_KEY;
     delete process.env.ENCRYPTION_KEY;
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
-      const { encryptApiKey: encryptWithoutEnv, decryptApiKey: decryptWithoutEnv } = await import('../encryption.js?default-key');
+      const { encryptApiKey: encryptWithoutEnv, decryptApiKey: decryptWithoutEnv } = await import('../encryption.js?missing-key');
       const secret = 'fallback-secret';
       const encrypted = encryptWithoutEnv(secret);
-      expect(decryptWithoutEnv(encrypted)).toBe(secret);
+      expect(encrypted).toBeNull();
+      expect(decryptWithoutEnv('bad')).toBeNull();
+      expect(consoleSpy).toHaveBeenCalled();
     } finally {
+      consoleSpy.mockRestore();
       if (originalKey === undefined) {
         delete process.env.ENCRYPTION_KEY;
       } else {
         process.env.ENCRYPTION_KEY = originalKey;
       }
     }
+  });
+
+  it('logs missing key once when decrypting without a configured key', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    setEncryptionKey('');
+    expect(decryptApiKey('00:00')).toBeNull();
+    expect(decryptApiKey('00:00')).toBeNull();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    errorSpy.mockRestore();
+  });
+
+  it('marks weak encryption keys as invalid', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    setEncryptionKey('short');
+    expect(getEncryptionKeyStatus()).toEqual({ configured: false, source: 'invalid' });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ENCRYPTION_KEY is too short'));
+
+    setEncryptionKey('short');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    setEncryptionKey(null);
+    expect(getEncryptionKeyStatus()).toEqual({ configured: false, source: 'unset' });
+
+    setEncryptionKey('x'.repeat(32), 'unit');
+    expect(getEncryptionKeyStatus()).toEqual({ configured: true, source: 'unit' });
+
+    warnSpy.mockRestore();
   });
 
   it('hashes and verifies arbitrary data', () => {

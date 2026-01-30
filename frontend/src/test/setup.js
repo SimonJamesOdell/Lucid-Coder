@@ -27,7 +27,9 @@ const suppressedErrorPatterns = [
   /The operation was aborted\.?/i,
   /connect ECONNREFUSED/i,
   /Failed to execute 'startTask\(\)' on 'AsyncTaskManager'/i,
-  /The asynchronous task manager has been destroyed/i
+  /The asynchronous task manager has been destroyed/i,
+  /GET http:\/\/localhost:5000\/preview\//i,
+  /\b409 \(Conflict\)/i
 ]
 
 const normalizeConsoleArg = (value) => {

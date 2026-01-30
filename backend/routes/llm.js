@@ -50,10 +50,10 @@ router.get('/status', async (req, res) => {
         apiKeyOk = false;
         reason = 'Missing API key';
       } else {
-        const decrypted = decryptApiKey(config.api_key_encrypted);
+        const decrypted = decryptApiKey(config.api_key_encrypted, { quiet: true });
         apiKeyOk = Boolean(decrypted);
         if (!apiKeyOk) {
-          reason = 'Failed to decrypt API key';
+          reason = 'Stored API key cannot be decrypted. Please reconfigure.';
         }
       }
     }
@@ -117,7 +117,7 @@ router.post('/test', async (req, res) => {
         String(activeConfig.provider || '').toLowerCase() === String(provider).toLowerCase();
 
       if (sameProvider && activeConfig.api_key_encrypted) {
-        effectiveApiKey = decryptApiKey(activeConfig.api_key_encrypted);
+        effectiveApiKey = decryptApiKey(activeConfig.api_key_encrypted, { quiet: true });
       }
 
       if (!effectiveApiKey) {
@@ -206,11 +206,11 @@ router.post('/configure', async (req, res) => {
         }
 
         // Ensure the stored key is decryptable (otherwise the config cannot be ready).
-        const decrypted = decryptApiKey(activeConfig.api_key_encrypted);
+        const decrypted = decryptApiKey(activeConfig.api_key_encrypted, { quiet: true });
         if (!decrypted) {
           return res.status(400).json({
             success: false,
-            error: 'Stored API key cannot be decrypted. Please enter a new API key.'
+            error: 'Stored API key cannot be decrypted. Please reconfigure.'
           });
         }
 
@@ -329,14 +329,14 @@ router.post('/generate', async (req, res) => {
         });
       }
 
-      const decrypted = decryptApiKey(status.api_key_encrypted);
+      const decrypted = decryptApiKey(status.api_key_encrypted, { quiet: true });
       if (!decrypted) {
         return res.status(503).json({
           success: false,
           error: 'LLM is not configured',
           configured: true,
           ready: false,
-          reason: 'Failed to decrypt API key'
+          reason: 'Stored API key cannot be decrypted. Please reconfigure.'
         });
       }
     }

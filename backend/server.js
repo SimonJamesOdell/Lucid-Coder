@@ -24,6 +24,7 @@ import diagnosticsRoutes from './routes/diagnostics.js';
 import { requestContextMiddleware } from './middleware/requestContext.js';
 import { requestLoggerMiddleware } from './middleware/requestLogger.js';
 import { errorHandlerMiddleware, notFoundHandler } from './middleware/errorHandlers.js';
+import { initializeEncryptionKey } from './services/encryptionKeyStore.js';
 import http from 'http';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -64,7 +65,7 @@ const getLlmReadinessSnapshot = () => {
     } else {
       apiKeyOk = Boolean(llmClient?.apiKey);
       if (!apiKeyOk) {
-        reason = 'Failed to decrypt API key';
+          reason = 'Stored API key cannot be decrypted. Please reconfigure.';
       }
     }
   }
@@ -204,6 +205,9 @@ app.use('*', notFoundHandler);
 // Initialize database and start server
 const startServer = async () => {
   try {
+    const requireEncryptionKey = process.env.NODE_ENV === 'production';
+    await initializeEncryptionKey({ requireKey: requireEncryptionKey });
+
     console.log('🔧 Initializing database...');
     await initializeDatabase();
     

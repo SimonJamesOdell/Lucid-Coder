@@ -620,7 +620,14 @@ export const db_operations = {
     let tokenEncrypted = existing?.token_encrypted || null;
     if (Object.prototype.hasOwnProperty.call(settings, 'token')) {
       const tokenValue = typeof settings.token === 'string' ? settings.token.trim() : '';
-      tokenEncrypted = tokenValue ? encryptApiKey(tokenValue) : null;
+      if (tokenValue) {
+        tokenEncrypted = encryptApiKey(tokenValue);
+        if (!tokenEncrypted) {
+          throw new Error('Failed to encrypt Git token. Check ENCRYPTION_KEY configuration.');
+        }
+      } else {
+        tokenEncrypted = null;
+      }
     }
 
     await dbRun(`
@@ -714,7 +721,14 @@ export const db_operations = {
     let tokenEncrypted = existing?.token_encrypted || null;
     if (Object.prototype.hasOwnProperty.call(settings, 'token')) {
       const tokenValue = typeof settings.token === 'string' ? settings.token.trim() : '';
-      tokenEncrypted = tokenValue ? encryptApiKey(tokenValue) : null;
+      if (tokenValue) {
+        tokenEncrypted = encryptApiKey(tokenValue);
+        if (!tokenEncrypted) {
+          throw new Error('Failed to encrypt Git token. Check ENCRYPTION_KEY configuration.');
+        }
+      } else {
+        tokenEncrypted = null;
+      }
     }
 
     await dbRun(`

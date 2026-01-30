@@ -1,6 +1,8 @@
 import axios from 'axios';
 
 const SUPPORTED_PROVIDERS = new Set(['github', 'gitlab']);
+const GITHUB_SCOPE_HEADER = 'x-oauth-scopes';
+const GITLAB_SCOPE_HEADERS = ['x-oauth-scopes', 'x-gitlab-token-scopes'];
 
 export class RemoteRepoCreationError extends Error {
   constructor(message, { statusCode = 400, provider = 'github', details = null } = {}) {
@@ -58,10 +60,90 @@ const mapAxiosError = (provider, error, fallback = 'Failed to create remote repo
   };
 };
 
+const parseScopes = (value) => {
+  if (!value || typeof value !== 'string') {
+    return [];
+  }
+  return value
+    .split(/[, ]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+};
+
+const getHeaderValue = (headers, name) => {
+  if (!headers || typeof headers !== 'object') {
+    return null;
+  }
+  const target = name.toLowerCase();
+  const direct = headers[target];
+  if (typeof direct === 'string') {
+    return direct;
+  }
+  const matchKey = Object.keys(headers).find((key) => key.toLowerCase() === target);
+  return matchKey ? headers[matchKey] : null;
+};
+
+const warnMissingScopes = ({ provider, requiredScopes = [], availableScopes = [], visibility = 'private' }) => {
+  const normalizedRequired = requiredScopes.filter(Boolean);
+  if (!normalizedRequired.length) {
+    return;
+  }
+
+  const hasRequired = normalizedRequired.some((scope) => availableScopes.includes(scope));
+  if (hasRequired) {
+    return;
+  }
+
+  console.warn(`⚠️ ${provider} token may be missing required scopes for ${visibility} repositories. Required: ${normalizedRequired.join(', ')}.`);
+};
+
+const validateGithubTokenScopes = async ({ token, visibility }) => {
+  try {
+    const headers = {
+      Authorization: `Bearer ${token.trim()}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'LucidCoder'
+    };
+    const response = await axios.get('https://api.github.com/user', { headers });
+    const raw = getHeaderValue(response?.headers, GITHUB_SCOPE_HEADER);
+    if (!raw) {
+      console.warn('⚠️ Unable to verify GitHub token scopes.');
+      return;
+    }
+    const scopes = parseScopes(raw);
+    const requiredScopes = visibility === 'public' ? ['public_repo', 'repo'] : ['repo'];
+    warnMissingScopes({ provider: 'GitHub', requiredScopes, availableScopes: scopes, visibility });
+  } catch (error) {
+    console.warn('⚠️ Unable to verify GitHub token scopes.');
+  }
+};
+
+const validateGitlabTokenScopes = async ({ token, visibility }) => {
+  try {
+    const headers = {
+      'Private-Token': token.trim()
+    };
+    const response = await axios.get('https://gitlab.com/api/v4/user', { headers });
+    const raw = GITLAB_SCOPE_HEADERS
+      .map((name) => getHeaderValue(response?.headers, name))
+      .find((value) => typeof value === 'string' && value.trim());
+    if (!raw) {
+      console.warn('⚠️ Unable to verify GitLab token scopes.');
+      return;
+    }
+    const scopes = parseScopes(raw);
+    warnMissingScopes({ provider: 'GitLab', requiredScopes: ['api'], availableScopes: scopes, visibility });
+  } catch (error) {
+    console.warn('⚠️ Unable to verify GitLab token scopes.');
+  }
+};
+
 const createGithubRepository = async ({ token, name, description, visibility, owner }) => {
   if (!token?.trim()) {
     throw new RemoteRepoCreationError('Authentication token is required to create a GitHub repository');
   }
+
+  await validateGithubTokenScopes({ token, visibility });
 
   const normalizedName = sanitizeName(name);
   const headers = {
@@ -142,6 +224,8 @@ const createGitlabRepository = async ({ token, name, description, visibility, ow
     throw new RemoteRepoCreationError('Authentication token is required to create a GitLab repository', { provider: 'gitlab' });
   }
 
+  await validateGitlabTokenScopes({ token, visibility });
+
   const normalizedName = sanitizeName(name);
   const headers = {
     'Private-Token': token.trim()
@@ -208,7 +292,10 @@ export const __testUtils = {
   normalizeVisibility,
   sanitizeName,
   mapAxiosError,
-  fetchGitlabNamespaceId
+  fetchGitlabNamespaceId,
+  parseScopes,
+  getHeaderValue,
+  warnMissingScopes
 };
 
 export default {

@@ -3,6 +3,8 @@ import db from '../database.js';
 import { VERSION } from '../../shared/version.mjs';
 import { logBuffer } from './logBuffer.js';
 
+const SENSITIVE_KEY_PATTERN = /token|apiKey|api_key|password|secret|encrypted/i;
+
 const dbGet = (sql, params = []) => new Promise((resolve, reject) => {
   db.get(sql, params, (err, row) => {
     if (err) reject(err);
@@ -24,6 +26,26 @@ const parseJson = (value) => {
   } catch {
     return null;
   }
+};
+
+const redactSensitiveValues = (value) => {
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(redactSensitiveValues);
+  }
+
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (SENSITIVE_KEY_PATTERN.test(key)) {
+      result[key] = '[redacted]';
+      continue;
+    }
+    result[key] = redactSensitiveValues(entry);
+  }
+  return result;
 };
 
 const getTableCount = async (table) => {
@@ -51,8 +73,8 @@ const listRecentRunEvents = async (limit = 100) => {
     source: row.source ?? null,
     correlationId: row.correlation_id ?? null,
     message: row.message ?? '',
-    payload: parseJson(row.payload),
-    meta: parseJson(row.meta),
+    payload: redactSensitiveValues(parseJson(row.payload)),
+    meta: redactSensitiveValues(parseJson(row.meta)),
     createdAt: row.created_at ?? null
   }));
 };
@@ -76,7 +98,7 @@ const listRecentAuditLogs = async (limit = 50) => {
     statusCode: row.status_code,
     projectId: row.project_id ?? null,
     sessionId: row.session_id ?? null,
-    payload: parseJson(row.payload) ?? row.payload ?? null,
+    payload: redactSensitiveValues(parseJson(row.payload) ?? row.payload ?? null),
     createdAt: row.created_at ?? null
   }));
 };
@@ -183,6 +205,7 @@ export const __diagnosticsTesting = {
   dbGet,
   dbAll,
   parseJson,
+  redactSensitiveValues,
   getTableCount,
   listRecentRunEvents,
   listRecentAuditLogs,

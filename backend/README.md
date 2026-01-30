@@ -26,6 +26,7 @@ Common variables:
 - `DATABASE_PATH` — SQLite file path override (absolute or relative to the process working directory)
 - `LUCIDCODER_DB_DIR` — SQLite base directory override (absolute or relative to the process working directory)
 - `ENABLE_SOCKET_IO` — set to false to disable Socket.IO
+- `ENCRYPTION_KEY` — optional override for the backend encryption key. When unset, the backend generates a strong key on first run and stores it in the OS keychain (desktop builds). Production builds refuse to start if the key is missing or set to a placeholder value.
 - LLM settings (provider, API URL, model, API key) used by the LLM client
 
 ## Scripts
