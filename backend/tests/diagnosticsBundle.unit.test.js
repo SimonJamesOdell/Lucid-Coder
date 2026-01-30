@@ -47,6 +47,22 @@ describe('diagnostics bundle helpers', () => {
     expect(__diagnosticsTesting.parseJson('{"ok":true}')).toEqual({ ok: true });
   });
 
+  test('redactSensitiveValues masks secret fields', () => {
+    const payload = {
+      token: 'secret',
+      apiKey: 'key',
+      nested: { password: 'pw', ok: true },
+      list: [{ api_key: 'value' }]
+    };
+
+    expect(__diagnosticsTesting.redactSensitiveValues(payload)).toEqual({
+      token: '[redacted]',
+      apiKey: '[redacted]',
+      nested: { password: '[redacted]', ok: true },
+      list: [{ api_key: '[redacted]' }]
+    });
+  });
+
   test('getTableCount handles non-numeric row values', async () => {
     await withPatchedMethod(
       db,

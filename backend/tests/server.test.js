@@ -70,6 +70,11 @@ vi.mock('../llm-client.js', () => ({
   llmClient: llmClientStub
 }));
 
+const initializeEncryptionKeyMock = vi.hoisted(() => vi.fn());
+vi.mock('../services/encryptionKeyStore.js', () => ({
+  initializeEncryptionKey: initializeEncryptionKeyMock
+}));
+
 let app;
 let startServer;
 const registeredSignalHandlers = [];
@@ -123,6 +128,8 @@ describe('server bootstrap and middleware', () => {
   beforeEach(async () => {
     vi.resetModules();
     initializeDatabaseMock.mockReset();
+    initializeEncryptionKeyMock.mockReset();
+    initializeEncryptionKeyMock.mockResolvedValue({ source: 'env', configured: true, persisted: true });
     llmClientStub.initialize.mockReset();
     llmClientStub.config = null;
     attachSocketServerMock.mockReset();
@@ -323,7 +330,7 @@ describe('server bootstrap and middleware', () => {
       error: 'LLM is not configured',
       configured: true,
       ready: false,
-      reason: 'Failed to decrypt API key'
+      reason: 'Stored API key cannot be decrypted. Please reconfigure.'
     });
   });
 
@@ -462,6 +469,7 @@ describe('server bootstrap and middleware', () => {
 
     const serverInstance = await startServer();
 
+    expect(initializeEncryptionKeyMock).toHaveBeenCalledTimes(1);
     expect(initializeDatabaseMock).toHaveBeenCalledTimes(1);
     expect(llmClientStub.initialize).toHaveBeenCalledTimes(1);
     expect(createServerMock).toHaveBeenCalledTimes(1);

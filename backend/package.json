@@ -1,6 +1,6 @@
 {
   "name": "lucidcoder-backend",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Backend for LucidCoder fullstack app",
   "main": "server.js",
   "type": "module",
@@ -8,7 +8,7 @@
     "start": "nodemon server.js",
     "test": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.unit.config.js && cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.parallel.config.js && cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.integration.config.js",
     "test:watch": "cross-env DATABASE_PATH=test-lucidcoder.db vitest",
-    "test:coverage": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.unit.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/unit && cross-env DATABASE_PATH=test-lucidcoder.db VITEST_COVERAGE=1 VITEST_MAX_WORKERS=1 vitest run --config vitest.parallel.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/parallel && cross-env DATABASE_PATH=test-lucidcoder.db VITEST_COVERAGE=1 VITEST_MAX_WORKERS=1 vitest run --config vitest.integration.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/integration && node scripts/merge-coverage.mjs coverage-tmp/unit coverage-tmp/parallel coverage-tmp/integration",
+    "test:coverage": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.unit.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/unit && cross-env DATABASE_PATH=test-lucidcoder.db VITEST_COVERAGE=1 VITEST_MAX_WORKERS=6 vitest run --config vitest.parallel.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/parallel && cross-env DATABASE_PATH=test-lucidcoder.db VITEST_COVERAGE=1 VITEST_MAX_WORKERS=6 vitest run --config vitest.integration.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/integration && node scripts/merge-coverage.mjs coverage-tmp/unit coverage-tmp/parallel coverage-tmp/integration",
     "test:integration": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run test/integration",
     "coverage:db": "cross-env DATABASE_PATH=test-lucidcoder.db nyc --reporter=none vitest run tests/database.test.js --coverage --coverage.include=backend/database.js"
   },
@@ -20,6 +20,7 @@
     "express": "^4.18.2",
     "http-proxy": "^1.18.1",
     "json5": "^2.2.3",
+    "keytar": "^7.9.0",
     "socket.io": "^4.8.1",
     "sqlite3": "^5.1.6"
   },

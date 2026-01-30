@@ -1867,7 +1867,7 @@ describe('LLM Client Tests', () => {
       const initialized = await client.initialize();
 
       expect(initialized).toBe(true);
-      expect(decryptApiKeyMock).toHaveBeenCalledWith('encrypted-key');
+      expect(decryptApiKeyMock).toHaveBeenCalledWith('encrypted-key', { quiet: true });
       expect(client.apiKey).toBe('plain-key');
       expect(client.config).toMatchObject({ provider: 'groq', model: 'mixtral' });
     });
@@ -1894,6 +1894,41 @@ describe('LLM Client Tests', () => {
       expect(initialized).toBe(true);
       expect(client.apiKey).toBeNull();
       expect(decryptApiKeyMock).not.toHaveBeenCalled();
+    });
+
+    test('warns and returns false when decrypting required API key fails', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      dbOperationsMock.getActiveLLMConfig.mockResolvedValue({
+        provider: 'groq',
+        model: 'mixtral',
+        api_url: 'https://api.example.com',
+        requires_api_key: true,
+        api_key_encrypted: 'encrypted-key'
+      });
+      decryptApiKeyMock.mockReturnValue(null);
+
+      const initialized = await client.initialize();
+
+      expect(initialized).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('could not be decrypted'));
+      warnSpy.mockRestore();
+    });
+
+    test('warns and returns false when required API key is missing', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      dbOperationsMock.getActiveLLMConfig.mockResolvedValue({
+        provider: 'groq',
+        model: 'mixtral',
+        api_url: 'https://api.example.com',
+        requires_api_key: true,
+        api_key_encrypted: null
+      });
+
+      const initialized = await client.initialize();
+
+      expect(initialized).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('API key is missing'));
+      warnSpy.mockRestore();
     });
 
     test('handles database failures gracefully', async () => {

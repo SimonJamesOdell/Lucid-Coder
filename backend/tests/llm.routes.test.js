@@ -142,7 +142,7 @@ describe('LLM Routes', () => {
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(decryptApiKey).toHaveBeenCalledWith('encrypted_existing');
+      expect(decryptApiKey).toHaveBeenCalledWith('encrypted_existing', { quiet: true });
       expect(llmClient.testConnection).toHaveBeenCalledWith({
         provider: 'openai',
         model: 'gpt-4',
@@ -404,7 +404,7 @@ describe('LLM Routes', () => {
 
       expect(response.body.success).toBe(true);
       expect(encryptApiKey).not.toHaveBeenCalled();
-      expect(decryptApiKey).toHaveBeenCalledWith('encrypted_existing');
+      expect(decryptApiKey).toHaveBeenCalledWith('encrypted_existing', { quiet: true });
       expect(db_operations.saveLLMConfig).toHaveBeenCalledWith({
         provider: 'openai',
         model: 'gpt-4o',
@@ -483,7 +483,7 @@ describe('LLM Routes', () => {
 
       expect(response.body).toEqual({
         success: false,
-        error: 'Stored API key cannot be decrypted. Please enter a new API key.'
+        error: 'Stored API key cannot be decrypted. Please reconfigure.'
       });
 
       expect(db_operations.saveLLMConfig).not.toHaveBeenCalled();
@@ -741,7 +741,7 @@ describe('LLM Routes', () => {
         has_api_key: true,
         requires_api_key: true
       });
-      expect(decryptApiKey).toHaveBeenCalledWith('encrypted_value');
+      expect(decryptApiKey).toHaveBeenCalledWith('encrypted_value', { quiet: true });
     });
 
     it('returns ready=false when an API-key provider is missing an API key', async () => {
@@ -806,7 +806,7 @@ describe('LLM Routes', () => {
       expect(response.body.success).toBe(true);
       expect(response.body.configured).toBe(true);
       expect(response.body.ready).toBe(false);
-      expect(response.body.reason).toMatch(/failed to decrypt api key/i);
+      expect(response.body.reason).toMatch(/stored api key cannot be decrypted/i);
     });
 
     it('returns a missing API URL reason when api_url is blank and no other reason is present', async () => {
@@ -1001,7 +1001,7 @@ describe('LLM Routes', () => {
         error: 'LLM is not configured',
         configured: true,
         ready: false,
-        reason: 'Failed to decrypt API key'
+        reason: 'Stored API key cannot be decrypted. Please reconfigure.'
       });
     });
 

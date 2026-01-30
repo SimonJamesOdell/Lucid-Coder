@@ -18,6 +18,7 @@ beforeEach(() => {
 
 describe('remoteRepoService.createRemoteRepository', () => {
   test('creates GitHub repository with normalized response', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-oauth-scopes': 'repo' } });
     mockedAxios.post.mockResolvedValueOnce({
       data: {
         id: 42,
@@ -50,6 +51,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
   });
 
   test('creates GitHub repository for an organization owner', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-oauth-scopes': 'public_repo' } });
     mockedAxios.post.mockResolvedValueOnce({
       data: {
         id: 99,
@@ -75,6 +77,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
   });
 
   test('GitHub repository falls back to null owner and default branch when response omits fields', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-oauth-scopes': 'repo' } });
     mockedAxios.post.mockResolvedValueOnce({
       data: {
         id: 77,
@@ -91,6 +94,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
   });
 
   test('creates GitLab repository within requested namespace', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-gitlab-token-scopes': 'api' } });
     mockedAxios.get.mockResolvedValueOnce({
       data: [null, { id: 7, path: 'platform', full_path: 'team/platform' }]
     });
@@ -128,6 +132,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
   });
 
   test('uses namespace owner fallback when GitLab response omits namespace info', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-gitlab-token-scopes': 'api' } });
     mockedAxios.get.mockResolvedValueOnce({ data: [{ id: 3, path: 'platform' }] });
     mockedAxios.post.mockResolvedValueOnce({
       data: {
@@ -192,6 +197,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
   });
 
   test('throws when GitLab namespace cannot be found', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-gitlab-token-scopes': 'api' } });
     mockedAxios.get.mockResolvedValueOnce({ data: [] });
 
     await expect(
@@ -200,6 +206,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
   });
 
   test('wraps namespace lookup errors', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-gitlab-token-scopes': 'api' } });
     mockedAxios.get.mockRejectedValueOnce({ request: {} });
 
     await expect(
@@ -216,6 +223,179 @@ describe('remoteRepoService.createRemoteRepository', () => {
     await expect(
       createRemoteRepository({ provider: 'gitlab', token: 'token', name: 'demo' })
     ).rejects.toThrow(/boom/i);
+  });
+
+  test('warns when GitHub token scopes may be insufficient', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-oauth-scopes': 'read:user' } });
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 12,
+        name: 'demo-repo',
+        owner: { login: 'octo' },
+        clone_url: 'https://github.com/octo/demo-repo.git',
+        ssh_url: 'git@github.com:octo/demo-repo.git',
+        html_url: 'https://github.com/octo/demo-repo',
+        private: true,
+        default_branch: 'main'
+      }
+    });
+
+    await createRemoteRepository({ provider: 'github', token: 'token', name: 'demo' });
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('GitHub token may be missing required scopes'));
+    warnSpy.mockRestore();
+  });
+
+  test('warns when GitHub scope validation request fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockedAxios.get.mockRejectedValueOnce(new Error('network'));
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 16,
+        name: 'demo-repo',
+        owner: { login: 'octo' },
+        clone_url: 'https://github.com/octo/demo-repo.git',
+        ssh_url: 'git@github.com:octo/demo-repo.git',
+        html_url: 'https://github.com/octo/demo-repo',
+        private: true,
+        default_branch: 'main'
+      }
+    });
+
+    await createRemoteRepository({ provider: 'github', token: 'token', name: 'demo' });
+
+    expect(warnSpy).toHaveBeenCalledWith('⚠️ Unable to verify GitHub token scopes.');
+    warnSpy.mockRestore();
+  });
+
+  test('does not warn when GitHub token scopes satisfy requirements', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'X-OAuth-Scopes': 'repo' } });
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 14,
+        name: 'demo-repo',
+        owner: { login: 'octo' },
+        clone_url: 'https://github.com/octo/demo-repo.git',
+        ssh_url: 'git@github.com:octo/demo-repo.git',
+        html_url: 'https://github.com/octo/demo-repo',
+        private: true,
+        default_branch: 'main'
+      }
+    });
+
+    await createRemoteRepository({ provider: 'github', token: 'token', name: 'demo' });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test('does not warn when GitHub public repo scopes are present', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'X-OAuth-Scopes': 'public_repo' } });
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 17,
+        name: 'demo-repo',
+        owner: { login: 'octo' },
+        clone_url: 'https://github.com/octo/demo-repo.git',
+        ssh_url: 'git@github.com:octo/demo-repo.git',
+        html_url: 'https://github.com/octo/demo-repo',
+        private: false,
+        default_branch: 'main'
+      }
+    });
+
+    await createRemoteRepository({ provider: 'github', token: 'token', name: 'demo', visibility: 'public' });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test('warns when GitHub scope header is not a string', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'X-OAuth-Scopes': 123 } });
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 15,
+        name: 'demo-repo',
+        owner: { login: 'octo' },
+        clone_url: 'https://github.com/octo/demo-repo.git',
+        ssh_url: 'git@github.com:octo/demo-repo.git',
+        html_url: 'https://github.com/octo/demo-repo',
+        private: true,
+        default_branch: 'main'
+      }
+    });
+
+    await createRemoteRepository({ provider: 'github', token: 'token', name: 'demo' });
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('GitHub token may be missing required scopes'));
+    warnSpy.mockRestore();
+  });
+
+  test('warns when GitLab token scopes cannot be verified', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockedAxios.get.mockResolvedValueOnce({ headers: {} });
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 55,
+        name: 'demo-app',
+        namespace: { full_path: 'me' },
+        http_url_to_repo: 'https://gitlab.com/me/demo-app.git',
+        ssh_url_to_repo: 'git@gitlab.com:me/demo-app.git',
+        web_url: 'https://gitlab.com/me/demo-app',
+        default_branch: 'main'
+      }
+    });
+
+    await createRemoteRepository({ provider: 'gitlab', token: 'token', name: 'Demo App' });
+
+    expect(warnSpy).toHaveBeenCalledWith('⚠️ Unable to verify GitLab token scopes.');
+    warnSpy.mockRestore();
+  });
+
+  test('warns when GitLab scope validation request fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockedAxios.get.mockRejectedValueOnce(new Error('network'));
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 57,
+        name: 'demo-app',
+        namespace: { full_path: 'me' },
+        http_url_to_repo: 'https://gitlab.com/me/demo-app.git',
+        ssh_url_to_repo: 'git@gitlab.com:me/demo-app.git',
+        web_url: 'https://gitlab.com/me/demo-app',
+        default_branch: 'main'
+      }
+    });
+
+    await createRemoteRepository({ provider: 'gitlab', token: 'token', name: 'Demo App' });
+
+    expect(warnSpy).toHaveBeenCalledWith('⚠️ Unable to verify GitLab token scopes.');
+    warnSpy.mockRestore();
+  });
+
+  test('does not warn when GitLab token scopes include api', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'X-Gitlab-Token-Scopes': 'api' } });
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 56,
+        name: 'demo-app',
+        namespace: { full_path: 'me' },
+        http_url_to_repo: 'https://gitlab.com/me/demo-app.git',
+        ssh_url_to_repo: 'git@gitlab.com:me/demo-app.git',
+        web_url: 'https://gitlab.com/me/demo-app',
+        default_branch: 'main'
+      }
+    });
+
+    await createRemoteRepository({ provider: 'gitlab', token: 'token', name: 'Demo App' });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   test('rejects unsupported providers', async () => {
@@ -262,6 +442,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
   });
 
   test('creates GitLab repository without namespace and falls back to payload visibility', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-gitlab-token-scopes': 'api' } });
     mockedAxios.get.mockResolvedValueOnce({ data: [] });
     mockedAxios.post.mockResolvedValueOnce({
       data: {
@@ -280,6 +461,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
   });
 
   test('GitLab repository defaults owner to null and default branch to main when response omits them', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ headers: { 'x-gitlab-token-scopes': 'api' } });
     mockedAxios.get.mockResolvedValueOnce({ data: [] });
     mockedAxios.post.mockResolvedValueOnce({
       data: {
@@ -298,7 +480,7 @@ describe('remoteRepoService.createRemoteRepository', () => {
 });
 
 describe('remoteRepoService helpers', () => {
-  const { sanitizeName, normalizeVisibility, mapAxiosError, fetchGitlabNamespaceId } = __testUtils;
+  const { sanitizeName, normalizeVisibility, mapAxiosError, fetchGitlabNamespaceId, warnMissingScopes } = __testUtils;
 
   test('sanitizeName normalizes unsafe input and falls back to default', () => {
     expect(sanitizeName('  My   Repo  ')).toBe('My-Repo');
@@ -367,5 +549,14 @@ describe('remoteRepoService helpers', () => {
     });
 
     expect(await fetchGitlabNamespaceId('token', 'platform team')).toBe(18);
+  });
+
+  test('warnMissingScopes returns early when no scopes required', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    warnMissingScopes({ provider: 'GitHub', requiredScopes: [], availableScopes: [] });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

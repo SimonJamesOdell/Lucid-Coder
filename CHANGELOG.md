@@ -1,3 +1,15 @@
+## 0.4.3 (2026-01-29)
+- Update version metadata across the repo and versioning documentation for the 0.4.3 release.
+- Add OS keychain-backed encryption key storage (first-run generation) and initialize it at server start, with production enforcement.
+- Enforce encryption key strength and placeholder checks; track encryption key status for safe encrypt/decrypt.
+- Quiet repeated LLM API key decryption errors and improve reconfiguration guidance across client/routes/server readiness checks.
+- Fail fast when Git token encryption is unavailable to prevent storing plaintext credentials.
+- Add best-effort PAT scope verification warnings for GitHub/GitLab when creating remotes.
+- Redact sensitive values in diagnostics bundles.
+- Suppress preview proxy/409 noise in frontend tests and stabilize Runs tab test flows.
+- Expand backend/frontend tests to cover the new encryption, LLM, Git token, and diagnostics paths.
+- Tune backend coverage worker settings for faster coverage runs.
+
 ## 0.4.2 (2026-01-29)
 - Make the preview proxy always route requests when the preview cookie is present to keep SPA navigation stable.
 - Add back/forward navigation controls to the Preview URL bar with history tracking and disabled states.
