@@ -59,6 +59,15 @@
   background: var(--background-tertiary, #0b0b0b);
 }
 
+.git-card-alert {
+  border-color: rgba(255, 193, 7, 0.35);
+  background: rgba(255, 193, 7, 0.08);
+}
+
+.git-card-alert h4 {
+  color: #f2c94c;
+}
+
 .git-card-header {
   display: flex;
   justify-content: space-between;
@@ -174,10 +183,33 @@
   font-weight: 600;
   cursor: pointer;
   text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .git-remote-helper.expanded .git-remote-helper-toggle {
   color: var(--text-primary, #f5f5f5);
+}
+
+.git-remote-helper-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  border: 1px solid rgba(75, 163, 255, 0.6);
+  font-weight: 700;
+  line-height: 1;
+  font-size: 0.95rem;
+}
+
+.git-remote-helper-plus {
+  display: inline-block;
+  transform: translateY(1px);
+  font-size: 1.1rem;
+  font-weight: 800;
 }
 
 .git-remote-creator {
@@ -247,6 +279,70 @@
 .git-pill.pill-inherit {
   border-color: var(--success-color, #28a745);
   color: var(--success-color, #28a745);
+}
+
+.git-repo-info {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.git-repo-info .label {
+  display: block;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary, #8c8c8c);
+  margin-bottom: 0.2rem;
+}
+
+.git-repo-info a {
+  color: var(--accent-color, #4ba3ff);
+  word-break: break-all;
+}
+
+.git-repo-actions {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.git-repo-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: flex-end;
+}
+
+.git-repo-status {
+  border: 1px solid var(--border-color, #1f1f1f);
+  border-radius: 0.6rem;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.git-repo-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.6rem;
+}
+
+.git-repo-status-grid .label {
+  display: block;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary, #8c8c8c);
+  margin-bottom: 0.2rem;
+}
+
+.git-repo-status-empty {
+  margin: 0;
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 0.9rem;
 }
 
 .ghost {

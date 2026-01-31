@@ -5,6 +5,7 @@ import os from 'os';
 import net from 'net';
 import { EventEmitter } from 'events';
 import * as projectScaffolding from '../services/projectScaffolding.js';
+import { initializeAndPushRepository } from '../services/projectScaffolding/git.js';
 
 const { execMock, spawnMock } = vi.hoisted(() => ({
   execMock: vi.fn(),
@@ -1225,6 +1226,117 @@ describe('createProjectWithFiles (real mode)', () => {
       const messages = onProgress.mock.calls.map(([payload]) => payload.statusMessage);
       expect(messages).toContain('Initializing git repository...');
     });
+  });
+});
+
+describe('initializeAndPushRepository', () => {
+  test('requires project path', async () => {
+    await expect(
+      initializeAndPushRepository('', { remoteUrl: 'git@example.com/repo.git' })
+    ).rejects.toThrow('Project path is required to initialize git.');
+  });
+
+  test('requires remote url', async () => {
+    await expect(
+      initializeAndPushRepository('/repo', { remoteUrl: '   ' })
+    ).rejects.toThrow('Remote URL is required to push the repository.');
+  });
+
+  test('rejects non-string remote url values', async () => {
+    await expect(
+      initializeAndPushRepository('/repo', { remoteUrl: 123 })
+    ).rejects.toThrow('Remote URL is required to push the repository.');
+  });
+
+  test('defaults to main when defaultBranch is blank', async () => {
+    gitUtils.runGitCommand
+      .mockResolvedValueOnce({ stdout: '', code: 1 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 });
+
+    const result = await initializeAndPushRepository('/repo', {
+      remoteUrl: 'https://example.com/repo.git',
+      defaultBranch: '   '
+    });
+
+    expect(gitUtils.runGitCommand).toHaveBeenCalledWith('/repo', ['checkout', '-B', 'main']);
+    expect(gitUtils.runGitCommand).toHaveBeenCalledWith('/repo', ['push', '-u', 'origin', 'main']);
+    expect(result).toMatchObject({ pushed: true, branch: 'main' });
+  });
+
+  test('updates origin when remote differs', async () => {
+    gitUtils.runGitCommand
+      .mockResolvedValueOnce({ stdout: 'https://old.git\n', code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 });
+
+    const result = await initializeAndPushRepository('/repo', {
+      remoteUrl: 'https://new.git',
+      defaultBranch: 'main',
+      username: 'ci-bot'
+    });
+
+    expect(gitUtils.runGitCommand).toHaveBeenCalledWith('/repo', ['remote', 'set-url', 'origin', 'https://new.git']);
+    expect(gitUtils.runGitCommand).toHaveBeenCalledWith('/repo', ['push', '-u', 'origin', 'main']);
+    expect(result).toMatchObject({ pushed: true, remote: 'https://new.git' });
+  });
+
+  test('keeps origin when remote already matches', async () => {
+    gitUtils.runGitCommand
+      .mockResolvedValueOnce({ stdout: 'https://example.com/repo.git\n', code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 });
+
+    const result = await initializeAndPushRepository('/repo', {
+      remoteUrl: 'https://example.com/repo.git',
+      defaultBranch: 'main'
+    });
+
+    expect(gitUtils.runGitCommand).not.toHaveBeenCalledWith('/repo', ['remote', 'set-url', 'origin', 'https://example.com/repo.git']);
+    expect(gitUtils.runGitCommand).not.toHaveBeenCalledWith('/repo', ['remote', 'add', 'origin', 'https://example.com/repo.git']);
+    expect(gitUtils.runGitCommand).toHaveBeenCalledWith('/repo', ['push', '-u', 'origin', 'main']);
+    expect(result).toMatchObject({ pushed: true, remote: 'https://example.com/repo.git' });
+  });
+
+  test('returns pushed=false when no commits are available', async () => {
+    gitUtils.runGitCommand
+      .mockResolvedValueOnce({ stdout: '', code: 1 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 1 });
+
+    const result = await initializeAndPushRepository('/repo', {
+      remoteUrl: 'https://example.com/repo.git',
+      defaultBranch: 'main'
+    });
+
+    expect(result).toMatchObject({ pushed: false, message: 'No commits found to push.' });
+    expect(gitUtils.runGitCommand).not.toHaveBeenCalledWith('/repo', ['push', '-u', 'origin', 'main']);
+  });
+
+  test('adds origin when remote get-url returns non-string stdout', async () => {
+    gitUtils.runGitCommand
+      .mockResolvedValueOnce({ stdout: 123, code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 })
+      .mockResolvedValueOnce({ code: 0 });
+
+    const result = await initializeAndPushRepository('/repo', {
+      remoteUrl: 'https://example.com/repo.git',
+      defaultBranch: 'main'
+    });
+
+    expect(gitUtils.runGitCommand).toHaveBeenCalledWith(
+      '/repo',
+      ['remote', 'add', 'origin', 'https://example.com/repo.git']
+    );
+    expect(result).toMatchObject({ pushed: true, remote: 'https://example.com/repo.git' });
   });
 });
 

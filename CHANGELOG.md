@@ -1,3 +1,7 @@
+## 0.4.4 (2026-01-31)
+- Close remaining backend coverage gaps in git connection service, settings payload normalization, and git scaffolding helpers.
+- Expand backend test coverage for git token expiry edge cases and provider error mapping.
+
 ## 0.4.3 (2026-01-29)
 - Update version metadata across the repo and versioning documentation for the 0.4.3 release.
 - Add OS keychain-backed encryption key storage (first-run generation) and initialize it at server start, with production enforcement.

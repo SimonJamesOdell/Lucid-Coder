@@ -1,0 +1,246 @@
+import { describe, test, expect, vi } from 'vitest';
+import {
+  fetchProjectGitStatus,
+  fetchProjectGitRemote,
+  pullProjectGitRemote,
+  fetchProjectBranchesOverview,
+  checkoutProjectBranch,
+  updateGitSettings,
+  testGitConnection
+} from '../context/appState/settings.js';
+
+const buildResponse = (ok, payload) => ({
+  ok,
+  json: () => Promise.resolve(payload)
+});
+
+describe('settings git helpers', () => {
+  test('fetchProjectGitRemote throws when projectId is missing', async () => {
+    await expect(fetchProjectGitRemote({ trackedFetch: () => null })).rejects.toThrow(
+      'projectId is required to fetch git remote status'
+    );
+  });
+
+  test('fetchProjectGitRemote throws backend error', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false, error: 'nope' }));
+    await expect(fetchProjectGitRemote({ trackedFetch, projectId: 'proj-1' })).rejects.toThrow('nope');
+  });
+
+  test('fetchProjectGitRemote falls back to default error message', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+    await expect(fetchProjectGitRemote({ trackedFetch, projectId: 'proj-1e' })).rejects.toThrow('Failed to fetch git remote');
+  });
+
+  test('fetchProjectGitRemote returns null when status is missing', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, { success: true }));
+
+    const result = await fetchProjectGitRemote({ trackedFetch, projectId: 'proj-1f' });
+    expect(result).toBeNull();
+  });
+
+  test('fetchProjectGitStatus throws when projectId is missing', async () => {
+    await expect(fetchProjectGitStatus({ trackedFetch: () => null })).rejects.toThrow(
+      'projectId is required to fetch git status'
+    );
+  });
+
+  test('fetchProjectGitStatus throws backend error', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false, error: 'status failed' }));
+    await expect(fetchProjectGitStatus({ trackedFetch, projectId: 'proj-1a' })).rejects.toThrow('status failed');
+  });
+
+  test('fetchProjectGitStatus falls back to default error message', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+    await expect(fetchProjectGitStatus({ trackedFetch, projectId: 'proj-1c' })).rejects.toThrow('Failed to fetch git status');
+  });
+
+  test('fetchProjectGitStatus returns status payload on success', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      status: { branch: 'main', ahead: 0, behind: 0 }
+    }));
+
+    const result = await fetchProjectGitStatus({ trackedFetch, projectId: 'proj-1b' });
+    expect(result).toMatchObject({ branch: 'main', ahead: 0, behind: 0 });
+  });
+
+  test('fetchProjectGitStatus returns null when status is missing', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, { success: true }));
+
+    const result = await fetchProjectGitStatus({ trackedFetch, projectId: 'proj-1d' });
+    expect(result).toBeNull();
+  });
+
+  test('pullProjectGitRemote throws when projectId is missing', async () => {
+    await expect(pullProjectGitRemote({ trackedFetch: () => null })).rejects.toThrow(
+      'projectId is required to pull git remote'
+    );
+  });
+
+  test('pullProjectGitRemote returns status and strategy', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      status: { branch: 'main', ahead: 0, behind: 0 },
+      strategy: 'ff-only'
+    }));
+
+    const result = await pullProjectGitRemote({ trackedFetch, projectId: 'proj-2' });
+    expect(result).toMatchObject({
+      status: { branch: 'main', ahead: 0, behind: 0 },
+      strategy: 'ff-only'
+    });
+  });
+
+  test('pullProjectGitRemote throws backend error', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, { success: false, error: 'blocked' }));
+    await expect(pullProjectGitRemote({ trackedFetch, projectId: 'proj-3' })).rejects.toThrow('blocked');
+  });
+
+  test('pullProjectGitRemote falls back to default error message', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+    await expect(pullProjectGitRemote({ trackedFetch, projectId: 'proj-4' })).rejects.toThrow(
+      'Failed to pull git remote'
+    );
+  });
+
+  test('pullProjectGitRemote returns null status and strategy when omitted', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, { success: true }));
+
+    const result = await pullProjectGitRemote({ trackedFetch, projectId: 'proj-5' });
+    expect(result).toEqual({ status: null, strategy: null });
+  });
+
+  test('fetchProjectBranchesOverview throws on missing id', async () => {
+    await expect(fetchProjectBranchesOverview({ trackedFetch: () => null })).rejects.toThrow(
+      'projectId is required to fetch branches'
+    );
+  });
+
+  test('fetchProjectBranchesOverview throws backend error', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false, error: 'bad branches' }));
+    await expect(fetchProjectBranchesOverview({ trackedFetch, projectId: 'proj-4' })).rejects.toThrow('bad branches');
+  });
+
+  test('fetchProjectBranchesOverview falls back to default error message', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+    await expect(fetchProjectBranchesOverview({ trackedFetch, projectId: 'proj-4b' })).rejects.toThrow('Failed to fetch branches');
+  });
+
+  test('fetchProjectBranchesOverview returns payload on success', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      branches: [{ name: 'main' }],
+      current: 'main'
+    }));
+
+    const result = await fetchProjectBranchesOverview({ trackedFetch, projectId: 'proj-4a' });
+    expect(result).toMatchObject({ branches: [{ name: 'main' }], current: 'main' });
+  });
+
+  test('checkoutProjectBranch throws on missing input', async () => {
+    await expect(checkoutProjectBranch({ trackedFetch: () => null, projectId: 'proj-5' })).rejects.toThrow(
+      'projectId and branchName are required to checkout branch'
+    );
+  });
+
+  test('checkoutProjectBranch throws backend error', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false, error: 'cannot checkout' }));
+    await expect(checkoutProjectBranch({ trackedFetch, projectId: 'proj-6', branchName: 'main' })).rejects.toThrow('cannot checkout');
+  });
+
+  test('checkoutProjectBranch falls back to default error message', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+    await expect(checkoutProjectBranch({ trackedFetch, projectId: 'proj-6b', branchName: 'main' })).rejects.toThrow(
+      'Failed to checkout branch'
+    );
+  });
+
+  test('checkoutProjectBranch returns response on success', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, { success: true, branch: 'main' }));
+    const result = await checkoutProjectBranch({ trackedFetch, projectId: 'proj-7', branchName: 'main' });
+    expect(result).toMatchObject({ success: true, branch: 'main' });
+  });
+
+  test('updateGitSettings marks token presence when token is provided', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      settings: {
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: '',
+        username: '',
+        defaultBranch: 'main'
+      }
+    }));
+    const setGitSettings = vi.fn();
+
+    const gitSettings = {
+      workflow: 'local',
+      provider: 'github',
+      remoteUrl: '',
+      username: '',
+      token: '',
+      tokenPresent: false,
+      defaultBranch: 'main'
+    };
+
+    await updateGitSettings({
+      trackedFetch,
+      gitSettings,
+      setGitSettings,
+      updates: { token: 'abc123' }
+    });
+
+    expect(setGitSettings).toHaveBeenCalledWith(expect.objectContaining({ tokenPresent: true }));
+  });
+
+  test('updateGitSettings does not mark token presence for non-string token', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      settings: {
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: '',
+        username: '',
+        defaultBranch: 'main',
+        tokenPresent: false
+      }
+    }));
+    const setGitSettings = vi.fn();
+
+    const gitSettings = {
+      workflow: 'local',
+      provider: 'github',
+      remoteUrl: '',
+      username: '',
+      token: '',
+      tokenPresent: false,
+      defaultBranch: 'main'
+    };
+
+    await updateGitSettings({
+      trackedFetch,
+      gitSettings,
+      setGitSettings,
+      updates: { token: 123 }
+    });
+
+    expect(setGitSettings).not.toHaveBeenCalledWith(expect.objectContaining({ tokenPresent: true }));
+  });
+
+  test('testGitConnection returns payload on success', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      provider: 'github',
+      account: { login: 'octo' }
+    }));
+
+    const result = await testGitConnection({ trackedFetch, provider: 'github', token: 'abc' });
+    expect(result).toMatchObject({ provider: 'github', account: { login: 'octo' } });
+  });
+
+  test('testGitConnection throws default error when response omits details', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+    await expect(testGitConnection({ trackedFetch })).rejects.toThrow('Failed to test git connection');
+  });
+});

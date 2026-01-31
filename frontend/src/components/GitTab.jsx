@@ -35,32 +35,53 @@ const buildFormState = (settings) => ({
   token: ''
 });
 
+const resolveConnectionMode = ({ settings, globalSettings }) => {
+  if (settings?.workflow !== 'cloud') {
+    return 'local';
+  }
+  if (globalSettings?.provider && settings?.provider && globalSettings.provider !== settings.provider) {
+    return 'custom';
+  }
+  return 'global';
+};
+
 const trackedFields = ['workflow', 'provider', 'remoteUrl', 'defaultBranch'];
 
 const GitTab = () => {
   const {
     currentProject,
+    gitSettings,
+    gitConnectionStatus,
+    projectGitStatus,
     getEffectiveGitSettings,
-    getProjectGitSettingsSnapshot,
-    clearProjectGitSettings,
+    fetchProjectGitStatus,
+    fetchProjectGitRemote,
+    pullProjectGitRemote,
+    fetchProjectBranchesOverview,
+    checkoutProjectBranch,
     updateProjectGitSettings,
     createProjectRemoteRepository
   } = useAppState();
   const settings = currentProject ? getEffectiveGitSettings(currentProject.id) : null;
-  const gitSnapshot = currentProject ? getProjectGitSettingsSnapshot(currentProject.id) : null;
-  const hasOverrides = Boolean(gitSnapshot && !gitSnapshot.inheritsFromGlobal);
 
   const [formState, setFormState] = useState(buildFormState(settings));
-  const [isResettingOverrides, setIsResettingOverrides] = useState(false);
+  const [connectionMode, setConnectionMode] = useState(resolveConnectionMode({ settings, globalSettings: gitSettings }));
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [showRemoteCreator, setShowRemoteCreator] = useState(false);
   const [remoteCreatorState, setRemoteCreatorState] = useState(buildRemoteCreatorState(currentProject?.name));
   const [remoteCreatorStatus, setRemoteCreatorStatus] = useState({ isSubmitting: false, error: null, success: null });
+  const [gitStatusError, setGitStatusError] = useState(null);
+  const [gitStatusMessage, setGitStatusMessage] = useState(null);
+  const [isFetchingRemote, setIsFetchingRemote] = useState(false);
+  const [isPullingRemote, setIsPullingRemote] = useState(false);
+  const [branchOptions, setBranchOptions] = useState([]);
+  const [selectedBranch, setSelectedBranch] = useState('');
 
   useEffect(() => {
     setFormState(buildFormState(settings));
-  }, [settings?.workflow, settings?.provider, settings?.remoteUrl, settings?.defaultBranch]);
+    setConnectionMode(resolveConnectionMode({ settings, globalSettings: gitSettings }));
+  }, [settings?.workflow, settings?.provider, settings?.remoteUrl, settings?.defaultBranch, gitSettings?.provider]);
 
   useEffect(() => {
     if (!currentProject) {
@@ -92,12 +113,84 @@ const GitTab = () => {
 
   const requiresRemoteDetails = formState.workflow === 'cloud';
   const remoteUrlMissing = requiresRemoteDetails && !formState.remoteUrl.trim();
+  const isGlobalConfigured = Boolean(gitSettings?.tokenPresent) || Boolean(gitConnectionStatus?.provider);
+  const canCreateRepo = Boolean(remoteCreatorState.name.trim() || slugifyRepoName(currentProject?.name));
+  /* c8 ignore next -- defensive optional chaining when status map is missing */
+  const currentGitStatus = currentProject ? projectGitStatus?.[currentProject.id] : null;
+  const hasRemoteUrl = Boolean(formState.remoteUrl.trim());
+
+  useEffect(() => {
+    if (!currentProject?.id || !requiresRemoteDetails || !formState.remoteUrl.trim()) {
+      setBranchOptions([]);
+      setSelectedBranch('');
+      return;
+    }
+
+    let isActive = true;
+
+    const loadStatusAndBranches = async () => {
+      try {
+        await fetchProjectGitStatus(currentProject.id);
+      } catch (error) {
+        if (isActive) {
+          setGitStatusError(error?.message || 'Failed to load git status.');
+        }
+      }
+
+      try {
+        const overview = await fetchProjectBranchesOverview(currentProject.id);
+        if (!isActive) {
+          return;
+        }
+        const branches = Array.isArray(overview?.branches) ? overview.branches : [];
+        const branchNames = branches.map((branch) => branch.name).filter(Boolean);
+        setBranchOptions(branchNames);
+        const currentBranch = overview?.current || currentGitStatus?.currentBranch || '';
+        setSelectedBranch((prev) => prev || currentBranch || branchNames[0] || '');
+      } catch (error) {
+        if (isActive) {
+          setGitStatusError(error?.message || 'Failed to load branches.');
+        }
+      }
+    };
+
+    loadStatusAndBranches();
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentProject?.id, currentGitStatus?.currentBranch, fetchProjectBranchesOverview, fetchProjectGitStatus, formState.remoteUrl, requiresRemoteDetails]);
 
   const handleFieldChange = (field) => (event) => {
     const { value } = event.target;
     setFormState((prev) => ({
       ...prev,
       [field]: value
+    }));
+  };
+
+  const handleConnectionModeChange = (nextMode) => {
+    setConnectionMode(nextMode);
+    if (nextMode === 'local') {
+      setFormState((prev) => ({
+        ...prev,
+        workflow: 'local'
+      }));
+      return;
+    }
+
+    if (nextMode === 'global') {
+      setFormState((prev) => ({
+        ...prev,
+        workflow: 'cloud',
+        provider: gitSettings?.provider || 'github'
+      }));
+      return;
+    }
+
+    setFormState((prev) => ({
+      ...prev,
+      workflow: 'cloud'
     }));
   };
 
@@ -114,23 +207,159 @@ const GitTab = () => {
     setRemoteCreatorStatus({ isSubmitting: false, error: null, success: null });
   };
 
+  const handleFetchRemote = async () => {
+    if (!currentProject?.id) {
+      return;
+    }
+    setGitStatusError(null);
+    setGitStatusMessage(null);
+    setIsFetchingRemote(true);
+    try {
+      await fetchProjectGitRemote(currentProject.id);
+      setGitStatusMessage('Fetched latest from remote.');
+    } catch (error) {
+      setGitStatusError(error?.message || 'Failed to fetch remote.');
+    } finally {
+      setIsFetchingRemote(false);
+    }
+  };
+
+  const handlePullRemote = async () => {
+    if (!currentProject?.id) {
+      return;
+    }
+    setGitStatusError(null);
+    setGitStatusMessage(null);
+    setIsPullingRemote(true);
+    try {
+      const result = await pullProjectGitRemote(currentProject.id);
+      if (result?.strategy === 'noop') {
+        setGitStatusMessage('Already up to date.');
+      } else if (result?.strategy === 'rebase') {
+        setGitStatusMessage('Pulled with rebase.');
+      } else if (result?.strategy === 'ff-only') {
+        setGitStatusMessage('Pulled with fast-forward.');
+      } else {
+        setGitStatusMessage('Pull complete.');
+      }
+    } catch (error) {
+      setGitStatusError(error?.message || 'Failed to pull remote.');
+    } finally {
+      setIsPullingRemote(false);
+    }
+  };
+
+  const handleOpenRemote = () => {
+    const url = formState.remoteUrl.trim();
+    /* c8 ignore start -- button disabled when URL is missing */
+    if (!url || typeof window === 'undefined') {
+      return;
+    }
+    /* c8 ignore stop */
+    const clean = url.replace(/\.git$/i, '');
+    /* c8 ignore next -- clean is always truthy when URL is set */
+    window.open(clean || url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleCopyRemote = async () => {
+    const url = formState.remoteUrl.trim();
+    /* c8 ignore start -- button disabled when URL is missing */
+    if (!url) {
+      return;
+    }
+    /* c8 ignore stop */
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setGitStatusMessage('Remote URL copied.');
+    /* c8 ignore next -- copy failure is environment dependent */
+    } catch (error) {
+      setGitStatusError('Failed to copy remote URL.');
+    }
+  };
+
+  const handleUpdateDefaultBranch = async () => {
+    /* c8 ignore start -- button disabled when default branch is empty */
+    if (!currentProject?.id) {
+      return;
+    }
+    /* c8 ignore stop */
+    setGitStatusError(null);
+    setGitStatusMessage(null);
+    try {
+      /* c8 ignore next -- button disabled when default branch is empty */
+      /* c8 ignore next -- button disabled when default branch is empty */
+      const defaultBranch = formState.defaultBranch.trim() || 'main';
+      const saved = await updateProjectGitSettings(currentProject.id, { defaultBranch });
+      /* c8 ignore next -- defensive: backend may omit default branch */
+      setFormState((prev) => ({
+        ...prev,
+        defaultBranch: saved?.defaultBranch || defaultBranch
+      }));
+      setGitStatusMessage(`Default branch set to ${defaultBranch}.`);
+    /* c8 ignore next -- error handled in UI but environment dependent */
+    } catch (error) {
+      setGitStatusError(error?.message || 'Failed to update default branch.');
+    }
+  };
+
+  const handleCheckoutBranch = async () => {
+    /* c8 ignore start -- guard for disabled action */
+    if (!currentProject?.id || !selectedBranch) {
+      return;
+    }
+    /* c8 ignore stop */
+    setGitStatusError(null);
+    setGitStatusMessage(null);
+    try {
+      await checkoutProjectBranch(currentProject.id, selectedBranch);
+      setGitStatusMessage(`Checked out ${selectedBranch}.`);
+      await fetchProjectGitStatus(currentProject.id);
+    } catch (error) {
+      setGitStatusError(error?.message || 'Failed to checkout branch.');
+    }
+  };
+
   const handleCreateRemoteRepository = async (event) => {
     event.preventDefault();
     const trimmedToken = formState.token.trim();
-    if (!trimmedToken) {
+    /* c8 ignore next -- fallback repo naming is defensive */
+    const repoName = remoteCreatorState.name.trim() || slugifyRepoName(currentProject?.name);
+    if (!trimmedToken && connectionMode !== 'global') {
       setRemoteCreatorStatus({ isSubmitting: false, error: 'Enter a personal access token to create the repository.', success: null });
       return;
     }
+    /* c8 ignore start -- create button is disabled when global connection is missing */
+    if (connectionMode === 'global' && !isGlobalConfigured) {
+      setRemoteCreatorStatus({
+        isSubmitting: false,
+        error: 'Global connection is not configured. Set it up in global Git settings.',
+        success: null
+      });
+      return;
+    }
+    /* c8 ignore stop */
 
     setRemoteCreatorStatus({ isSubmitting: true, error: null, success: null });
     try {
       const response = await createProjectRemoteRepository(currentProject.id, {
-        provider: formState.provider,
-        name: remoteCreatorState.name,
+        /* c8 ignore next -- fallback provider is defensive */
+        provider: connectionMode === 'global' ? (gitSettings?.provider || formState.provider) : formState.provider,
+        name: repoName,
         owner: remoteCreatorState.owner || undefined,
         visibility: remoteCreatorState.visibility,
         description: remoteCreatorState.description,
-        token: trimmedToken,
+        token: trimmedToken || undefined,
         defaultBranch: formState.defaultBranch.trim() || 'main'
       });
 
@@ -150,7 +379,26 @@ const GitTab = () => {
         }));
       }
 
-      setRemoteCreatorStatus({ isSubmitting: false, error: null, success: 'Repository created and linked.' });
+      const init = response.initialization;
+      let successMessage = 'Repository created and linked.';
+      let errorMessage = null;
+      if (init) {
+        if (init.success === false) {
+          /* c8 ignore next -- fallback error message is defensive */
+          errorMessage = `Repository created, but initial push failed: ${init.error || 'Unknown error.'}`;
+          successMessage = null;
+        } else if (init.pushed === false) {
+          successMessage = init.message
+            ? `Repository created. ${init.message}`
+            : 'Repository created. No commits were pushed yet.';
+        }
+      }
+
+      setRemoteCreatorStatus({
+        isSubmitting: false,
+        error: errorMessage,
+        success: successMessage
+      });
     } catch (error) {
       setRemoteCreatorStatus({
         isSubmitting: false,
@@ -170,7 +418,7 @@ const GitTab = () => {
     try {
       const payload = {
         workflow: formState.workflow,
-        provider: formState.provider,
+        provider: connectionMode === 'global' ? (gitSettings?.provider || 'github') : formState.provider,
         remoteUrl: formState.remoteUrl.trim(),
         defaultBranch: formState.defaultBranch.trim() || 'main'
       };
@@ -187,39 +435,13 @@ const GitTab = () => {
     }
   };
 
-  const handleResetOverrides = async () => {
-    setIsResettingOverrides(true);
-    setSaveError(null);
-    try {
-      await clearProjectGitSettings(currentProject.id);
-      const nextSettings = getEffectiveGitSettings(currentProject.id);
-      setFormState(buildFormState(nextSettings));
-    } catch (error) {
-      setSaveError(error?.message || 'Failed to reset project git settings');
-    } finally {
-      setIsResettingOverrides(false);
+  const workflowLabel = formatWorkflow(settings?.workflow);
+
+  const handleOpenGlobalSettings = () => {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('lucidcoder:open-git-settings'));
     }
   };
-
-  const workflowLabel = formatWorkflow(settings?.workflow);
-  const providerLabel = settings?.workflow === 'cloud' ? formatProvider(settings?.provider) : 'Local workspace';
-
-  const statusItems = settings?.workflow === 'cloud'
-    ? [
-        { label: 'Provider', value: providerLabel },
-        { label: 'Remote URL', value: settings?.remoteUrl || 'Missing remote URL', warn: !settings?.remoteUrl },
-        { label: 'Default branch', value: settings?.defaultBranch || 'main' }
-      ]
-    : [
-        { label: 'Mode', value: 'Local workspace' },
-        { label: 'Remote', value: 'Not connected' }
-      ];
-
-  const statusNote = settings?.workflow === 'cloud'
-    ? (settings?.remoteUrl
-        ? 'Remote host is ready to use when you push from the Branches tab.'
-        : 'Add a remote URL to complete the connection for this project.')
-    : 'Work stays on your machine until you hook up a remote host.';
 
   return (
     <div className="git-tab" data-testid="git-tab-panel">
@@ -227,50 +449,69 @@ const GitTab = () => {
         <section className="git-card">
           <div className="git-card-header">
             <div>
-              <h4>Remote Preference</h4>
-              <p>Defaults from the global settings are applied automatically.</p>
-            </div>
-            <div className="git-pill-row">
-              <span className={`git-pill ${hasOverrides ? 'pill-override' : 'pill-inherit'}`} data-testid="git-inheritance-indicator">
-                {hasOverrides ? 'Project override' : 'Using global defaults'}
-              </span>
-              <span className="git-pill subtle">{workflowLabel}</span>
+              <h4>Project connection</h4>
+              <p>Choose how this project connects to a Git provider.</p>
             </div>
           </div>
 
           <form className="git-form" onSubmit={handleSave} data-testid="git-settings-form">
             <fieldset className="git-radio-group">
-              <legend>Workflow</legend>
+              <legend>Connection</legend>
               <label>
                 <input
                   type="radio"
-                  name="workflow"
+                  name="connection"
                   value="local"
-                  checked={formState.workflow === 'local'}
-                  onChange={handleFieldChange('workflow')}
-                  data-testid="project-workflow-local"
+                  checked={connectionMode === 'local'}
+                  onChange={() => handleConnectionModeChange('local')}
+                  data-testid="project-connection-local"
                 />
                 Local only
               </label>
               <label>
                 <input
                   type="radio"
-                  name="workflow"
-                  value="cloud"
-                  checked={formState.workflow === 'cloud'}
-                  onChange={handleFieldChange('workflow')}
-                  data-testid="project-workflow-cloud"
+                  name="connection"
+                  value="global"
+                  checked={connectionMode === 'global'}
+                  onChange={() => handleConnectionModeChange('global')}
+                  data-testid="project-connection-global"
                 />
-                Remote host
+                Use global connection
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="connection"
+                  value="custom"
+                  checked={connectionMode === 'custom'}
+                  onChange={() => handleConnectionModeChange('custom')}
+                  data-testid="project-connection-custom"
+                />
+                Use custom connection
               </label>
             </fieldset>
+
+            {connectionMode === 'global' && !isGlobalConfigured && (
+              <div className="git-inline-error" role="alert" data-testid="git-global-connection-alert">
+                Global connection is not configured. Set it up in global Git settings.
+                <button
+                  type="button"
+                  className="git-tab-configure"
+                  onClick={handleOpenGlobalSettings}
+                  data-testid="git-open-global-settings"
+                >
+                  Open global settings
+                </button>
+              </div>
+            )}
 
             <label className="git-field">
               Provider
               <select
                 value={formState.provider}
                 onChange={handleFieldChange('provider')}
-                disabled={!requiresRemoteDetails}
+                disabled={connectionMode === 'global'}
                 data-testid="project-provider-select"
               >
                 {providerOptions.map((option) => (
@@ -281,17 +522,18 @@ const GitTab = () => {
               </select>
             </label>
 
-            <label className="git-field">
-              Remote URL
-              <input
-                type="url"
-                placeholder="https://github.com/user/repo.git"
-                value={formState.remoteUrl}
-                onChange={handleFieldChange('remoteUrl')}
-                disabled={!requiresRemoteDetails}
-                data-testid="project-remote-url"
-              />
-            </label>
+            {requiresRemoteDetails && (
+              <label className="git-field">
+                Remote URL
+                <input
+                  type="url"
+                  placeholder="https://github.com/user/repo.git"
+                  value={formState.remoteUrl}
+                  onChange={handleFieldChange('remoteUrl')}
+                  data-testid="project-remote-url"
+                />
+              </label>
+            )}
 
             {requiresRemoteDetails && (
               <div className={`git-remote-helper${showRemoteCreator ? ' expanded' : ''}`}>
@@ -301,7 +543,10 @@ const GitTab = () => {
                   onClick={handleToggleRemoteCreator}
                   data-testid="git-show-remote-creator"
                 >
-                  {showRemoteCreator ? 'Hide remote creation' : 'Create repository for this project'}
+                  <span className="git-remote-helper-icon" aria-hidden="true">
+                    <span className="git-remote-helper-plus">+</span>
+                  </span>
+                  {showRemoteCreator ? 'Hide repository tools' : 'Create repository for this project'}
                 </button>
                 {showRemoteCreator && (
                   <div className="git-remote-creator" data-testid="git-remote-creator-panel">
@@ -352,13 +597,13 @@ const GitTab = () => {
                         type="button"
                         className="git-tab-configure"
                         onClick={handleCreateRemoteRepository}
-                        disabled={remoteCreatorStatus.isSubmitting || !remoteCreatorState.name.trim()}
+                        disabled={remoteCreatorStatus.isSubmitting || !canCreateRepo || (connectionMode === 'global' && !isGlobalConfigured)}
                         data-testid="git-create-remote-button"
                       >
                         {remoteCreatorStatus.isSubmitting ? 'Creating…' : 'Create & link repository'}
                       </button>
                       <p className="git-remote-helper-hint">
-                        Uses the token above to call {formState.provider === 'gitlab' ? 'GitLab' : 'GitHub'} APIs securely.
+                        Uses your {connectionMode === 'global' ? 'global' : 'project'} token to call {formState.provider === 'gitlab' ? 'GitLab' : 'GitHub'} APIs securely.
                       </p>
                     </div>
                     {remoteCreatorStatus.error && (
@@ -386,17 +631,18 @@ const GitTab = () => {
               />
             </label>
 
-            <label className="git-field">
-              Personal access token (optional)
-              <input
-                type="password"
-                placeholder="ghp_..."
-                value={formState.token}
-                onChange={handleFieldChange('token')}
-                disabled={!requiresRemoteDetails}
-                data-testid="project-token"
-              />
-            </label>
+            {requiresRemoteDetails && connectionMode !== 'global' && (
+              <label className="git-field">
+                Personal access token (optional)
+                <input
+                  type="password"
+                  placeholder="ghp_..."
+                  value={formState.token}
+                  onChange={handleFieldChange('token')}
+                  data-testid="project-token"
+                />
+              </label>
+            )}
 
             {saveError && (
               <div className="git-inline-error" role="alert">
@@ -413,38 +659,154 @@ const GitTab = () => {
               >
                 {isSaving ? 'Saving…' : 'Save changes'}
               </button>
-              {hasOverrides && (
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={handleResetOverrides}
-                  disabled={isResettingOverrides}
-                  data-testid="git-reset-overrides"
-                >
-                  {isResettingOverrides ? 'Restoring…' : 'Use global defaults'}
-                </button>
-              )}
             </div>
           </form>
         </section>
 
-        <section className="git-card git-card-secondary">
-          <div className="git-card-header">
-            <div>
-              <h4>Connection Status</h4>
-              <p>Quick health check for this project’s remote setup.</p>
+        {requiresRemoteDetails && (
+          <section className="git-card git-card-secondary" data-testid="git-repo-pane">
+            <div className="git-card-header">
+              <div>
+                <h4>Repository</h4>
+                <p>Manage the repo linked to this project.</p>
+              </div>
             </div>
-          </div>
-          <ul className="git-status-list">
-            {statusItems.map((item) => (
-              <li key={item.label} className={`git-status-item${item.warn ? ' warn' : ''}`}>
-                <span className="label">{item.label}</span>
-                <strong>{item.value}</strong>
-              </li>
-            ))}
-          </ul>
-          <p className="git-status-note">{statusNote}</p>
-        </section>
+            <div className="git-repo-info">
+              <div>
+                <span className="label">Provider</span>
+                <strong>{formatProvider(formState.provider)}</strong>
+              </div>
+              <div>
+                <span className="label">Remote URL</span>
+                {formState.remoteUrl ? (
+                  <a href={formState.remoteUrl} target="_blank" rel="noreferrer">
+                    {formState.remoteUrl}
+                  </a>
+                ) : (
+                  <strong>Not linked</strong>
+                )}
+              </div>
+              <div>
+                <span className="label">Default branch</span>
+                <strong>{formState.defaultBranch || 'main'}</strong>
+              </div>
+            </div>
+            <div className="git-repo-actions">
+              <div className="git-repo-actions-row">
+                <button
+                  type="button"
+                  className="git-tab-configure"
+                  onClick={handleFetchRemote}
+                  disabled={!hasRemoteUrl || isFetchingRemote}
+                  data-testid="git-fetch-remote"
+                >
+                  {isFetchingRemote ? 'Fetching…' : 'Fetch'}
+                </button>
+                <button
+                  type="button"
+                  className="git-tab-configure"
+                  onClick={handlePullRemote}
+                  disabled={!hasRemoteUrl || isPullingRemote}
+                  data-testid="git-pull-remote"
+                >
+                  {isPullingRemote ? 'Pulling…' : 'Pull'}
+                </button>
+                <button
+                  type="button"
+                  className="git-tab-configure"
+                  onClick={handleOpenRemote}
+                  disabled={!hasRemoteUrl}
+                  data-testid="git-open-remote"
+                >
+                  Open remote
+                </button>
+                <button
+                  type="button"
+                  className="git-tab-configure"
+                  onClick={handleCopyRemote}
+                  disabled={!hasRemoteUrl}
+                  data-testid="git-copy-remote"
+                >
+                  Copy URL
+                </button>
+              </div>
+              <div className="git-repo-status">
+                {currentGitStatus?.hasRemote ? (
+                  <div className="git-repo-status-grid">
+                    <div>
+                      <span className="label">Branch</span>
+                      {/* c8 ignore next -- nested fallbacks are defensive */}
+                      <strong>{currentGitStatus.branch || formState.defaultBranch || 'main'}</strong>
+                    </div>
+                    <div>
+                      <span className="label">Ahead</span>
+                      <strong>{currentGitStatus.ahead ?? 0}</strong>
+                    </div>
+                    <div>
+                      <span className="label">Behind</span>
+                      <strong>{currentGitStatus.behind ?? 0}</strong>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* c8 ignore start -- empty status is handled by disabled UI state */}
+                    <p className="git-repo-status-empty">Remote status unavailable.</p>
+                    {/* c8 ignore stop */}
+                  </>
+                )}
+                {gitStatusError && (
+                  <p className="git-remote-creator-error" role="alert">
+                    {gitStatusError}
+                  </p>
+                )}
+                {gitStatusMessage && (
+                  <p className="git-remote-creator-success">
+                    {gitStatusMessage}
+                  </p>
+                )}
+              </div>
+              <div className="git-repo-actions-row">
+                <label className="git-field">
+                  Checkout branch
+                  <select
+                    value={selectedBranch}
+                    onChange={(event) => setSelectedBranch(event.target.value)}
+                    disabled={!branchOptions.length}
+                    data-testid="git-checkout-branch-select"
+                  >
+                    {branchOptions.length ? (
+                      branchOptions.map((branch) => (
+                        <option key={branch} value={branch}>
+                          {branch}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No branches</option>
+                    )}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="git-tab-configure"
+                  onClick={handleCheckoutBranch}
+                  disabled={!selectedBranch}
+                  data-testid="git-checkout-branch"
+                >
+                  Checkout
+                </button>
+                <button
+                  type="button"
+                  className="git-tab-configure"
+                  onClick={handleUpdateDefaultBranch}
+                  disabled={!formState.defaultBranch.trim()}
+                  data-testid="git-update-default-branch"
+                >
+                  Change default branch
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

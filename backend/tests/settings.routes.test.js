@@ -9,6 +9,19 @@ vi.mock('../database.js', () => ({
   savePortSettings: vi.fn()
 }));
 
+vi.mock('../services/gitConnectionService.js', () => ({
+  testGitConnection: vi.fn(),
+  GitConnectionError: class GitConnectionError extends Error {
+    constructor(message, { statusCode = 400, provider = 'github', details = null } = {}) {
+      super(message);
+      this.name = 'GitConnectionError';
+      this.statusCode = statusCode;
+      this.provider = provider;
+      this.details = details;
+    }
+  }
+}));
+
 const buildTestApp = async ({ withJson = true } = {}) => {
   const { default: settingsRouter } = await import('../routes/settings.js');
   const app = express();
@@ -20,6 +33,7 @@ const buildTestApp = async ({ withJson = true } = {}) => {
 };
 
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -51,6 +65,7 @@ describe('settings routes', () => {
       autoPush: 1,
       useCommitTemplate: true,
       commitTemplate: ' feat: {title} ',
+      tokenExpiresAt: '2026-12-01',
       token: 123
     });
 
@@ -64,6 +79,7 @@ describe('settings routes', () => {
       autoPush: true,
       useCommitTemplate: true,
       commitTemplate: 'feat: {title}',
+      tokenExpiresAt: '2026-12-01',
       token: ''
     });
 
@@ -82,6 +98,20 @@ describe('settings routes', () => {
       defaultBranch: 'main',
       token: 'secrettoken'
     });
+
+    const nonStringDate = validateGitSettingsPayload({
+      workflow: 'local',
+      tokenExpiresAt: 12345
+    });
+    expect(nonStringDate.errors).toEqual([]);
+    expect(nonStringDate.nextSettings.tokenExpiresAt).toBe('');
+
+    const nonStringObjectDate = validateGitSettingsPayload({
+      workflow: 'local',
+      tokenExpiresAt: { when: '2026-12-01' }
+    });
+    expect(nonStringObjectDate.errors).toEqual([]);
+    expect(nonStringObjectDate.nextSettings.tokenExpiresAt).toBe('');
   });
 
   test('validateGitSettingsPayload returns validation errors for bad inputs', async () => {
@@ -110,6 +140,16 @@ describe('settings routes', () => {
         commitTemplate: '   '
       }).errors
     ).toContain('commitTemplate is required when useCommitTemplate is enabled');
+
+    const invalidDate = validateGitSettingsPayload({
+      workflow: 'local',
+      tokenExpiresAt: 'not-a-date'
+    });
+    expect(invalidDate.errors).toContain('tokenExpiresAt must be a valid date');
+
+    const blankDate = validateGitSettingsPayload({ workflow: 'local', tokenExpiresAt: '   ' });
+    expect(blankDate.errors).toEqual([]);
+    expect(blankDate.nextSettings.tokenExpiresAt).toBe('');
   });
 
   test('validatePortSettingsPayload accepts integer-like values and rejects invalid ports', async () => {
@@ -164,6 +204,25 @@ describe('settings routes', () => {
     expect(response.body.error).toContain('workflow must be either "local" or "cloud"');
   });
 
+  test('PUT /api/settings/git allows cloud workflow without remoteUrl', async () => {
+    const { saveGitSettings } = await import('../database.js');
+    saveGitSettings.mockResolvedValueOnce({ workflow: 'cloud', provider: 'github' });
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .put('/api/settings/git')
+      .send({ workflow: 'cloud', provider: 'github' })
+      .expect(200);
+
+    expect(saveGitSettings).toHaveBeenCalledTimes(1);
+    expect(response.body).toMatchObject({
+      success: true,
+      message: 'Git settings updated',
+      settings: { workflow: 'cloud', provider: 'github' }
+    });
+  });
+
   test('PUT /api/settings/git uses req.body fallback when body is missing', async () => {
     const { saveGitSettings } = await import('../database.js');
     saveGitSettings.mockResolvedValueOnce({ workflow: 'local', provider: 'github' });
@@ -195,6 +254,118 @@ describe('settings routes', () => {
       .expect(500);
 
     expect(response.body).toEqual({ success: false, error: 'Failed to save git settings' });
+  });
+
+  test('POST /api/settings/git/test returns success payload', async () => {
+    const { testGitConnection } = await import('../services/gitConnectionService.js');
+    testGitConnection.mockResolvedValueOnce({
+      provider: 'github',
+      account: { login: 'octo', name: 'Octo Cat' },
+      message: 'Connected to GitHub'
+    });
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .post('/api/settings/git/test')
+      .send({ provider: 'github', token: 'token' })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      success: true,
+      provider: 'github',
+      account: { login: 'octo', name: 'Octo Cat' },
+      message: 'Connected to GitHub'
+    });
+  });
+
+  test('POST /api/settings/git/test falls back to default provider and token', async () => {
+    const { testGitConnection } = await import('../services/gitConnectionService.js');
+    testGitConnection.mockResolvedValueOnce({
+      provider: 'github',
+      account: { login: 'octo', name: 'Octo Cat' },
+      message: 'Connected to GitHub'
+    });
+
+    const app = await buildTestApp({ withJson: false });
+
+    const response = await request(app)
+      .post('/api/settings/git/test')
+      .expect(200);
+
+    expect(testGitConnection).toHaveBeenCalledWith({ provider: 'github', token: '' });
+    expect(response.body.success).toBe(true);
+  });
+
+  test('POST /api/settings/git/test coerces non-string tokens to empty string', async () => {
+    const { testGitConnection } = await import('../services/gitConnectionService.js');
+    testGitConnection.mockResolvedValueOnce({
+      provider: 'gitlab',
+      account: { login: 'gl', name: 'Git Lab' },
+      message: 'Connected to GitLab'
+    });
+
+    const app = await buildTestApp();
+
+    await request(app)
+      .post('/api/settings/git/test')
+      .send({ provider: 'gitlab', token: 123 })
+      .expect(200);
+
+    expect(testGitConnection).toHaveBeenCalledWith({ provider: 'gitlab', token: '' });
+  });
+
+  test('POST /api/settings/git/test surfaces provider errors', async () => {
+    const { testGitConnection, GitConnectionError } = await import('../services/gitConnectionService.js');
+    testGitConnection.mockRejectedValueOnce(new GitConnectionError('Bad token', { statusCode: 401, provider: 'github' }));
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .post('/api/settings/git/test')
+      .send({ provider: 'github', token: 'bad' })
+      .expect(401);
+
+    expect(response.body).toEqual({
+      success: false,
+      error: 'Bad token',
+      provider: 'github',
+      details: null
+    });
+  });
+
+  test('POST /api/settings/git/test falls back to 400 when statusCode is falsy', async () => {
+    const { testGitConnection, GitConnectionError } = await import('../services/gitConnectionService.js');
+    testGitConnection.mockRejectedValueOnce(new GitConnectionError('Bad token', { statusCode: 0, provider: 'github' }));
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .post('/api/settings/git/test')
+      .send({ provider: 'github', token: 'bad' })
+      .expect(400);
+
+    expect(response.body).toEqual({
+      success: false,
+      error: 'Bad token',
+      provider: 'github',
+      details: null
+    });
+  });
+
+  test('POST /api/settings/git/test returns 500 for unexpected errors', async () => {
+    const { testGitConnection } = await import('../services/gitConnectionService.js');
+    testGitConnection.mockRejectedValueOnce(new Error('boom'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .post('/api/settings/git/test')
+      .send({ provider: 'github', token: 'bad' })
+      .expect(500);
+
+    expect(response.body).toEqual({ success: false, error: 'Failed to test git connection' });
   });
 
   test('GET /api/settings/ports returns saved settings', async () => {

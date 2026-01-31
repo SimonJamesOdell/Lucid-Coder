@@ -10,9 +10,6 @@ const defaultGitSettingsPayload = {
   remoteUrl: '',
   username: '',
   defaultBranch: 'main',
-  autoPush: false,
-  useCommitTemplate: false,
-  commitTemplate: '',
   token: ''
 }
 
@@ -125,6 +122,43 @@ describe('AppStateContext', () => {
       }
       if (typeof url === 'string' && url.includes('/git-settings')) {
         return Promise.resolve(projectGitSettingsResponse({}, true))
+      }
+      if (typeof url === 'string' && url.includes('/git/status')) {
+        return Promise.resolve(mockApiResponse({
+          success: true,
+          status: {
+            branch: 'main',
+            ahead: 0,
+            behind: 0,
+            hasRemote: true,
+            dirty: false
+          }
+        }))
+      }
+      if (typeof url === 'string' && url.includes('/git/fetch')) {
+        return Promise.resolve(mockApiResponse({
+          success: true,
+          status: {
+            branch: 'main',
+            ahead: 0,
+            behind: 0,
+            hasRemote: true,
+            dirty: false
+          }
+        }))
+      }
+      if (typeof url === 'string' && url.includes('/git/pull')) {
+        return Promise.resolve(mockApiResponse({
+          success: true,
+          status: {
+            branch: 'main',
+            ahead: 0,
+            behind: 0,
+            hasRemote: true,
+            dirty: false
+          },
+          strategy: 'noop'
+        }))
       }
       if (typeof url === 'string' && url.includes('/processes')) {
         const match = url.match(/\/api\/projects\/(.+?)\/processes/)
@@ -582,19 +616,19 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' })) // llm status
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
-      .mockResolvedValueOnce(gitSettingsResponse({ workflow: 'cloud', provider: 'gitlab', autoPush: true }))
+      .mockResolvedValueOnce(gitSettingsResponse({ workflow: 'cloud', provider: 'gitlab' }))
 
     const { result } = renderUseAppState()
 
     expect(result.current.gitSettings.workflow).toBe('local')
 
     await act(async () => {
-      await result.current.updateGitSettings({ workflow: 'cloud', provider: 'gitlab', autoPush: true })
+      await result.current.updateGitSettings({ workflow: 'cloud', provider: 'gitlab' })
     })
 
     expect(result.current.gitSettings.workflow).toBe('cloud')
     expect(result.current.gitSettings.provider).toBe('gitlab')
-    expect(JSON.parse(localStorage.getItem('gitSettings')).autoPush).toBe(true)
+    expect(JSON.parse(localStorage.getItem('gitSettings')).autoPush).toBeUndefined()
   })
 
   test('git settings hydrate from localStorage when available', async () => {
@@ -602,10 +636,7 @@ describe('AppStateContext', () => {
       workflow: 'cloud',
       provider: 'github',
       remoteUrl: 'https://github.com/octo/repo.git',
-      defaultBranch: 'main',
-      autoPush: false,
-      useCommitTemplate: true,
-      commitTemplate: 'feat: {summary}'
+      defaultBranch: 'main'
     }
     localStorage.setItem('gitSettings', JSON.stringify(stored))
 
@@ -654,7 +685,7 @@ describe('AppStateContext', () => {
     })
 
     const effective = result.current.getEffectiveGitSettings(project.id)
-    expect(effective.remoteUrl).toBe('https://github.com/org/repo.git')
+    expect(effective.remoteUrl).toBeUndefined()
     expect(result.current.projectGitSettings[project.id]).toBeUndefined()
   })
 
@@ -687,7 +718,7 @@ describe('AppStateContext', () => {
       await result.current.updateProjectGitSettings(project.id, override)
     })
 
-    expect(fetch).toHaveBeenLastCalledWith(
+    expect(fetch).toHaveBeenCalledWith(
       `/api/projects/${project.id}/git-settings`,
       expect.objectContaining({ method: 'PUT' })
     )
@@ -723,6 +754,180 @@ describe('AppStateContext', () => {
       workflow: 'hybrid',
       token: ''
     })
+  })
+
+  test('fetchProjectGitStatus updates project git status state', async () => {
+    const { result } = renderUseAppState()
+
+    fetch.mockResolvedValueOnce(mockApiResponse({
+      success: true,
+      status: {
+        branch: 'main',
+        ahead: 1,
+        behind: 2,
+        hasRemote: true
+      }
+    }))
+
+    await act(async () => {
+      await result.current.fetchProjectGitStatus('proj-status')
+    })
+
+    expect(result.current.projectGitStatus['proj-status']).toMatchObject({
+      branch: 'main',
+      ahead: 1,
+      behind: 2,
+      hasRemote: true
+    })
+  })
+
+  test('hasGitNotification is true when current branch is behind', async () => {
+    const { result } = renderUseAppState()
+    const project = { id: 'proj-behind', name: 'Behind Project' }
+
+    await act(async () => {
+      await result.current.selectProject(project)
+    })
+
+    const defaultFetchImpl = fetch.getMockImplementation()
+    fetch.mockImplementation((url = '', options = {}) => {
+      if (typeof url === 'string' && url.includes(`/api/projects/${project.id}/git/status`)) {
+        return Promise.resolve(mockApiResponse({
+          success: true,
+          status: { branch: 'main', ahead: 0, behind: 2, hasRemote: true }
+        }))
+      }
+      return defaultFetchImpl ? defaultFetchImpl(url, options) : Promise.resolve(mockApiResponse({ success: true }))
+    })
+
+    await act(async () => {
+      await result.current.fetchProjectGitStatus(project.id)
+    })
+
+    expect(result.current.hasGitNotification).toBe(true)
+  })
+
+  test('git remote polling ignores failures and stops after cleanup', async () => {
+    vi.useFakeTimers()
+    const intervalCallbacks = []
+    const intervalSpy = vi.spyOn(global, 'setInterval').mockImplementation((callback) => {
+      intervalCallbacks.push(callback)
+      return 123
+    })
+    const clearSpy = vi.spyOn(global, 'clearInterval').mockImplementation(() => {})
+
+    const defaultFetchImpl = fetch.getMockImplementation()
+    fetch.mockImplementation((url = '', options = {}) => {
+      if (typeof url === 'string' && url.includes('/git/fetch')) {
+        return Promise.resolve(mockApiResponse({ success: false, error: 'boom' }))
+      }
+      if (typeof url === 'string' && url.includes('/git-settings')) {
+        return Promise.resolve(projectGitSettingsResponse({ remoteUrl: 'https://github.com/lucid/repo.git' }, false))
+      }
+      return defaultFetchImpl ? defaultFetchImpl(url, options) : Promise.resolve(mockApiResponse({ success: true }))
+    })
+
+    const { result, unmount } = renderUseAppState()
+    const project = { id: 'proj-poll', name: 'Poll Project' }
+
+    await act(async () => {
+      await result.current.selectProject(project)
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(intervalCallbacks.length).toBeGreaterThan(0)
+
+    unmount()
+
+    await act(async () => {
+      await intervalCallbacks[0]()
+    })
+
+    intervalSpy.mockRestore()
+    clearSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  test('pullProjectGitRemote updates status when payload includes status', async () => {
+    const { result } = renderUseAppState()
+
+    fetch.mockResolvedValueOnce(mockApiResponse({
+      success: true,
+      status: {
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        hasRemote: true
+      },
+      strategy: 'ff-only'
+    }))
+
+    await act(async () => {
+      await result.current.pullProjectGitRemote('proj-pull')
+    })
+
+    expect(result.current.projectGitStatus['proj-pull']).toMatchObject({
+      branch: 'main',
+      ahead: 0,
+      behind: 0,
+      hasRemote: true
+    })
+  })
+
+  test('pullProjectGitRemote does not update status when response omits status', async () => {
+    const { result } = renderUseAppState()
+
+    fetch.mockResolvedValueOnce(mockApiResponse({
+      success: true,
+      status: null,
+      strategy: 'noop'
+    }))
+
+    await act(async () => {
+      await result.current.pullProjectGitRemote('proj-empty')
+    })
+
+    expect(result.current.projectGitStatus['proj-empty']).toBeUndefined()
+  })
+
+  test('git polling fetches remote status when project has a remote url', async () => {
+    vi.useFakeTimers()
+    fetch
+      .mockResolvedValueOnce(mockApiResponse({ success: true, projects: [] }))
+      .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' }))
+      .mockResolvedValueOnce(gitSettingsResponse())
+      .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(projectGitSettingsResponse({ remoteUrl: 'https://github.com/demo/repo.git' }, false))
+      .mockResolvedValueOnce(mockApiResponse({ message: 'Project started' }))
+
+    const { result } = renderUseAppState()
+    const project = { id: 'project-poll', name: 'Poll Project' }
+
+    await act(async () => {
+      await result.current.selectProject(project)
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+
+    const initialFetches = fetch.mock.calls.filter(([url, options]) => (
+      url === `/api/projects/${project.id}/git/fetch` && options?.method === 'POST'
+    ))
+    expect(initialFetches.length).toBeGreaterThanOrEqual(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120000)
+    })
+
+    const intervalFetches = fetch.mock.calls.filter(([url, options]) => (
+      url === `/api/projects/${project.id}/git/fetch` && options?.method === 'POST'
+    ))
+    expect(intervalFetches.length).toBeGreaterThanOrEqual(2)
+
+    vi.useRealTimers()
   })
 
   test('createProjectRemoteRepository persists returned overrides', async () => {
@@ -761,7 +966,7 @@ describe('AppStateContext', () => {
       })
     })
 
-    expect(fetch).toHaveBeenLastCalledWith(
+    expect(fetch).toHaveBeenCalledWith(
       `/api/projects/${project.id}/git/remotes`,
       expect.objectContaining({
         method: 'POST',
@@ -843,7 +1048,7 @@ describe('AppStateContext', () => {
     const snapshot = result.current.getProjectGitSettingsSnapshot(project.id)
     expect(snapshot.inheritsFromGlobal).toBe(false)
     expect(snapshot.projectSettings?.remoteUrl).toBe('https://gitlab.com/team/project.git')
-    expect(snapshot.globalSettings.remoteUrl).toBe('https://github.com/lucid/base.git')
+    expect(snapshot.globalSettings.remoteUrl).toBeUndefined()
 
     const fallbackSnapshot = result.current.getProjectGitSettingsSnapshot('unknown')
     expect(fallbackSnapshot.inheritsFromGlobal).toBe(true)

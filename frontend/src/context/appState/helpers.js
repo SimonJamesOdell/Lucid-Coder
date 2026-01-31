@@ -103,8 +103,9 @@ const sanitizeGitSettings = (settings = null) => {
   if (!settings) {
     return null;
   }
+  const { autoPush, useCommitTemplate, commitTemplate, ...rest } = settings;
   return {
-    ...settings,
+    ...rest,
     token: ''
   };
 };

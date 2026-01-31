@@ -15,10 +15,7 @@ const defaultGitSettings = {
   remoteUrl: '',
   username: '',
   token: '',
-  defaultBranch: 'main',
-  autoPush: false,
-  useCommitTemplate: false,
-  commitTemplate: ''
+  defaultBranch: 'main'
 };
 
 const baseState = () => ({
@@ -37,8 +34,10 @@ const baseState = () => ({
   toggleTheme: vi.fn(),
   setPreviewPanelTab: vi.fn(),
   gitSettings: defaultGitSettings,
+  gitConnectionStatus: { provider: '', account: null, message: '', testedAt: '' },
   projectGitSettings: {},
   updateGitSettings: vi.fn(),
+  testGitConnection: vi.fn(),
   updateProjectGitSettings: vi.fn(),
   getEffectiveGitSettings: vi.fn().mockReturnValue(defaultGitSettings),
   portSettings: {
@@ -203,12 +202,9 @@ describe('Navigation Component', () => {
 
     await user.click(screen.getByTestId('git-workflow-cloud'));
     await user.selectOptions(screen.getByTestId('git-provider-select'), 'gitlab');
-    await user.type(screen.getByTestId('git-remote-url'), 'https://gitlab.com/demo/repo.git');
-    await user.type(screen.getByTestId('git-username'), 'octocat');
     const branchInput = screen.getByTestId('git-default-branch');
     await user.clear(branchInput);
     await user.type(branchInput, 'develop');
-    await user.click(screen.getByTestId('git-auto-push'));
 
     await user.click(screen.getByTestId('git-save-button'));
 
@@ -216,15 +212,89 @@ describe('Navigation Component', () => {
       expect.objectContaining({
         workflow: 'cloud',
         provider: 'gitlab',
-        remoteUrl: 'https://gitlab.com/demo/repo.git',
-        username: 'octocat',
-        defaultBranch: 'develop',
-        autoPush: true
+        defaultBranch: 'develop'
       })
     );
 
     alertSpy.mockRestore();
   });
+
+  test('git settings modal registers connection status after test', async () => {
+    const testGitConnection = vi.fn().mockResolvedValue({
+      account: { login: 'octo' },
+      message: 'Connected to GitHub'
+    });
+    const registerGitConnectionStatus = vi.fn();
+    const { user } = renderNavigation({ testGitConnection, registerGitConnectionStatus });
+
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(screen.getByText('Configure Git'));
+
+    await user.click(screen.getByTestId('git-workflow-cloud'));
+    await user.click(screen.getByTestId('git-test-connection'));
+
+    await waitFor(() => {
+      expect(testGitConnection).toHaveBeenCalledWith(expect.objectContaining({ provider: 'github', token: '' }));
+    });
+    expect(registerGitConnectionStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'github',
+        message: 'Connected to GitHub',
+        testedAt: expect.any(String)
+      })
+    );
+  });
+
+  test('git settings event opens the modal', async () => {
+    renderNavigation();
+
+    window.dispatchEvent(new CustomEvent('lucidcoder:open-git-settings'));
+
+    expect(await screen.findByTestId('git-settings-modal')).toBeInTheDocument();
+  });
+
+  test('git settings modal uses default alert message when error has no message', async () => {
+    const updateGitSettings = vi.fn().mockRejectedValue({});
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { user } = renderNavigation({ updateGitSettings });
+
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(screen.getByText('Configure Git'));
+
+    await user.click(screen.getByTestId('git-save-button'));
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('Failed to update git settings. Please try again.');
+    });
+
+    consoleError.mockRestore();
+    alertSpy.mockRestore();
+  });
+
+  test('git connection status uses provider fallback when response omits details', async () => {
+    const testGitConnection = vi.fn().mockResolvedValue({});
+    const registerGitConnectionStatus = vi.fn();
+    const { user } = renderNavigation({ testGitConnection, registerGitConnectionStatus });
+
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(screen.getByText('Configure Git'));
+
+    await user.click(screen.getByTestId('git-workflow-cloud'));
+    await user.selectOptions(screen.getByTestId('git-provider-select'), 'gitlab');
+    await user.click(screen.getByTestId('git-test-connection'));
+
+    await waitFor(() => {
+      expect(registerGitConnectionStatus).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: 'gitlab',
+          account: null,
+          message: 'Connected'
+        })
+      );
+    });
+  });
+
 
   test('git settings modal surfaces save errors to the user', async () => {
     const updateGitSettings = vi.fn().mockRejectedValue(new Error('Network down'));
@@ -240,7 +310,7 @@ describe('Navigation Component', () => {
 
     await waitFor(() => expect(updateGitSettings).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(alertSpy).toHaveBeenCalledWith('Failed to update git settings. Please try again.')
+      expect(alertSpy).toHaveBeenCalledWith('Network down')
     );
     expect(consoleError).toHaveBeenCalledWith('Failed to update git settings', expect.any(Error));
 

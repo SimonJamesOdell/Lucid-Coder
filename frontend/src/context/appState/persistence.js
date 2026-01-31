@@ -4,10 +4,9 @@ const defaultGitSettings = {
   remoteUrl: '',
   username: '',
   token: '',
-  defaultBranch: 'main',
-  autoPush: false,
-  useCommitTemplate: false,
-  commitTemplate: ''
+  tokenExpiresAt: '',
+  tokenPresent: false,
+  defaultBranch: 'main'
 };
 
 const defaultPortSettings = {
@@ -128,6 +127,15 @@ const loadGitSettingsFromStorage = () => {
       return defaultGitSettings;
     }
     const parsed = JSON.parse(stored);
+    if (Object.prototype.hasOwnProperty.call(parsed, 'autoPush')) {
+      delete parsed.autoPush;
+    }
+    if (Object.prototype.hasOwnProperty.call(parsed, 'useCommitTemplate')) {
+      delete parsed.useCommitTemplate;
+    }
+    if (Object.prototype.hasOwnProperty.call(parsed, 'commitTemplate')) {
+      delete parsed.commitTemplate;
+    }
     return {
       ...defaultGitSettings,
       ...parsed
@@ -135,6 +143,34 @@ const loadGitSettingsFromStorage = () => {
   } catch (error) {
     console.warn('Failed to parse gitSettings from storage', error);
     return defaultGitSettings;
+  }
+};
+
+const defaultGitConnectionStatus = {
+  provider: '',
+  account: null,
+  message: '',
+  testedAt: ''
+};
+
+const loadGitConnectionStatusFromStorage = () => {
+  if (typeof window === 'undefined') {
+    return defaultGitConnectionStatus;
+  }
+
+  try {
+    const stored = localStorage.getItem('gitConnectionStatus');
+    if (!stored) {
+      return defaultGitConnectionStatus;
+    }
+    const parsed = JSON.parse(stored);
+    return {
+      ...defaultGitConnectionStatus,
+      ...parsed
+    };
+  } catch (error) {
+    console.warn('Failed to parse gitConnectionStatus from storage', error);
+    return defaultGitConnectionStatus;
   }
 };
 
@@ -148,5 +184,7 @@ export {
   loadWorkspaceChangesFromStorage,
   loadWorkingBranchesFromStorage,
   loadPreviewPanelStateByProject,
-  loadGitSettingsFromStorage
+  loadGitSettingsFromStorage,
+  defaultGitConnectionStatus,
+  loadGitConnectionStatusFromStorage
 };

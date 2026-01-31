@@ -139,6 +139,38 @@ export const hasWorkingTreeChanges = async (projectPath) => {
   return stdout.trim().length > 0;
 };
 
+export const getRemoteUrl = async (projectPath, remoteName = 'origin') => {
+  const result = await runGitCommand(projectPath, ['remote', 'get-url', remoteName], { allowFailure: true });
+  if (result.code !== 0) {
+    return null;
+  }
+  return normalizeStdout(result.stdout) || null;
+};
+
+export const fetchRemote = async (projectPath, remoteName = 'origin') => {
+  await runGitCommand(projectPath, ['fetch', remoteName]);
+};
+
+export const getAheadBehind = async (projectPath, branchName = 'main', remoteName = 'origin') => {
+  const branch = branchName?.trim() || 'main';
+  const remoteRef = `${remoteName}/${branch}`;
+  const result = await runGitCommand(
+    projectPath,
+    ['rev-list', '--left-right', '--count', `${remoteRef}...${branch}`],
+    { allowFailure: true }
+  );
+
+  if (result.code !== 0) {
+    return { ahead: 0, behind: 0, error: normalizeStdout(result.stderr || result.stdout) || 'Unable to compare branches.' };
+  }
+
+  const raw = normalizeStdout(result.stdout);
+  const [behindRaw, aheadRaw] = raw.split(/\s+/).map((value) => Number.parseInt(value, 10));
+  const behind = Number.isFinite(behindRaw) ? behindRaw : 0;
+  const ahead = Number.isFinite(aheadRaw) ? aheadRaw : 0;
+  return { ahead, behind };
+};
+
 const stashLabelFor = (branchName) => `lucidcoder-auto/${branchName}`;
 
 export const stashWorkingTree = async (projectPath, branchName) => {

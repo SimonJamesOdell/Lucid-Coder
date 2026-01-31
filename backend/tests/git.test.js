@@ -253,6 +253,65 @@ describe('git helpers', () => {
     expect(await git.hasWorkingTreeChanges('/repo')).toBe(true);
   });
 
+  test('getRemoteUrl returns null when remote lookup fails', async () => {
+    queueSpawnResult({ stderr: 'fatal', code: 2 });
+    const url = await git.getRemoteUrl('/repo', 'origin');
+    expect(url).toBeNull();
+  });
+
+  test('getRemoteUrl trims stdout when remote exists', async () => {
+    queueSpawnResult({ stdout: ' https://github.com/octo/repo.git\n', code: 0 });
+    const url = await git.getRemoteUrl('/repo', 'origin');
+    expect(url).toBe('https://github.com/octo/repo.git');
+  });
+
+  test('getRemoteUrl returns null when normalized stdout is empty', async () => {
+    queueSpawnResult({ stdout: '   \n', code: 0 });
+    const url = await git.getRemoteUrl('/repo', 'origin');
+    expect(url).toBeNull();
+  });
+
+  test('fetchRemote delegates to git fetch', async () => {
+    queueSpawnResult({ code: 0 });
+    await git.fetchRemote('/repo', 'origin');
+    expect(expectSpawnArgs(0)).toEqual(['fetch', 'origin']);
+  });
+
+  test('getAheadBehind returns error details when compare fails', async () => {
+    queueSpawnResult({ stdout: 'fatal: bad revision', code: 1 });
+    const result = await git.getAheadBehind('/repo', 'main', 'origin');
+    expect(result).toMatchObject({ ahead: 0, behind: 0, error: 'fatal: bad revision' });
+  });
+
+  test('getAheadBehind falls back to default branch when branch name is blank', async () => {
+    queueSpawnResult({ stdout: '0 0\n', code: 0 });
+    await git.getAheadBehind('/repo', '   ', 'origin');
+    expect(expectSpawnArgs(0)).toEqual([
+      'rev-list',
+      '--left-right',
+      '--count',
+      'origin/main...main'
+    ]);
+  });
+
+  test('getAheadBehind returns default error when no output is present', async () => {
+    queueSpawnResult({ stdout: '', stderr: '', code: 1 });
+    const result = await git.getAheadBehind('/repo', 'main', 'origin');
+    expect(result).toMatchObject({ ahead: 0, behind: 0, error: 'Unable to compare branches.' });
+  });
+
+  test('getAheadBehind parses ahead/behind counts', async () => {
+    queueSpawnResult({ stdout: '2 5\n', code: 0 });
+    const result = await git.getAheadBehind('/repo', 'main', 'origin');
+    expect(result).toMatchObject({ behind: 2, ahead: 5 });
+  });
+
+  test('getAheadBehind defaults NaN values to zero', async () => {
+    queueSpawnResult({ stdout: 'nope nope\n', code: 0 });
+    const result = await git.getAheadBehind('/repo', 'main', 'origin');
+    expect(result).toMatchObject({ behind: 0, ahead: 0 });
+  });
+
   test('stashWorkingTree returns null when branch missing or clean', async () => {
     expect(await git.stashWorkingTree('/repo')).toBeNull();
     queueSpawnResult({ stdout: '', code: 0 });

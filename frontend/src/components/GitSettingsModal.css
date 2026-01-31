@@ -106,6 +106,110 @@
   font-size: 0.9rem;
 }
 
+.git-settings-help {
+  font-size: 0.8rem;
+  color: var(--text-muted, #8a8a8a);
+}
+
+.git-settings-hint {
+  align-self: center;
+  font-size: 0.85rem;
+  color: var(--text-muted, #8a8a8a);
+}
+
+.git-settings-pat-actions {
+  margin-top: 0.25rem;
+}
+
+.git-settings-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent-color, #66c2ff);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.git-settings-link:hover {
+  text-decoration: underline;
+}
+
+.git-settings-warning {
+  border: 1px solid rgba(255, 193, 7, 0.35);
+  background: rgba(255, 193, 7, 0.1);
+  color: #f2c94c;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.git-settings-help-body {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.95rem;
+}
+
+.git-settings-help-body ol {
+  margin: 0.5rem 0 0.75rem 1.25rem;
+  padding: 0;
+}
+
+.git-settings-help-body a {
+  color: var(--accent-color, #66c2ff);
+}
+
+.git-settings-test {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.git-settings-test-status {
+  font-size: 0.85rem;
+  color: var(--text-muted, #8a8a8a);
+}
+
+.git-settings-test-status.success {
+  color: #8ad879;
+}
+
+.git-settings-test-status.error {
+  color: #ff8d8d;
+}
+
+.git-settings-test-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted, #8a8a8a);
+}
+
+.git-settings-connection {
+  border: 1px solid rgba(138, 216, 121, 0.25);
+  background: rgba(138, 216, 121, 0.08);
+  border-radius: 0.6rem;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.git-settings-connection-title {
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.git-settings-connection-status {
+  font-size: 0.95rem;
+}
+
+.git-settings-connection-status.success {
+  color: #8ad879;
+}
+
+.git-settings-connection-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted, #8a8a8a);
+}
+
 .git-settings-label input,
 .git-settings-label select,
 .git-settings-label textarea {

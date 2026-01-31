@@ -976,6 +976,20 @@ describe('Database Tests', () => {
       const row = await getSql('SELECT token_encrypted FROM git_settings WHERE id = 1');
       expect(row.token_encrypted).toBeNull();
     });
+
+    test('should persist null token expiry when falsy value provided', async () => {
+      await saveGitSettings({ tokenExpiresAt: '' });
+
+      const row = await getSql('SELECT token_expires_at FROM git_settings WHERE id = 1');
+      expect(row.token_expires_at).toBeNull();
+    });
+
+    test('should persist null token expiry when tokenExpiresAt is null', async () => {
+      await saveGitSettings({ tokenExpiresAt: null });
+
+      const row = await getSql('SELECT token_expires_at FROM git_settings WHERE id = 1');
+      expect(row.token_expires_at).toBeNull();
+    });
   });
 
   describe('Port Settings', () => {
@@ -1101,6 +1115,22 @@ describe('Database Tests', () => {
 
       const row = await getSql('SELECT token_encrypted FROM project_git_settings WHERE project_id = ?', [project.id]);
       expect(row.token_encrypted).toBeNull();
+    });
+
+    test('should persist null project token expiry when falsy value provided', async () => {
+      const project = await createProject(makeProject('project-git-token-expiry'));
+      await saveProjectGitSettings(project.id, { tokenExpiresAt: '' });
+
+      const row = await getSql('SELECT token_expires_at FROM project_git_settings WHERE project_id = ?', [project.id]);
+      expect(row.token_expires_at).toBeNull();
+    });
+
+    test('should persist null project token expiry when tokenExpiresAt is null', async () => {
+      const project = await createProject(makeProject('project-git-token-expiry-null'));
+      await saveProjectGitSettings(project.id, { tokenExpiresAt: null });
+
+      const row = await getSql('SELECT token_expires_at FROM project_git_settings WHERE project_id = ?', [project.id]);
+      expect(row.token_expires_at).toBeNull();
     });
 
     test('should support cloud workflow and auto-push flags per project', async () => {

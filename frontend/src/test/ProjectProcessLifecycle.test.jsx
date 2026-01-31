@@ -22,10 +22,7 @@ const mockGitSettingsResponse = async () => ({
       remoteUrl: '',
       username: '',
       token: '',
-      defaultBranch: 'main',
-      autoPush: false,
-      useCommitTemplate: false,
-      commitTemplate: ''
+      defaultBranch: 'main'
     }
   })
 });
