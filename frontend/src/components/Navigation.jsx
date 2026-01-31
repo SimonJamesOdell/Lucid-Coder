@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppState } from '../context/AppStateContext';
 import Dropdown, { DropdownItem, DropdownDivider, DropdownLabel } from './Dropdown';
 import sunIcon from '../assets/icon-theme-sun.svg';
@@ -24,7 +24,10 @@ const Navigation = ({ versionLabel = null }) => {
     toggleTheme,
     setPreviewPanelTab,
     gitSettings,
+    gitConnectionStatus,
     updateGitSettings,
+    testGitConnection,
+    registerGitConnectionStatus,
     portSettings,
     updatePortSettings,
     projectShutdownState
@@ -85,6 +88,12 @@ const Navigation = ({ versionLabel = null }) => {
     setGitSettingsOpen(true);
   };
 
+  useEffect(() => {
+    const handleOpenGitSettingsEvent = () => setGitSettingsOpen(true);
+    window.addEventListener('lucidcoder:open-git-settings', handleOpenGitSettingsEvent);
+    return () => window.removeEventListener('lucidcoder:open-git-settings', handleOpenGitSettingsEvent);
+  }, []);
+
   const handleCloseGitSettings = () => {
     setGitSettingsOpen(false);
   };
@@ -93,14 +102,28 @@ const Navigation = ({ versionLabel = null }) => {
     setPortSettingsOpen(false);
   };
 
-  const handleSaveGitSettings = async (nextSettings) => {
+  const handleSaveGitSettings = async (nextSettings, options) => {
+    const keepOpen = /* c8 ignore next */ options?.keepOpen === true;
     try {
       await updateGitSettings(nextSettings);
-      setGitSettingsOpen(false);
+      if (!keepOpen) {
+        setGitSettingsOpen(false);
+      }
     } catch (error) {
       console.error('Failed to update git settings', error);
-      alert('Failed to update git settings. Please try again.');
+      alert(error?.message || 'Failed to update git settings. Please try again.');
     }
+  };
+
+  const handleTestGitConnection = async (options = {}) => {
+    const result = await testGitConnection(options);
+    registerGitConnectionStatus({
+      provider: result.provider || /* c8 ignore next */ options.provider || '',
+      account: result.account || null,
+      message: result.message || 'Connected',
+      testedAt: new Date().toISOString()
+    });
+    return result;
   };
 
   const handleSavePortSettings = async (nextSettings) => {
@@ -276,8 +299,10 @@ const Navigation = ({ versionLabel = null }) => {
         isOpen={isGitSettingsOpen}
         onClose={handleCloseGitSettings}
         onSave={handleSaveGitSettings}
+        onTestConnection={handleTestGitConnection}
         scope="global"
         settings={gitSettings}
+        connectionStatus={gitConnectionStatus}
       />
 
       <PortSettingsModal

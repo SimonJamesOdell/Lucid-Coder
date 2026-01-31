@@ -85,7 +85,9 @@ const Modal = ({
         </div>
         
         <div className="modal-body">
-          <p className="modal-message">{message}</p>
+          {typeof message === 'string'
+            ? <p className="modal-message">{message}</p>
+            : message}
           {isProcessing && (
             <div className="modal-processing" role="status" aria-live="polite">
               <span className="modal-processing-spinner" aria-hidden="true"></span>

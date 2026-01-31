@@ -3,6 +3,7 @@ import { getGitSettings, saveGitSettings, getPortSettings, savePortSettings } fr
 import { resolveCoveragePolicy, DEFAULT_COVERAGE_THRESHOLDS } from '../constants/coveragePolicy.js';
 import { DEFAULT_CHANGE_SCOPE_POLICY } from '../constants/changeScopePolicy.js';
 import { DEFAULT_DONE_SIGNALS } from '../constants/doneSignals.js';
+import { testGitConnection, GitConnectionError } from '../services/gitConnectionService.js';
 
 const router = express.Router();
 
@@ -12,6 +13,7 @@ const MIN_PORT = 1024;
 const MAX_PORT = 65535;
 
 const normalizeString = (value = '') => (typeof value === 'string' ? value.trim() : '');
+const normalizeDateString = (value) => (typeof value === 'string' ? value.trim() : '');
 const normalizePort = (value) => {
   const numeric = Number(value);
   if (!Number.isInteger(numeric)) {
@@ -23,7 +25,7 @@ const normalizePort = (value) => {
   return numeric;
 };
 
-export const validateGitSettingsPayload = (payload = {}) => {
+export const validateGitSettingsPayload = (payload = {}, { requireRemoteUrl = true } = {}) => {
   const errors = [];
   const nextSettings = {};
 
@@ -42,11 +44,24 @@ export const validateGitSettingsPayload = (payload = {}) => {
   }
 
   nextSettings.remoteUrl = normalizeString(payload.remoteUrl);
-  if (workflow === 'cloud' && !nextSettings.remoteUrl) {
+  if (workflow === 'cloud' && requireRemoteUrl && !nextSettings.remoteUrl) {
     errors.push('remoteUrl is required when workflow is cloud');
   }
 
   nextSettings.username = normalizeString(payload.username);
+  if (Object.prototype.hasOwnProperty.call(payload, 'tokenExpiresAt')) {
+    const tokenExpiresAt = normalizeDateString(payload.tokenExpiresAt);
+    if (!tokenExpiresAt) {
+      nextSettings.tokenExpiresAt = '';
+    } else {
+      const parsed = Date.parse(tokenExpiresAt);
+      if (Number.isNaN(parsed)) {
+        errors.push('tokenExpiresAt must be a valid date');
+      } else {
+        nextSettings.tokenExpiresAt = tokenExpiresAt;
+      }
+    }
+  }
   nextSettings.defaultBranch = normalizeString(payload.defaultBranch) || 'main';
   nextSettings.autoPush = Boolean(payload.autoPush);
   nextSettings.useCommitTemplate = Boolean(payload.useCommitTemplate);
@@ -97,7 +112,7 @@ router.get('/git', async (req, res) => {
 });
 
 export const putGitSettingsHandler = async (req, res) => {
-  const { errors, nextSettings } = validateGitSettingsPayload(req.body || {});
+  const { errors, nextSettings } = validateGitSettingsPayload(req.body || {}, { requireRemoteUrl: false });
   if (errors.length > 0) {
     return res.status(400).json({ success: false, error: errors.join(', ') });
   }
@@ -112,6 +127,28 @@ export const putGitSettingsHandler = async (req, res) => {
 };
 
 router.put('/git', putGitSettingsHandler);
+
+router.post('/git/test', async (req, res) => {
+  const payload = req.body || {};
+  const provider = (payload.provider || 'github').toLowerCase();
+  const token = typeof payload.token === 'string' ? payload.token : '';
+
+  try {
+    const result = await testGitConnection({ provider, token });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    if (error instanceof GitConnectionError) {
+      return res.status(error.statusCode || 400).json({
+        success: false,
+        error: error.message,
+        provider: error.provider,
+        details: error.details || null
+      });
+    }
+    console.error('Failed to test git connection:', error);
+    res.status(500).json({ success: false, error: 'Failed to test git connection' });
+  }
+});
 
 router.get('/ports', async (req, res) => {
   try {

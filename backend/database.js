@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import os from 'os';
 import fs from 'fs';
-import { encryptApiKey } from './encryption.js';
+import { encryptApiKey, decryptApiKey } from './encryption.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -125,6 +125,8 @@ const defaultGitSettingsRecord = {
   autoPush: false,
   useCommitTemplate: false,
   commitTemplate: '',
+  tokenExpiresAt: null,
+  tokenPresent: false,
   token: ''
 };
 
@@ -161,6 +163,8 @@ const normalizeGitSettingsRow = (row = {}) => ({
   autoPush: Boolean(row.auto_push),
   useCommitTemplate: Boolean(row.use_commit_template),
   commitTemplate: row.commit_template || defaultGitSettingsRecord.commitTemplate,
+  tokenExpiresAt: row.token_expires_at || defaultGitSettingsRecord.tokenExpiresAt,
+  tokenPresent: Boolean(row.token_encrypted),
   token: ''
 });
 
@@ -296,6 +300,7 @@ export const initializeDatabase = async () => {
         remote_url TEXT,
         username TEXT,
         token_encrypted TEXT,
+        token_expires_at TEXT,
         default_branch TEXT NOT NULL DEFAULT 'main',
         auto_push INTEGER NOT NULL DEFAULT 0,
         use_commit_template INTEGER NOT NULL DEFAULT 0,
@@ -313,6 +318,7 @@ export const initializeDatabase = async () => {
         remote_url TEXT,
         username TEXT,
         token_encrypted TEXT,
+        token_expires_at TEXT,
         default_branch TEXT NOT NULL DEFAULT 'main',
         auto_push INTEGER NOT NULL DEFAULT 0,
         use_commit_template INTEGER NOT NULL DEFAULT 0,
@@ -322,6 +328,9 @@ export const initializeDatabase = async () => {
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
       )
     `);
+
+    await ensureTableColumn('git_settings', 'token_expires_at', 'TEXT');
+    await ensureTableColumn('project_git_settings', 'token_expires_at', 'TEXT');
 
     await dbRun(`
       CREATE TABLE IF NOT EXISTS port_settings (
@@ -422,6 +431,14 @@ export const initializeDatabase = async () => {
     console.error('❌ Database initialization failed:', error);
     throw error;
   }
+};
+
+export const getGitSettingsToken = async () => {
+  const row = await dbGet('SELECT token_encrypted FROM git_settings WHERE id = 1');
+  if (!row?.token_encrypted) {
+    return null;
+  }
+  return decryptApiKey(row.token_encrypted, { quiet: true });
 };
 
 // Database operations
@@ -616,6 +633,9 @@ export const db_operations = {
     const commitTemplate = useCommitTemplate
       ? (settings.commitTemplate ?? existing?.commit_template ?? defaultGitSettingsRecord.commitTemplate)
       : '';
+    const tokenExpiresAt = Object.prototype.hasOwnProperty.call(settings, 'tokenExpiresAt')
+      ? (settings.tokenExpiresAt || null)
+      : (existing?.token_expires_at ?? defaultGitSettingsRecord.tokenExpiresAt);
 
     let tokenEncrypted = existing?.token_encrypted || null;
     if (Object.prototype.hasOwnProperty.call(settings, 'token')) {
@@ -631,14 +651,15 @@ export const db_operations = {
     }
 
     await dbRun(`
-      INSERT INTO git_settings (id, workflow, provider, remote_url, username, token_encrypted, default_branch, auto_push, use_commit_template, commit_template, created_at, updated_at)
-      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO git_settings (id, workflow, provider, remote_url, username, token_encrypted, token_expires_at, default_branch, auto_push, use_commit_template, commit_template, created_at, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(id) DO UPDATE SET
         workflow = excluded.workflow,
         provider = excluded.provider,
         remote_url = excluded.remote_url,
         username = excluded.username,
         token_encrypted = excluded.token_encrypted,
+        token_expires_at = excluded.token_expires_at,
         default_branch = excluded.default_branch,
         auto_push = excluded.auto_push,
         use_commit_template = excluded.use_commit_template,
@@ -650,6 +671,7 @@ export const db_operations = {
       remoteUrl,
       username,
       tokenEncrypted,
+      tokenExpiresAt,
       defaultBranch,
       autoPush,
       useCommitTemplate,
@@ -717,6 +739,9 @@ export const db_operations = {
     const commitTemplate = useCommitTemplate
       ? (settings.commitTemplate ?? existing?.commit_template ?? defaultGitSettingsRecord.commitTemplate)
       : '';
+    const tokenExpiresAt = Object.prototype.hasOwnProperty.call(settings, 'tokenExpiresAt')
+      ? (settings.tokenExpiresAt || null)
+      : (existing?.token_expires_at ?? defaultGitSettingsRecord.tokenExpiresAt);
 
     let tokenEncrypted = existing?.token_encrypted || null;
     if (Object.prototype.hasOwnProperty.call(settings, 'token')) {
@@ -732,14 +757,15 @@ export const db_operations = {
     }
 
     await dbRun(`
-      INSERT INTO project_git_settings (project_id, workflow, provider, remote_url, username, token_encrypted, default_branch, auto_push, use_commit_template, commit_template, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO project_git_settings (project_id, workflow, provider, remote_url, username, token_encrypted, token_expires_at, default_branch, auto_push, use_commit_template, commit_template, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(project_id) DO UPDATE SET
         workflow = excluded.workflow,
         provider = excluded.provider,
         remote_url = excluded.remote_url,
         username = excluded.username,
         token_encrypted = excluded.token_encrypted,
+        token_expires_at = excluded.token_expires_at,
         default_branch = excluded.default_branch,
         auto_push = excluded.auto_push,
         use_commit_template = excluded.use_commit_template,
@@ -752,6 +778,7 @@ export const db_operations = {
       remoteUrl,
       username,
       tokenEncrypted,
+      tokenExpiresAt,
       defaultBranch,
       autoPush,
       useCommitTemplate,

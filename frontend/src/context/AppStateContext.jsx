@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   defaultGitSettings,
+  defaultGitConnectionStatus,
   defaultPortSettings,
   getMaxAssistantPanelWidth,
   clampAssistantPanelWidth,
@@ -9,7 +10,8 @@ import {
   loadWorkspaceChangesFromStorage,
   loadWorkingBranchesFromStorage,
   loadPreviewPanelStateByProject,
-  loadGitSettingsFromStorage
+  loadGitSettingsFromStorage,
+  loadGitConnectionStatusFromStorage
 } from './appState/persistence.js';
 import {
   detectFileTokens,
@@ -37,7 +39,13 @@ import {
   fetchGitSettingsFromBackend as fetchGitSettingsFromBackendAction,
   fetchPortSettingsFromBackend as fetchPortSettingsFromBackendAction,
   fetchProjectGitSettings as fetchProjectGitSettingsAction,
+  fetchProjectGitStatus as fetchProjectGitStatusAction,
+  fetchProjectGitRemote as fetchProjectGitRemoteAction,
+  pullProjectGitRemote as pullProjectGitRemoteAction,
+  fetchProjectBranchesOverview as fetchProjectBranchesOverviewAction,
+  checkoutProjectBranch as checkoutProjectBranchAction,
   updateGitSettings as updateGitSettingsAction,
+  testGitConnection as testGitConnectionAction,
   updatePortSettings as updatePortSettingsAction,
   getEffectiveGitSettings as getEffectiveGitSettingsAction,
   getProjectGitSettingsSnapshot as getProjectGitSettingsSnapshotAction,
@@ -86,7 +94,8 @@ if (isTestEnv) {
     loadPreviewPanelStateByProject,
     sortJobsByCreatedAt,
     buildInitialShutdownState,
-    loadGitSettingsFromStorage
+    loadGitSettingsFromStorage,
+    loadGitConnectionStatusFromStorage
   });
 }
 
@@ -124,7 +133,9 @@ export const AppStateProvider = ({ children }) => {
   const [projectFilesRevision, setProjectFilesRevision] = useState({});
   const [workingBranches, setWorkingBranches] = useState(loadWorkingBranchesFromStorage);
   const [gitSettings, setGitSettings] = useState(loadGitSettingsFromStorage);
+  const [gitConnectionStatus, setGitConnectionStatus] = useState(loadGitConnectionStatusFromStorage);
   const [projectGitSettings, setProjectGitSettings] = useState({});
+  const [projectGitStatus, setProjectGitStatus] = useState({});
   const [portSettings, setPortSettings] = useState(defaultPortSettings);
   const [projectProcesses, setProjectProcesses] = useState(null);
   const [fileExplorerStateByProject, setFileExplorerStateByProject] = useState(loadFileExplorerState);
@@ -521,6 +532,12 @@ export const AppStateProvider = ({ children }) => {
     }
   }, [gitSettings]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('gitConnectionStatus', JSON.stringify(gitConnectionStatus));
+    }
+  }, [gitConnectionStatus]);
+
   // Fetch projects from backend
   const fetchProjects = useCallback(
     () => fetchProjectsFromBackend({ trackedFetch, setProjects }),
@@ -539,6 +556,58 @@ export const AppStateProvider = ({ children }) => {
 
   const fetchProjectGitSettings = useCallback(
     (projectId) => fetchProjectGitSettingsAction({ projectId, trackedFetch, setProjectGitSettings }),
+    [trackedFetch]
+  );
+
+  const fetchProjectGitStatus = useCallback(
+    async (projectId) => {
+      const status = await fetchProjectGitStatusAction({ projectId, trackedFetch });
+      if (projectId) {
+        setProjectGitStatus((prev) => ({
+          ...prev,
+          [projectId]: status
+        }));
+      }
+      return status;
+    },
+    [trackedFetch]
+  );
+
+  const fetchProjectGitRemote = useCallback(
+    async (projectId) => {
+      const status = await fetchProjectGitRemoteAction({ projectId, trackedFetch });
+      if (projectId) {
+        setProjectGitStatus((prev) => ({
+          ...prev,
+          [projectId]: status
+        }));
+      }
+      return status;
+    },
+    [trackedFetch]
+  );
+
+  const pullProjectGitRemote = useCallback(
+    async (projectId) => {
+      const result = await pullProjectGitRemoteAction({ projectId, trackedFetch });
+      if (projectId && result?.status) {
+        setProjectGitStatus((prev) => ({
+          ...prev,
+          [projectId]: result.status
+        }));
+      }
+      return result;
+    },
+    [trackedFetch]
+  );
+
+  const fetchProjectBranchesOverview = useCallback(
+    (projectId) => fetchProjectBranchesOverviewAction({ projectId, trackedFetch }),
+    [trackedFetch]
+  );
+
+  const checkoutProjectBranch = useCallback(
+    (projectId, branchName) => checkoutProjectBranchAction({ projectId, branchName, trackedFetch }),
     [trackedFetch]
   );
 
@@ -917,6 +986,16 @@ export const AppStateProvider = ({ children }) => {
     [gitSettings, trackedFetch]
   );
 
+  const testGitConnection = useCallback(
+    (options = {}) => testGitConnectionAction({ trackedFetch, ...options }),
+    [trackedFetch]
+  );
+
+  const registerGitConnectionStatus = useCallback(
+    (status = defaultGitConnectionStatus) => setGitConnectionStatus(status),
+    []
+  );
+
   const updatePortSettings = useCallback(
     (updates = {}) => updatePortSettingsAction({
       trackedFetch,
@@ -1074,6 +1153,45 @@ export const AppStateProvider = ({ children }) => {
     stagedCount > 0
   );
 
+  const currentGitStatus = currentProject ? projectGitStatus[currentProject.id] : null;
+  const hasGitNotification = Boolean(currentGitStatus?.behind && currentGitStatus.behind > 0);
+
+  useEffect(() => {
+    if (!currentProject?.id) {
+      return undefined;
+    }
+
+    const effectiveSettings = getEffectiveGitSettingsAction({
+      gitSettings,
+      projectGitSettings,
+      projectId: currentProject.id
+    });
+    const hasRemote = Boolean(effectiveSettings?.remoteUrl?.trim());
+    if (!hasRemote) {
+      return undefined;
+    }
+
+    let isActive = true;
+    const poll = async () => {
+      if (!isActive) {
+        return;
+      }
+      try {
+        await fetchProjectGitRemote(currentProject.id);
+      } catch (error) {
+        // Ignore background fetch failures.
+      }
+    };
+
+    poll();
+    const intervalId = setInterval(poll, 120000);
+
+    return () => {
+      isActive = false;
+      clearInterval(intervalId);
+    };
+  }, [currentProject?.id, fetchProjectGitRemote, gitSettings, projectGitSettings]);
+
   const value = {
     // State
     isLLMConfigured,
@@ -1124,6 +1242,13 @@ export const AppStateProvider = ({ children }) => {
     clearStagedChanges,
     syncBranchOverview: applyBranchOverview,
     updateGitSettings,
+    testGitConnection,
+    registerGitConnectionStatus,
+    fetchProjectGitStatus,
+    fetchProjectGitRemote,
+    pullProjectGitRemote,
+    fetchProjectBranchesOverview,
+    checkoutProjectBranch,
     createProjectRemoteRepository,
     updateProjectGitSettings,
     clearProjectGitSettings,
@@ -1147,6 +1272,9 @@ export const AppStateProvider = ({ children }) => {
     pausePreviewAutomation,
     resumePreviewAutomation,
 
+    gitConnectionStatus,
+    projectGitStatus,
+
     markTestRunIntent,
     
     // Computed values
@@ -1154,7 +1282,8 @@ export const AppStateProvider = ({ children }) => {
     canUseTools: !!currentProject,
     canUseProjects: isLLMConfigured,
     canUseSettings: isLLMConfigured,
-    hasBranchNotification
+    hasBranchNotification,
+    hasGitNotification
   };
 
   return (

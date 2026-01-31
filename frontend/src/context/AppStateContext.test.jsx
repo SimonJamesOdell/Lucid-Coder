@@ -51,6 +51,46 @@ const buildFetchMock = () => vi.fn((url) => {
     return Promise.resolve(createResponse(true, { success: true, settings: {} }));
   }
 
+  if (typeof url === 'string' && url.includes('/git/status')) {
+    return Promise.resolve(createResponse(true, {
+      success: true,
+      status: {
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        hasRemote: true,
+        dirty: false
+      }
+    }));
+  }
+
+  if (typeof url === 'string' && url.includes('/git/fetch')) {
+    return Promise.resolve(createResponse(true, {
+      success: true,
+      status: {
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        hasRemote: true,
+        dirty: false
+      }
+    }));
+  }
+
+  if (typeof url === 'string' && url.includes('/git/pull')) {
+    return Promise.resolve(createResponse(true, {
+      success: true,
+      status: {
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        hasRemote: true,
+        dirty: false
+      },
+      strategy: 'noop'
+    }));
+  }
+
   return Promise.resolve(createResponse(true, { success: true }));
 });
 
@@ -2668,7 +2708,7 @@ describe('AppStateContext integrations', () => {
       if (typeof url === 'string' && url.includes('/git-settings') && options?.method === 'PUT') {
         return Promise.resolve(createResponse(true, {
           success: true,
-          projectSettings: { workflow: 'remote', autoPush: true }
+          projectSettings: { workflow: 'remote' }
         }));
       }
       if (typeof url === 'string' && url.includes('/git-settings') && options?.method === 'DELETE') {
@@ -5338,12 +5378,27 @@ describe('AppStateContext helper utilities', () => {
     expect(__appStateTestHelpers.loadGitSettingsFromStorage()).toMatchObject({ workflow: 'local', provider: 'github' });
 
     localStorage.setItem('gitSettings', JSON.stringify({ provider: 'gitlab', autoPush: true }));
-    expect(__appStateTestHelpers.loadGitSettingsFromStorage()).toMatchObject({ provider: 'gitlab', autoPush: true, defaultBranch: 'main' });
+    expect(__appStateTestHelpers.loadGitSettingsFromStorage()).toMatchObject({ provider: 'gitlab', defaultBranch: 'main' });
+    expect(__appStateTestHelpers.loadGitSettingsFromStorage().autoPush).toBeUndefined();
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     localStorage.setItem('gitSettings', '{');
     expect(__appStateTestHelpers.loadGitSettingsFromStorage()).toMatchObject({ workflow: 'local' });
     expect(warnSpy).toHaveBeenCalledWith('Failed to parse gitSettings from storage', expect.any(Error));
+    warnSpy.mockRestore();
+  });
+
+  test('loadGitConnectionStatusFromStorage merges stored values and handles parse errors', () => {
+    localStorage.removeItem('gitConnectionStatus');
+    expect(__appStateTestHelpers.loadGitConnectionStatusFromStorage()).toMatchObject({ provider: '', message: '' });
+
+    localStorage.setItem('gitConnectionStatus', JSON.stringify({ provider: 'github', message: 'Connected', testedAt: '2026-01-01T00:00:00.000Z' }));
+    expect(__appStateTestHelpers.loadGitConnectionStatusFromStorage()).toMatchObject({ provider: 'github', message: 'Connected' });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    localStorage.setItem('gitConnectionStatus', '{');
+    expect(__appStateTestHelpers.loadGitConnectionStatusFromStorage()).toMatchObject({ provider: '' });
+    expect(warnSpy).toHaveBeenCalledWith('Failed to parse gitConnectionStatus from storage', expect.any(Error));
     warnSpy.mockRestore();
   });
 });

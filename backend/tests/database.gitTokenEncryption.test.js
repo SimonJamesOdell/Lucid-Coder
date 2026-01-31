@@ -4,9 +4,10 @@ import os from 'os';
 import path from 'path';
 
 const encryptApiKeyMock = vi.fn(() => null);
+const decryptApiKeyMock = vi.fn(() => null);
 vi.mock('../encryption.js', () => ({
   encryptApiKey: encryptApiKeyMock,
-  decryptApiKey: vi.fn(),
+  decryptApiKey: decryptApiKeyMock,
   hashData: vi.fn(),
   verifyHash: vi.fn()
 }));
@@ -56,6 +57,28 @@ describe('Git token encryption failures', () => {
       .toThrow('Failed to encrypt Git token');
 
     expect(encryptApiKeyMock).toHaveBeenCalledWith('abc');
+    await new Promise((resolve, reject) => {
+      module.default.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
+
+  it('returns decrypted git token when encrypted value is present', async () => {
+    decryptApiKeyMock.mockReturnValueOnce('decrypted-token');
+    const module = await import('../database.js?git-token-decrypt');
+    await module.initializeDatabase();
+
+    await new Promise((resolve, reject) => {
+      module.default.run(
+        'INSERT INTO git_settings (id, token_encrypted) VALUES (1, ?)',
+        ['encrypted-token'],
+        (err) => (err ? reject(err) : resolve())
+      );
+    });
+
+    const token = await module.getGitSettingsToken();
+    expect(token).toBe('decrypted-token');
+    expect(decryptApiKeyMock).toHaveBeenCalledWith('encrypted-token', { quiet: true });
+
     await new Promise((resolve, reject) => {
       module.default.close((err) => (err ? reject(err) : resolve()));
     });

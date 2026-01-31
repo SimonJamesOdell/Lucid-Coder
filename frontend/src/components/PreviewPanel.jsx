@@ -21,6 +21,7 @@ const PreviewPanel = () => {
   const {
     currentProject,
     hasBranchNotification,
+    hasGitNotification,
     workspaceChanges,
     previewPanelState,
     setPreviewPanelTab,
@@ -627,10 +628,17 @@ const PreviewPanel = () => {
           </button>
           <button
             data-testid="git-tab"
-            className={`tab ${activeTab === 'git' ? 'active' : ''}`}
+            className={`tab ${activeTab === 'git' ? 'active' : ''} ${hasGitNotification ? 'with-indicator' : ''}`.trim()}
             onClick={() => setActiveTab('git', { source: 'user' })}
           >
             Git
+            {hasGitNotification && (
+              <span
+                className="tab-indicator"
+                data-testid="git-spot-indicator"
+                aria-label="Git tab requires pull"
+              />
+            )}
           </button>
           <button
             data-testid="packages-tab"

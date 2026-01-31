@@ -1,5 +1,25 @@
 import { sanitizeGitSettings } from './helpers.js';
 
+const stripDeprecatedGitFields = (settings = null) => {
+  /* c8 ignore start -- defensive: settings can be null */
+  if (!settings) {
+    return settings;
+  }
+  /* c8 ignore stop */
+  const { autoPush, useCommitTemplate, commitTemplate, ...rest } = settings;
+  return rest;
+};
+
+const stripGlobalGitFields = (settings = null) => {
+  /* c8 ignore start -- defensive: settings can be null */
+  if (!settings) {
+    return settings;
+  }
+  /* c8 ignore stop */
+  const { remoteUrl, ...rest } = settings;
+  return rest;
+};
+
 export const fetchGitSettingsFromBackend = async ({ trackedFetch, setGitSettings }) => {
   try {
     const response = await trackedFetch('/api/settings/git');
@@ -10,9 +30,8 @@ export const fetchGitSettingsFromBackend = async ({ trackedFetch, setGitSettings
     const data = await response.json();
     if (data.success && data.settings) {
       setGitSettings((prev) => ({
-        ...prev,
-        ...data.settings,
-        token: ''
+        ...stripGlobalGitFields(stripDeprecatedGitFields(prev)),
+        ...stripGlobalGitFields(sanitizeGitSettings(data.settings))
       }));
     }
   } catch (error) {
@@ -82,8 +101,8 @@ export const fetchProjectGitSettings = async ({
 
 export const updateGitSettings = async ({ trackedFetch, gitSettings, setGitSettings, updates = {} }) => {
   const payload = {
-    ...gitSettings,
-    ...updates
+    ...stripGlobalGitFields(stripDeprecatedGitFields(gitSettings)),
+    ...stripGlobalGitFields(stripDeprecatedGitFields(updates))
   };
 
   const body = { ...payload };
@@ -107,13 +126,43 @@ export const updateGitSettings = async ({ trackedFetch, gitSettings, setGitSetti
   }
 
   const nextState = {
-    ...gitSettings,
-    ...data.settings,
-    token: ''
+    ...stripGlobalGitFields(stripDeprecatedGitFields(gitSettings)),
+    ...stripGlobalGitFields(sanitizeGitSettings(data.settings))
   };
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'token')) {
+    const trimmedToken = typeof updates.token === 'string' ? updates.token.trim() : '';
+    if (trimmedToken) {
+      nextState.tokenPresent = true;
+    }
+  }
 
   setGitSettings(nextState);
   return data.settings;
+};
+
+export const testGitConnection = async ({ trackedFetch, provider = 'github', token = '' }) => {
+  const payload = {
+    provider,
+    token
+  };
+
+  const response = await trackedFetch('/api/settings/git/test', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to test git connection';
+    throw new Error(message);
+  }
+
+  return data;
 };
 
 export const updatePortSettings = async ({
@@ -170,12 +219,12 @@ export const updatePortSettings = async ({
 export const getEffectiveGitSettings = ({ gitSettings, projectGitSettings, projectId }) => {
   if (projectId && projectGitSettings[projectId]) {
     return {
-      ...gitSettings,
-      ...projectGitSettings[projectId],
+      ...stripDeprecatedGitFields(gitSettings),
+      ...stripDeprecatedGitFields(projectGitSettings[projectId]),
       token: ''
     };
   }
-  return gitSettings;
+  return stripDeprecatedGitFields(gitSettings);
 };
 
 export const getProjectGitSettingsSnapshot = ({ gitSettings, projectGitSettings, projectId }) => {
@@ -183,9 +232,9 @@ export const getProjectGitSettingsSnapshot = ({ gitSettings, projectGitSettings,
   const overrides = projectId ? projectGitSettings[projectId] || null : null;
   return {
     inheritsFromGlobal: !overrides,
-    effectiveSettings: { ...effective },
-    projectSettings: overrides ? { ...overrides } : null,
-    globalSettings: { ...gitSettings }
+    effectiveSettings: { ...stripDeprecatedGitFields(effective) },
+    projectSettings: overrides ? { ...stripDeprecatedGitFields(overrides) } : null,
+    globalSettings: { ...stripDeprecatedGitFields(gitSettings) }
   };
 };
 
@@ -220,6 +269,98 @@ export const createProjectRemoteRepository = async ({ trackedFetch, projectId, o
   return data;
 };
 
+export const fetchProjectGitStatus = async ({ trackedFetch, projectId }) => {
+  if (!projectId) {
+    throw new Error('projectId is required to fetch git status');
+  }
+
+  const response = await trackedFetch(`/api/projects/${projectId}/git/status`);
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to fetch git status';
+    throw new Error(message);
+  }
+
+  return data.status || null;
+};
+
+export const fetchProjectGitRemote = async ({ trackedFetch, projectId }) => {
+  if (!projectId) {
+    throw new Error('projectId is required to fetch git remote status');
+  }
+
+  const response = await trackedFetch(`/api/projects/${projectId}/git/fetch`, {
+    method: 'POST'
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to fetch git remote';
+    throw new Error(message);
+  }
+
+  return data.status || null;
+};
+
+export const pullProjectGitRemote = async ({ trackedFetch, projectId }) => {
+  if (!projectId) {
+    throw new Error('projectId is required to pull git remote');
+  }
+
+  const response = await trackedFetch(`/api/projects/${projectId}/git/pull`, {
+    method: 'POST'
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to pull git remote';
+    throw new Error(message);
+  }
+
+  return {
+    status: data.status || null,
+    strategy: data.strategy || null
+  };
+};
+
+export const fetchProjectBranchesOverview = async ({ trackedFetch, projectId }) => {
+  if (!projectId) {
+    throw new Error('projectId is required to fetch branches');
+  }
+
+  const response = await trackedFetch(`/api/projects/${projectId}/branches`);
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to fetch branches';
+    throw new Error(message);
+  }
+
+  return data;
+};
+
+export const checkoutProjectBranch = async ({ trackedFetch, projectId, branchName }) => {
+  if (!projectId || !branchName) {
+    throw new Error('projectId and branchName are required to checkout branch');
+  }
+
+  const response = await trackedFetch(
+    `/api/projects/${projectId}/branches/${encodeURIComponent(branchName)}/checkout`,
+    { method: 'POST' }
+  );
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to checkout branch';
+    throw new Error(message);
+  }
+
+  return data;
+};
+
 export const updateProjectGitSettings = async ({
   trackedFetch,
   projectId,
@@ -233,8 +374,8 @@ export const updateProjectGitSettings = async ({
   }
 
   const payload = {
-    ...getEffectiveGitSettings({ gitSettings, projectGitSettings, projectId }),
-    ...updates
+    ...stripDeprecatedGitFields(getEffectiveGitSettings({ gitSettings, projectGitSettings, projectId })),
+    ...stripDeprecatedGitFields(updates)
   };
 
   const body = { ...payload };

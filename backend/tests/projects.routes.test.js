@@ -42,6 +42,25 @@ vi.mock('../services/remoteRepoService.js', () => {
   };
 });
 
+const gitUtils = vi.hoisted(() => ({
+  ensureGitRepository: vi.fn(),
+  fetchRemote: vi.fn(),
+  getAheadBehind: vi.fn(),
+  getCurrentBranch: vi.fn(),
+  getRemoteUrl: vi.fn(),
+  hasWorkingTreeChanges: vi.fn(),
+  runGitCommand: vi.fn()
+}));
+
+vi.mock('../utils/git.js', () => ({
+  __esModule: true,
+  ...gitUtils
+}));
+
+vi.mock('../services/projectScaffolding/git.js', () => ({
+  initializeAndPushRepository: vi.fn()
+}));
+
 vi.mock('child_process', async () => {
   const actual = await vi.importActual('child_process');
   return {
@@ -143,6 +162,15 @@ describe('Projects API with Scaffolding', () => {
   beforeEach(async () => {
     await cleanDatabase();
 
+    Object.values(gitUtils).forEach((mockFn) => mockFn.mockReset?.());
+    gitUtils.ensureGitRepository.mockResolvedValue(undefined);
+    gitUtils.fetchRemote.mockResolvedValue(undefined);
+    gitUtils.getAheadBehind.mockResolvedValue({ ahead: 0, behind: 0 });
+    gitUtils.getCurrentBranch.mockResolvedValue('main');
+    gitUtils.getRemoteUrl.mockResolvedValue('https://github.com/octo/repo.git');
+    gitUtils.hasWorkingTreeChanges.mockResolvedValue(false);
+    gitUtils.runGitCommand.mockResolvedValue({ code: 0, stdout: '' });
+
     // Setup mocks
     const { createProjectWithFiles, scaffoldProject, installDependencies, startProject } = scaffoldingService;
     
@@ -169,6 +197,14 @@ describe('Projects API with Scaffolding', () => {
         frontend: { pid: 1234, port: 5173 },
         backend: { pid: 1235, port: 3000 }
       }
+    });
+
+    const { initializeAndPushRepository } = await import('../services/projectScaffolding/git.js');
+    vi.mocked(initializeAndPushRepository).mockResolvedValue({
+      initialized: true,
+      pushed: true,
+      branch: 'main',
+      remote: 'https://github.com/octo/repo.git'
     });
     
   });
@@ -5292,6 +5328,322 @@ describe('Projects API with Scaffolding', () => {
     });
   });
 
+  describe('GET /api/projects/:projectId/git/status', () => {
+    test('returns 404 when project is missing', async () => {
+      const response = await request(app).get('/api/projects/99999/git/status');
+
+      expect(response.status).toBe(404);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toMatch(/project not found/i);
+    });
+
+    test('returns status when project path is missing', async () => {
+      const databaseModule = await import('../database.js');
+      const getProjectSpy = vi.spyOn(databaseModule, 'getProject').mockResolvedValueOnce({
+        id: 123,
+        name: 'No Path',
+        path: ''
+      });
+
+      const response = await request(app).get('/api/projects/123/git/status');
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toMatchObject({
+        hasRemote: false,
+        remoteUrl: null,
+        error: 'Project path is not configured.'
+      });
+
+      getProjectSpy.mockRestore();
+    });
+
+    test('returns status without remote when origin is missing', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getRemoteUrl.mockResolvedValueOnce(null);
+
+      const response = await request(app).get(`/api/projects/${project.id}/git/status`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.status.hasRemote).toBe(false);
+      expect(response.body.status.remoteUrl).toBeNull();
+    });
+
+    test('includes compare errors when ahead/behind cannot be computed', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getAheadBehind.mockResolvedValueOnce({ ahead: 0, behind: 0, error: 'Compare failed' });
+
+      const response = await request(app).get(`/api/projects/${project.id}/git/status`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.status.error).toBe('Compare failed');
+      expect(response.body.status.hasRemote).toBe(true);
+    });
+
+    test('uses project git settings when available', async () => {
+      const { project } = await createPersistedProject();
+      await saveProjectGitSettings(project.id, {
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/octo/custom.git',
+        defaultBranch: 'develop'
+      });
+
+      const response = await request(app).get(`/api/projects/${project.id}/git/status`);
+
+      expect(response.status).toBe(200);
+      expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(project.path, { defaultBranch: 'develop' });
+    });
+
+    test('falls back to global settings when project settings lookup fails', async () => {
+      const { project } = await createPersistedProject();
+      const databaseModule = await import('../database.js');
+      const projectSettingsSpy = vi.spyOn(databaseModule, 'getProjectGitSettings')
+        .mockRejectedValueOnce(new Error('db failure'));
+      const globalSettingsSpy = vi.spyOn(databaseModule, 'getGitSettings')
+        .mockResolvedValueOnce({ defaultBranch: '' });
+
+      const response = await request(app).get(`/api/projects/${project.id}/git/status`);
+
+      expect(response.status).toBe(200);
+      expect(globalSettingsSpy).toHaveBeenCalledTimes(1);
+      expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(project.path, { defaultBranch: 'main' });
+
+      projectSettingsSpy.mockRestore();
+      globalSettingsSpy.mockRestore();
+    });
+
+    test('handles git status helpers rejecting', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getCurrentBranch.mockRejectedValueOnce(new Error('branch failed'));
+      gitUtils.hasWorkingTreeChanges.mockRejectedValueOnce(new Error('dirty failed'));
+
+      const response = await request(app).get(`/api/projects/${project.id}/git/status`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.status.currentBranch).toBeNull();
+      expect(response.body.status.dirty).toBe(false);
+    });
+
+    test('returns 500 when status lookup throws', async () => {
+      const databaseModule = await import('../database.js');
+      const projectSpy = vi.spyOn(databaseModule, 'getProject')
+        .mockRejectedValueOnce(new Error('boom'));
+
+      const response = await request(app).get('/api/projects/123/git/status');
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toMatch(/failed to fetch git status/i);
+
+      projectSpy.mockRestore();
+    });
+  });
+
+  describe('POST /api/projects/:projectId/git/fetch', () => {
+    test('returns 404 when project is missing', async () => {
+      const response = await request(app).post('/api/projects/99999/git/fetch');
+
+      expect(response.status).toBe(404);
+      expect(response.body.success).toBe(false);
+    });
+
+    test('returns 400 when project path is missing', async () => {
+      const databaseModule = await import('../database.js');
+      const getProjectSpy = vi.spyOn(databaseModule, 'getProject').mockResolvedValueOnce({
+        id: 222,
+        name: 'No Path',
+        path: ''
+      });
+
+      const response = await request(app).post('/api/projects/222/git/fetch');
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/project path is not configured/i);
+
+      getProjectSpy.mockRestore();
+    });
+
+    test('returns 400 when remote is missing', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getRemoteUrl.mockResolvedValueOnce(null);
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/fetch`);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/remote origin is not configured/i);
+    });
+
+    test('returns status after fetch', async () => {
+      const { project } = await createPersistedProject();
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/fetch`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(gitUtils.fetchRemote).toHaveBeenCalledWith(project.path, 'origin');
+    });
+
+    test('returns 500 when fetch fails', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.fetchRemote.mockRejectedValueOnce(new Error('fetch failed'));
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/fetch`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('fetch failed');
+    });
+
+    test('returns default error when fetch fails without message', async () => {
+      const { project } = await createPersistedProject();
+      const databaseModule = await import('../database.js');
+      const globalSettingsSpy = vi.spyOn(databaseModule, 'getGitSettings')
+        .mockResolvedValueOnce({ defaultBranch: '' });
+      gitUtils.fetchRemote.mockRejectedValueOnce({});
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/fetch`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Failed to fetch git remote');
+      expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(project.path, { defaultBranch: 'main' });
+
+      globalSettingsSpy.mockRestore();
+    });
+  });
+
+  describe('POST /api/projects/:projectId/git/pull', () => {
+    test('returns 404 when project is missing', async () => {
+      const response = await request(app).post('/api/projects/99999/git/pull');
+
+      expect(response.status).toBe(404);
+      expect(response.body.error).toMatch(/project not found/i);
+    });
+
+    test('returns 400 when project path is missing', async () => {
+      const databaseModule = await import('../database.js');
+      const getProjectSpy = vi.spyOn(databaseModule, 'getProject').mockResolvedValueOnce({
+        id: 456,
+        name: 'No Path',
+        path: ''
+      });
+
+      const response = await request(app).post('/api/projects/456/git/pull');
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/project path is not configured/i);
+
+      getProjectSpy.mockRestore();
+    });
+
+    test('returns 400 when remote is missing', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getRemoteUrl.mockResolvedValueOnce(null);
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/remote origin is not configured/i);
+    });
+
+    test('returns 400 when working tree is dirty', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/uncommitted changes/i);
+    });
+
+    test('returns 400 when on the wrong branch', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getCurrentBranch.mockResolvedValueOnce('feature');
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/checkout main/i);
+    });
+
+    test('returns 400 when compare fails', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getAheadBehind.mockResolvedValueOnce({ ahead: 0, behind: 0, error: 'blocked' });
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('blocked');
+    });
+
+    test('uses fast-forward strategy when behind only', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getAheadBehind
+        .mockResolvedValueOnce({ ahead: 0, behind: 2 })
+        .mockResolvedValueOnce({ ahead: 0, behind: 0 });
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.strategy).toBe('ff-only');
+      expect(gitUtils.runGitCommand).toHaveBeenCalledWith(project.path, ['merge', '--ff-only', 'origin/main']);
+    });
+
+    test('uses rebase strategy when ahead and behind', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getAheadBehind
+        .mockResolvedValueOnce({ ahead: 1, behind: 1 })
+        .mockResolvedValueOnce({ ahead: 0, behind: 0 });
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.strategy).toBe('rebase');
+      expect(gitUtils.runGitCommand).toHaveBeenCalledWith(project.path, ['rebase', 'origin/main']);
+    });
+
+    test('returns noop strategy when already up to date', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.getAheadBehind
+        .mockResolvedValueOnce({ ahead: 0, behind: 0 })
+        .mockResolvedValueOnce({ ahead: 0, behind: 0 });
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.strategy).toBe('noop');
+      expect(gitUtils.runGitCommand).not.toHaveBeenCalledWith(project.path, ['merge', '--ff-only', 'origin/main']);
+      expect(gitUtils.runGitCommand).not.toHaveBeenCalledWith(project.path, ['rebase', 'origin/main']);
+    });
+
+    test('handles helper rejections and defaults to noop strategy', async () => {
+      const { project } = await createPersistedProject();
+      const databaseModule = await import('../database.js');
+      const globalSettingsSpy = vi.spyOn(databaseModule, 'getGitSettings')
+        .mockResolvedValueOnce({ defaultBranch: '' });
+      gitUtils.hasWorkingTreeChanges.mockRejectedValueOnce(new Error('dirty failed'));
+      gitUtils.getCurrentBranch.mockRejectedValueOnce(new Error('branch failed'));
+      gitUtils.getAheadBehind
+        .mockResolvedValueOnce({ ahead: 0, behind: 0 })
+        .mockResolvedValueOnce({ ahead: 0, behind: 0 });
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.strategy).toBe('noop');
+      expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(project.path, { defaultBranch: 'main' });
+
+      globalSettingsSpy.mockRestore();
+    });
+
+    test('returns default error when pull fails without message', async () => {
+      const { project } = await createPersistedProject();
+      gitUtils.fetchRemote.mockRejectedValueOnce({});
+
+      const response = await request(app).post(`/api/projects/${project.id}/git/pull`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Failed to pull from remote');
+    });
+  });
+
   describe('POST /api/projects/:projectId/git/remotes', () => {
     beforeEach(async () => {
       await cleanDatabase();
@@ -5328,6 +5680,61 @@ describe('Projects API with Scaffolding', () => {
       const stored = await getProjectGitSettings(project.id);
       expect(stored.remoteUrl).toBe(mockRepository.remoteUrl);
       expect(stored.defaultBranch).toBe(mockRepository.defaultBranch);
+    });
+
+    test('reports initialization error when project path is missing', async () => {
+      const { project } = await createPersistedProject();
+      const databaseModule = await import('../database.js');
+      const getProjectSpy = vi.spyOn(databaseModule, 'getProject').mockResolvedValueOnce({
+        ...project,
+        path: ''
+      });
+      const remoteService = await import('../services/remoteRepoService.js');
+      vi.mocked(remoteService.createRemoteRepository).mockResolvedValue({
+        provider: 'github',
+        id: '321',
+        name: 'demo-pathless',
+        owner: 'octocat',
+        remoteUrl: 'https://github.com/octocat/demo-pathless.git',
+        defaultBranch: 'main'
+      });
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/git/remotes`)
+        .send({ provider: 'github', name: 'demo-pathless', token: 'ghp_pathless' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.initialization).toMatchObject({
+        success: false,
+        error: 'Project path is not configured.'
+      });
+
+      getProjectSpy.mockRestore();
+    });
+
+    test('uses default initialization error when init fails without message', async () => {
+      const { project } = await createPersistedProject();
+      const remoteService = await import('../services/remoteRepoService.js');
+      vi.mocked(remoteService.createRemoteRepository).mockResolvedValue({
+        provider: 'github',
+        id: '654',
+        name: 'demo-init',
+        owner: 'octocat',
+        remoteUrl: 'https://github.com/octocat/demo-init.git',
+        defaultBranch: 'main'
+      });
+      const { initializeAndPushRepository } = await import('../services/projectScaffolding/git.js');
+      vi.mocked(initializeAndPushRepository).mockRejectedValueOnce({});
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/git/remotes`)
+        .send({ provider: 'github', name: 'demo-init', token: 'ghp_init' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.initialization).toMatchObject({
+        success: false,
+        error: 'Failed to initialize and push repository.'
+      });
     });
 
     test('validates remote creation payloads when the request body is null', async () => {
@@ -5495,6 +5902,56 @@ describe('Projects API with Scaffolding', () => {
       expect(response.status).toBe(400);
       expect(response.body.success).toBe(false);
       expect(response.body.error).toMatch(/personal access token/i);
+    });
+
+    test('uses stored token when payload omits token', async () => {
+      const { project } = await createPersistedProject();
+      const remoteService = await import('../services/remoteRepoService.js');
+      vi.mocked(remoteService.createRemoteRepository).mockResolvedValue({
+        provider: 'github',
+        id: '321',
+        name: 'demo',
+        owner: 'octocat',
+        remoteUrl: 'https://github.com/octocat/demo.git',
+        defaultBranch: 'main'
+      });
+
+      const databaseModule = await import('../database.js');
+      const tokenSpy = vi.spyOn(databaseModule, 'getGitSettingsToken').mockResolvedValueOnce('stored-token');
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/git/remotes`)
+        .send({ provider: 'github', name: 'demo' });
+
+      expect(response.status).toBe(200);
+      expect(vi.mocked(remoteService.createRemoteRepository)).toHaveBeenCalledWith(
+        expect.objectContaining({ token: 'stored-token' })
+      );
+
+      tokenSpy.mockRestore();
+    });
+
+    test('returns initialization error when initial push fails', async () => {
+      const { project } = await createPersistedProject();
+      const remoteService = await import('../services/remoteRepoService.js');
+      vi.mocked(remoteService.createRemoteRepository).mockResolvedValue({
+        provider: 'github',
+        id: '444',
+        name: 'demo',
+        owner: 'octocat',
+        remoteUrl: 'https://github.com/octocat/demo.git',
+        defaultBranch: 'main'
+      });
+
+      const { initializeAndPushRepository } = await import('../services/projectScaffolding/git.js');
+      vi.mocked(initializeAndPushRepository).mockRejectedValueOnce(new Error('init failed'));
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/git/remotes`)
+        .send({ provider: 'github', name: 'demo', token: 'token' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.initialization).toMatchObject({ success: false, error: 'init failed' });
     });
 
     test('falls back to project name when remote payload omits repository name', async () => {

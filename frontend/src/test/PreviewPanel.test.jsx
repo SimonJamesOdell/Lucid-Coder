@@ -204,6 +204,19 @@ describe('PreviewPanel', () => {
     expect(startAgentUiBridge).not.toHaveBeenCalled();
   });
 
+  test('git tab shows indicator when remote is behind', async () => {
+    useAppState.mockReturnValue(createAppState({
+      currentProject: { id: 'p-1', name: 'Alpha Project' },
+      hasGitNotification: true
+    }));
+
+    render(<PreviewPanel />);
+
+    const gitTab = screen.getByTestId('git-tab');
+    expect(gitTab.className).toContain('with-indicator');
+    expect(screen.getByTestId('git-spot-indicator')).toBeInTheDocument();
+  });
+
   test('supports registerCommitsActions null payload and cleanup', async () => {
     const user = userEvent.setup();
 

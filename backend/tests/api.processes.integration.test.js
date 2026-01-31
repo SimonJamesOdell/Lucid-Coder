@@ -24,6 +24,20 @@ const isPortAvailable = (port) =>
     server.unref();
   });
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isPortAvailableWithRetry = async (port, { retries = 3, delayMs = 50 } = {}) => {
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    if (await isPortAvailable(port)) {
+      return true;
+    }
+    if (attempt < retries) {
+      await wait(delayMs);
+    }
+  }
+  return false;
+};
+
 const findFirstAvailablePortFromBase = async (portBase, maxOffset = 25) => {
   for (let offset = 0; offset <= maxOffset; offset += 1) {
     const candidate = portBase + offset;
@@ -120,8 +134,8 @@ describe('Project startup integration (real scaffolding logic)', () => {
     expect(selectedBackendPort).toBeLessThan(DEFAULT_BACKEND_PORT_BASE + 25);
 
     // Since startProject is stubbed in test mode, the returned ports should be bindable.
-    expect(await isPortAvailable(selectedFrontendPort)).toBe(true);
-    expect(await isPortAvailable(selectedBackendPort)).toBe(true);
+    expect(await isPortAvailableWithRetry(selectedFrontendPort)).toBe(true);
+    expect(await isPortAvailableWithRetry(selectedBackendPort)).toBe(true);
 
     const statusResponse = await request(app)
       .get(`/api/projects/${project.id}/processes`)
