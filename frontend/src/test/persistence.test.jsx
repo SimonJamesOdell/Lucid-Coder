@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
   loadGitSettingsFromStorage,
+  loadProjectGitSettingsFromStorage,
   loadGitConnectionStatusFromStorage,
   defaultGitSettings,
   defaultGitConnectionStatus
@@ -61,5 +62,55 @@ describe('persistence helpers', () => {
     expect(loaded).toEqual(defaultGitConnectionStatus);
 
     global.window = originalWindow;
+  });
+
+  test('loadProjectGitSettingsFromStorage returns empty map when window is undefined', () => {
+    const originalWindow = global.window;
+    global.window = undefined;
+
+    const loaded = loadProjectGitSettingsFromStorage();
+    expect(loaded).toEqual({});
+
+    global.window = originalWindow;
+  });
+
+  test('loadProjectGitSettingsFromStorage returns empty map on missing or invalid data', () => {
+    const missing = loadProjectGitSettingsFromStorage();
+    expect(missing).toEqual({});
+
+    localStorage.setItem('projectGitSettings', '{not-json');
+    const invalid = loadProjectGitSettingsFromStorage();
+    expect(invalid).toEqual({});
+  });
+
+  test('loadProjectGitSettingsFromStorage sanitizes entries and skips invalid ones', () => {
+    localStorage.setItem('projectGitSettings', JSON.stringify({
+      'proj-1': {
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/demo/repo.git',
+        autoPush: true,
+        useCommitTemplate: true,
+        commitTemplate: 'feat: ${summary}',
+        token: 'secret'
+      },
+      'proj-2': null
+    }));
+
+    const loaded = loadProjectGitSettingsFromStorage();
+    expect(loaded).toEqual({
+      'proj-1': {
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/demo/repo.git',
+        token: ''
+      }
+    });
+  });
+
+  test('loadProjectGitSettingsFromStorage returns empty map when parsed payload is not an object', () => {
+    localStorage.setItem('projectGitSettings', JSON.stringify('nope'));
+    const loaded = loadProjectGitSettingsFromStorage();
+    expect(loaded).toEqual({});
   });
 });

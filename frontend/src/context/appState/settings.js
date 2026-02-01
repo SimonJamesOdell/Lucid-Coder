@@ -373,8 +373,13 @@ export const updateProjectGitSettings = async ({
     throw new Error('projectId is required to update project git settings');
   }
 
+  const existingProjectSettings = projectGitSettings?.[projectId] || null;
+  const baseSettings = existingProjectSettings
+    ? stripDeprecatedGitFields(existingProjectSettings)
+    : stripDeprecatedGitFields(getEffectiveGitSettings({ gitSettings, projectGitSettings, projectId }));
+
   const payload = {
-    ...stripDeprecatedGitFields(getEffectiveGitSettings({ gitSettings, projectGitSettings, projectId })),
+    ...baseSettings,
     ...stripDeprecatedGitFields(updates)
   };
 

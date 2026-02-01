@@ -300,7 +300,13 @@ const GitTab = () => {
       /* c8 ignore next -- button disabled when default branch is empty */
       /* c8 ignore next -- button disabled when default branch is empty */
       const defaultBranch = formState.defaultBranch.trim() || 'main';
-      const saved = await updateProjectGitSettings(currentProject.id, { defaultBranch });
+      const payload = {
+        workflow: formState.workflow,
+        provider: connectionMode === 'global' ? (gitSettings?.provider || 'github') : formState.provider,
+        remoteUrl: formState.remoteUrl.trim(),
+        defaultBranch
+      };
+      const saved = await updateProjectGitSettings(currentProject.id, payload);
       /* c8 ignore next -- defensive: backend may omit default branch */
       setFormState((prev) => ({
         ...prev,

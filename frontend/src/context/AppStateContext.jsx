@@ -11,6 +11,7 @@ import {
   loadWorkingBranchesFromStorage,
   loadPreviewPanelStateByProject,
   loadGitSettingsFromStorage,
+  loadProjectGitSettingsFromStorage,
   loadGitConnectionStatusFromStorage
 } from './appState/persistence.js';
 import {
@@ -95,6 +96,7 @@ if (isTestEnv) {
     sortJobsByCreatedAt,
     buildInitialShutdownState,
     loadGitSettingsFromStorage,
+    loadProjectGitSettingsFromStorage,
     loadGitConnectionStatusFromStorage
   });
 }
@@ -135,7 +137,7 @@ export const AppStateProvider = ({ children }) => {
   const [workingBranches, setWorkingBranches] = useState(loadWorkingBranchesFromStorage);
   const [gitSettings, setGitSettings] = useState(loadGitSettingsFromStorage);
   const [gitConnectionStatus, setGitConnectionStatus] = useState(loadGitConnectionStatusFromStorage);
-  const [projectGitSettings, setProjectGitSettings] = useState({});
+  const [projectGitSettings, setProjectGitSettings] = useState(loadProjectGitSettingsFromStorage);
   const [projectGitStatus, setProjectGitStatus] = useState({});
   const [portSettings, setPortSettings] = useState(defaultPortSettings);
   const [projectProcesses, setProjectProcesses] = useState(null);
@@ -538,6 +540,12 @@ export const AppStateProvider = ({ children }) => {
       localStorage.setItem('gitConnectionStatus', JSON.stringify(gitConnectionStatus));
     }
   }, [gitConnectionStatus]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('projectGitSettings', JSON.stringify(projectGitSettings));
+    }
+  }, [projectGitSettings]);
 
   // Fetch projects from backend
   const fetchProjects = useCallback(
