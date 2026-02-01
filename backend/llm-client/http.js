@@ -1,4 +1,13 @@
+const sanitizeApiKey = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const stripped = value.replace(/[\u0000-\u001F\u007F]+/g, '').trim();
+  return stripped.replace(/^Bearer\s+/i, '').trim();
+};
+
 export function getHeaders(provider, apiKey) {
+  const sanitizedApiKey = sanitizeApiKey(apiKey);
   const headers = {
     'Content-Type': 'application/json'
   };
@@ -8,24 +17,24 @@ export function getHeaders(provider, apiKey) {
     case 'groq':
     case 'together':
     case 'perplexity':
-      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['Authorization'] = `Bearer ${sanitizedApiKey}`;
       break;
 
     case 'anthropic':
-      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['Authorization'] = `Bearer ${sanitizedApiKey}`;
       headers['anthropic-version'] = '2023-06-01';
       break;
 
     case 'google':
-      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['Authorization'] = `Bearer ${sanitizedApiKey}`;
       break;
 
     case 'cohere':
-      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['Authorization'] = `Bearer ${sanitizedApiKey}`;
       break;
 
     case 'mistral':
-      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['Authorization'] = `Bearer ${sanitizedApiKey}`;
       break;
 
     case 'ollama':
@@ -35,8 +44,8 @@ export function getHeaders(provider, apiKey) {
       break;
 
     case 'custom':
-      if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey}`;
+      if (sanitizedApiKey) {
+        headers['Authorization'] = `Bearer ${sanitizedApiKey}`;
       }
       break;
   }

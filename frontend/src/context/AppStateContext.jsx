@@ -117,7 +117,8 @@ export const AppStateProvider = ({ children }) => {
     ready: false,
     reason: null,
     requiresApiKey: null,
-    hasApiKey: null
+    hasApiKey: null,
+    checkedAt: null
   });
   const hydratedProjectFromStorageRef = useRef(false);
   const autoClosedProjectIdRef = useRef(null);
@@ -663,6 +664,8 @@ export const AppStateProvider = ({ children }) => {
         return;
       }
 
+      const checkedAt = new Date().toISOString();
+
       if (!response.ok) {
         const message = data?.error || `Failed to load LLM configuration (${response.status})`;
         throw new Error(message);
@@ -692,7 +695,8 @@ export const AppStateProvider = ({ children }) => {
           ready: nextReady,
           reason: nextReason,
           requiresApiKey: config ? Boolean(config.requires_api_key) : null,
-          hasApiKey: config ? Boolean(config.has_api_key) : null
+          hasApiKey: config ? Boolean(config.has_api_key) : null,
+          checkedAt
         });
         return;
       }
@@ -704,7 +708,8 @@ export const AppStateProvider = ({ children }) => {
         ready: false,
         reason: typeof data?.error === 'string' ? data.error : 'Failed to load LLM status',
         requiresApiKey: null,
-        hasApiKey: null
+        hasApiKey: null,
+        checkedAt
       });
     } catch (error) {
       console.warn('Failed to load LLM configuration from backend', error);
@@ -712,6 +717,7 @@ export const AppStateProvider = ({ children }) => {
       if (requestId !== llmStatusRequestIdRef.current) {
         return;
       }
+      const checkedAt = new Date().toISOString();
       setLlmConfig(null);
       setIsLLMConfigured(false);
       setLlmStatus({
@@ -719,7 +725,8 @@ export const AppStateProvider = ({ children }) => {
         ready: false,
         reason: error?.message || 'Backend unreachable',
         requiresApiKey: null,
-        hasApiKey: null
+        hasApiKey: null,
+        checkedAt
       });
     } finally {
       if (requestId !== llmStatusRequestIdRef.current) {
@@ -729,8 +736,10 @@ export const AppStateProvider = ({ children }) => {
     }
   }, [reportBackendConnectivity, trackedFetch]);
 
-  const refreshLLMStatus = useCallback(async () => {
-    setLlmStatusLoaded(false);
+  const refreshLLMStatus = useCallback(async ({ suppressLoading = false } = {}) => {
+    if (!suppressLoading) {
+      setLlmStatusLoaded(false);
+    }
     await fetchLLMConfigFromBackend();
   }, [fetchLLMConfigFromBackend]);
 
@@ -1049,7 +1058,7 @@ export const AppStateProvider = ({ children }) => {
     setCurrentProject(null);
     setIsLLMConfigured(false);
     setLlmConfig(null);
-    setLlmStatus({ configured: false, ready: false, reason: null, requiresApiKey: null, hasApiKey: null });
+    setLlmStatus({ configured: false, ready: false, reason: null, requiresApiKey: null, hasApiKey: null, checkedAt: null });
     setProjects([]);
     setWorkspaceChanges({});
     setWorkingBranches({});

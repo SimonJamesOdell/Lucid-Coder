@@ -267,6 +267,89 @@ describe('goalsApi', () => {
     expect(errors).toEqual(['Agent request failed']);
   });
 
+  it('agentRequestStream parses a trailing event block without a delimiter', async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      'event: done\n',
+      'data: {"result":{"kind":"question","answer":"ok"}}'
+    ];
+
+    const stream = new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+        controller.close();
+      }
+    });
+
+    fetch.mockResolvedValue({ ok: true, status: 200, body: stream });
+
+    const completed = [];
+
+    await agentRequestStream({
+      projectId: 'proj-1',
+      prompt: 'Hello',
+      onComplete: (result) => completed.push(result)
+    });
+
+    expect(completed).toEqual([{ kind: 'question', answer: 'ok' }]);
+  });
+
+  it('agentRequestStream parses multiple events from the trailing buffer', async () => {
+    const encoder = new TextEncoder();
+    const payload =
+      'event: chunk\n' +
+      'data: {"text":"Hello"}\n\n' +
+      'event: done\n' +
+      'data: {"result":{"kind":"question","answer":"ok"}}\n\n';
+
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(payload));
+        controller.close();
+      }
+    });
+
+    fetch.mockResolvedValue({ ok: true, status: 200, body: stream });
+
+    const receivedChunks = [];
+    const completed = [];
+
+    const originalDecoder = globalThis.TextDecoder;
+    class BufferedDecoder {
+      constructor() {
+        this.buffer = '';
+      }
+
+      decode(value, options = {}) {
+        if (value) {
+          this.buffer += originalDecoder.prototype.decode.call(new originalDecoder(), value, options);
+        }
+        if (options?.stream) {
+          return '';
+        }
+        const output = this.buffer;
+        this.buffer = '';
+        return output;
+      }
+    }
+
+    globalThis.TextDecoder = BufferedDecoder;
+
+    try {
+      await agentRequestStream({
+        projectId: 'proj-1',
+        prompt: 'Hello',
+        onChunk: (text) => receivedChunks.push(text),
+        onComplete: (result) => completed.push(result)
+      });
+    } finally {
+      globalThis.TextDecoder = originalDecoder;
+    }
+
+    expect(receivedChunks).toEqual(['Hello']);
+    expect(completed).toEqual([{ kind: 'question', answer: 'ok' }]);
+  });
+
   it('agentAutopilot omits uiSessionId when stored value is only whitespace', async () => {
     axios.post.mockResolvedValueOnce({ data: { ok: true } });
 

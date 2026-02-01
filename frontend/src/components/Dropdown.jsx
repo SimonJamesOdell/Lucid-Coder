@@ -18,7 +18,13 @@ const Dropdown = ({ title, children, disabled = false, className = '' }) => {
     };
   }, []);
 
-  const handleToggle = () => {
+  const handleToggle = (event) => {
+    if (event?.preventDefault) {
+      event.preventDefault();
+    }
+    if (event?.stopPropagation) {
+      event.stopPropagation();
+    }
     if (!disabled) {
       setIsOpen(!isOpen);
     }
@@ -35,6 +41,7 @@ const Dropdown = ({ title, children, disabled = false, className = '' }) => {
     >
       <button 
         className="dropdown-trigger"
+        type="button"
         onClick={handleToggle}
         disabled={disabled}
         aria-expanded={isOpen}
@@ -56,7 +63,13 @@ const Dropdown = ({ title, children, disabled = false, className = '' }) => {
 export const DropdownItem = ({ children, onClick, disabled = false, className = '' }) => (
   <button 
     className={`dropdown-item ${className} ${disabled ? 'disabled' : ''}`}
-    onClick={onClick}
+    type="button"
+    onClick={(event) => {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      onClick?.(event);
+    }}
     disabled={disabled}
   >
     {children}

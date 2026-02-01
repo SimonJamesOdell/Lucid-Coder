@@ -10,6 +10,12 @@ const router = express.Router();
 const PROVIDERS_WITHOUT_API_KEY = new Set(['ollama', 'lmstudio', 'textgen']);
 
 const isProviderWithoutKey = (provider) => PROVIDERS_WITHOUT_API_KEY.has(String(provider || '').toLowerCase());
+const sanitizeApiKey = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.replace(/[\u0000-\u001F\u007F]+/g, '').trim();
+};
 
 const summarizeSafeConfig = (config) => ({
   id: config.id,
@@ -107,7 +113,7 @@ router.post('/test', async (req, res) => {
 
     const providerWithoutKey = isProviderWithoutKey(provider);
     const requiresApiKey = !providerWithoutKey;
-    let effectiveApiKey = apiKey;
+    let effectiveApiKey = sanitizeApiKey(apiKey);
     if (requiresApiKey && !effectiveApiKey) {
       // Allow testing with the server-stored key so the UI never needs to
       // display or re-send secrets if the provider hasn't changed.
@@ -117,7 +123,7 @@ router.post('/test', async (req, res) => {
         String(activeConfig.provider || '').toLowerCase() === String(provider).toLowerCase();
 
       if (sameProvider && activeConfig.api_key_encrypted) {
-        effectiveApiKey = decryptApiKey(activeConfig.api_key_encrypted, { quiet: true });
+        effectiveApiKey = sanitizeApiKey(decryptApiKey(activeConfig.api_key_encrypted, { quiet: true }));
       }
 
       if (!effectiveApiKey) {
@@ -182,9 +188,10 @@ router.post('/configure', async (req, res) => {
     let encryptedApiKey = null;
 
     if (requiresApiKey) {
-      if (apiKey) {
+      const sanitizedApiKey = sanitizeApiKey(apiKey);
+      if (sanitizedApiKey) {
         // Encrypt API key if required
-        encryptedApiKey = encryptApiKey(apiKey);
+        encryptedApiKey = encryptApiKey(sanitizedApiKey);
         if (!encryptedApiKey) {
           return res.status(500).json({
             success: false,
@@ -206,7 +213,7 @@ router.post('/configure', async (req, res) => {
         }
 
         // Ensure the stored key is decryptable (otherwise the config cannot be ready).
-        const decrypted = decryptApiKey(activeConfig.api_key_encrypted, { quiet: true });
+        const decrypted = sanitizeApiKey(decryptApiKey(activeConfig.api_key_encrypted, { quiet: true }));
         if (!decrypted) {
           return res.status(400).json({
             success: false,

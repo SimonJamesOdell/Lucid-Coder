@@ -11,7 +11,8 @@ vi.mock('../llm-client.js', () => ({
 }));
 
 vi.mock('../services/projectTools.js', () => ({
-  readProjectFile: vi.fn()
+  readProjectFile: vi.fn(),
+  listProjectDirectory: vi.fn()
 }));
 
 vi.mock('../services/goalStore.js', () => ({
@@ -64,6 +65,7 @@ describe('questionToolAgent', () => {
       ])
     );
   });
+
 
   it('preloads stored goals for goal-related prompts', async () => {
     mockSteps([{ action: 'answer', answer: 'Here are your current goals.' }]);
@@ -165,30 +167,7 @@ describe('questionToolAgent', () => {
     expect(result.answer).toMatch(/react/i);
   });
 
-  it('falls back to context aggregation when the loop hits the iteration limit', async () => {
-    mockSteps([
-      { action: 'read_file', path: 'README.md', reason: 'Need info' },
-      { action: 'read_file', path: 'package.json', reason: 'Double check' },
-      { action: 'read_file', path: 'frontend/package.json', reason: 'More info' },
-      { action: 'read_file', path: 'backend/package.json', reason: 'Still unsure' },
-      'The project uses React on the frontend and Express on the backend.'
-    ]);
-
-    projectTools.readProjectFile.mockResolvedValue('sample context');
-
-    const result = await answerProjectQuestion({ projectId: 1, prompt: 'What frameworks are used?' });
-
-    expect(result.answer).toMatch(/react/i);
-    expect(result.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ action: 'fallback_context' }),
-        expect.objectContaining({ action: 'read_file', target: 'README.md' })
-      ])
-    );
-    expect(llmClient.generateResponse).toHaveBeenCalledTimes(5);
-  });
-
-  it('throws when no fallback context can be gathered', async () => {
+  it('throws when the loop hits the iteration limit without an answer', async () => {
     mockSteps([
       { action: 'read_file', path: 'README.md', reason: 'Need info' },
       { action: 'read_file', path: 'package.json', reason: 'Double check' },
@@ -196,10 +175,10 @@ describe('questionToolAgent', () => {
       { action: 'read_file', path: 'backend/package.json', reason: 'Still unsure' }
     ]);
 
-    projectTools.readProjectFile.mockRejectedValue(new Error('missing'));
+    projectTools.readProjectFile.mockResolvedValue('sample context');
 
     await expect(
-      answerProjectQuestion({ projectId: 1, prompt: 'What is this?' })
+      answerProjectQuestion({ projectId: 1, prompt: 'What frameworks are used?' })
     ).rejects.toThrow(/unable to answer the question/i);
   });
 
@@ -214,29 +193,52 @@ describe('questionToolAgent', () => {
   it('throws when planner returns non-object JSON', async () => {
     mockSteps(['"just a string"']);
 
-    await expect(
-      answerProjectQuestion({ projectId: 2, prompt: 'Describe the project' })
-    ).rejects.toThrow(/invalid json/i);
-  });
+    const result = await answerProjectQuestion({ projectId: 2, prompt: 'Describe the project' });
 
-  it('returns a fallback answer when planner returns invalid JSON and fallback context exists', async () => {
-    mockSteps(['not json', 'Fallback answer.']);
-
-    projectTools.readProjectFile.mockImplementation(async (_projectId, relativePath) => {
-      if (relativePath === 'README.md') {
-        return 'Hello from README';
-      }
-      throw new Error('missing');
-    });
-
-    const result = await answerProjectQuestion({ projectId: 9, prompt: 'What is this?' });
-    expect(result.answer).toMatch(/fallback answer/i);
+    expect(result.answer).toMatch(/just a string/i);
     expect(result.steps).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ type: 'action', action: 'fallback_context' }),
-        expect.objectContaining({ type: 'observation', action: 'read_file', target: 'README.md' })
+        expect.objectContaining({ type: 'answer', content: expect.stringMatching(/just a string/i) })
       ])
     );
+  });
+
+  it('accepts plain-text answers when planner does not return JSON', async () => {
+    mockSteps(['The project is named LSML Composer.']);
+
+    const result = await answerProjectQuestion({ projectId: 2, prompt: 'Describe the project' });
+
+    expect(result.answer).toMatch(/lsml composer/i);
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'answer', content: expect.stringMatching(/lsml composer/i) })
+      ])
+    );
+  });
+
+  it('throws when planner returns invalid JSON without repair', async () => {
+    mockSteps(['not json']);
+
+    const result = await answerProjectQuestion({ projectId: 9, prompt: 'What is this?' });
+    expect(result.answer).toBe('not json');
+  });
+
+  it('skips planner repair in test env and throws on invalid JSON', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+
+    try {
+      llmClient.generateResponse.mockReset();
+      llmClient.generateResponse.mockResolvedValueOnce({ bad: 'payload' });
+
+      await expect(
+        answerProjectQuestion({ projectId: 19, prompt: 'What is this?' })
+      ).rejects.toThrow(/invalid json/i);
+
+      expect(llmClient.generateResponse).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 
   it('uses the planner self-repair path outside of test env', async () => {
@@ -250,8 +252,8 @@ describe('questionToolAgent', () => {
       ]);
 
       const result = await answerProjectQuestion({ projectId: 10, prompt: 'What is this?' });
-      expect(result.answer).toMatch(/repaired answer/i);
-      expect(llmClient.generateResponse).toHaveBeenCalledTimes(2);
+      expect(result.answer).toBe('not json');
+      expect(llmClient.generateResponse).toHaveBeenCalledTimes(1);
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
     }
@@ -275,29 +277,216 @@ describe('questionToolAgent', () => {
     }
   });
 
-  it('falls back when planner self-repair still returns invalid JSON', async () => {
+  it('builds an empty assistant draft when repairing non-string output (stubbed env)', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+
+    llmClient.generateResponse.mockReset();
+    llmClient.generateResponse
+      .mockResolvedValueOnce({ not: 'a string' })
+      .mockResolvedValueOnce('{"action":"answer","answer":"Ok."}');
+
+    const result = await answerProjectQuestion({ projectId: 16, prompt: 'What is this?' });
+    expect(result.answer).toMatch(/ok/i);
+
+    const secondCallMessages = llmClient.generateResponse.mock.calls?.[1]?.[0];
+    const assistantDraft = Array.isArray(secondCallMessages)
+      ? secondCallMessages.find((message) => message.role === 'assistant')
+      : null;
+    expect(assistantDraft?.content).toBe('');
+
+    vi.unstubAllEnvs();
+  });
+
+  it('includes the raw decision text in the repair assistant draft', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'development';
 
     try {
-      mockSteps(['not json', 'still not json', 'Fallback answer after failed repair.']);
+      llmClient.generateResponse.mockReset();
+      llmClient.generateResponse
+        .mockResolvedValueOnce('{"foo":"bar"}')
+        .mockResolvedValueOnce('{"action":"answer","answer":"Ok."}');
 
-      projectTools.readProjectFile.mockImplementation(async (_projectId, relativePath) => {
-        if (relativePath === 'README.md') {
-          return 'Hello from README';
-        }
-        throw new Error('missing');
-      });
+      const result = await answerProjectQuestion({ projectId: 20, prompt: 'What is this?' });
+      expect(result.answer).toMatch(/ok/i);
 
-      const result = await answerProjectQuestion({ projectId: 11, prompt: 'What is this?' });
-      expect(result.answer).toMatch(/fallback answer after failed repair/i);
-      expect(llmClient.generateResponse).toHaveBeenCalledTimes(3);
-      expect(result.steps).toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: 'action', action: 'fallback_context' })])
-      );
+      const secondCallMessages = llmClient.generateResponse.mock.calls?.[1]?.[0];
+      const assistantDraft = Array.isArray(secondCallMessages)
+        ? secondCallMessages.find((message) => message.role === 'assistant')
+        : null;
+      expect(assistantDraft?.content).toBe('{"foo":"bar"}');
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
     }
+  });
+
+  it('passes an empty assistant draft to the repair prompt for non-string decisions', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    try {
+      llmClient.generateResponse.mockReset();
+      llmClient.generateResponse
+        .mockResolvedValueOnce({ not: 'a string' })
+        .mockResolvedValueOnce('{"action":"answer","answer":"Ok."}');
+
+      const result = await answerProjectQuestion({ projectId: 14, prompt: 'What is this?' });
+      expect(result.answer).toMatch(/ok/i);
+
+      const secondCallMessages = llmClient.generateResponse.mock.calls?.[1]?.[0];
+      const assistantDraft = Array.isArray(secondCallMessages)
+        ? secondCallMessages.find((message) => message.role === 'assistant')
+        : null;
+      expect(assistantDraft?.content).toBe('');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('throws when planner self-repair still returns invalid JSON', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    try {
+      mockSteps(['not json', 'still not json']);
+
+      const result = await answerProjectQuestion({ projectId: 11, prompt: 'What is this?' });
+      expect(result.answer).toBe('not json');
+      expect(llmClient.generateResponse).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('throws when repair returns invalid JSON payloads outside test env', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    try {
+      llmClient.generateResponse.mockReset();
+      llmClient.generateResponse
+        .mockResolvedValueOnce({ bad: 'planner output' })
+        .mockResolvedValueOnce({ still: 'bad' });
+
+      await expect(
+        answerProjectQuestion({ projectId: 15, prompt: 'What is this?' })
+      ).rejects.toThrow(/invalid json/i);
+
+      expect(llmClient.generateResponse).toHaveBeenCalledTimes(2);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('handles list_dir actions inside the planning loop', async () => {
+    mockSteps([
+      { action: 'list_dir', path: '', reason: 'Scan root' },
+      { action: 'read_file', path: 'README.md' },
+      { action: 'answer', answer: 'Project name found.' }
+    ]);
+
+    projectTools.listProjectDirectory.mockResolvedValueOnce([
+      { name: 'README.md', type: 'file' },
+      { name: 'frontend', type: 'dir' }
+    ]);
+    projectTools.readProjectFile.mockResolvedValueOnce('Project README');
+
+    const result = await answerProjectQuestion({ projectId: 7, prompt: 'What is the name?' });
+
+    expect(result.answer).toMatch(/project name found/i);
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'action', action: 'list_dir', target: '.' }),
+        expect.objectContaining({ type: 'observation', action: 'list_dir', target: '.' })
+      ])
+    );
+  });
+
+  it('uses a default reason for list_dir actions when none is provided', async () => {
+    mockSteps([
+      { action: 'list_dir', path: '' },
+      { action: 'answer', answer: 'Ok.' }
+    ]);
+
+    projectTools.listProjectDirectory.mockResolvedValueOnce([{ name: 'README.md', type: 'file' }]);
+
+    const result = await answerProjectQuestion({ projectId: 18, prompt: 'What files exist?' });
+
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'action', action: 'list_dir', reason: 'List files and folders' })
+      ])
+    );
+  });
+
+  it('records empty directory summaries for list_dir actions', async () => {
+    mockSteps([
+      { action: 'list_dir', path: 'src', reason: 'Check src' },
+      { action: 'answer', answer: 'Ok.' }
+    ]);
+
+    projectTools.listProjectDirectory.mockResolvedValueOnce([]);
+
+    const result = await answerProjectQuestion({ projectId: 21, prompt: 'What files exist?' });
+
+    const observation = result.steps.find((step) => step.type === 'observation' && step.action === 'list_dir');
+    expect(observation?.summary).toBe('Directory is empty.');
+  });
+
+  it('captures list_dir errors as observations and continues planning', async () => {
+    mockSteps([
+      { action: 'list_dir', path: 'src', reason: 'Check src' },
+      { action: 'answer', answer: 'Ok.' }
+    ]);
+
+    projectTools.listProjectDirectory.mockRejectedValueOnce(new Error('no access'));
+
+    const result = await answerProjectQuestion({ projectId: 22, prompt: 'What files exist?' });
+
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'observation', action: 'list_dir', error: 'no access' })
+      ])
+    );
+  });
+
+  it('records list_dir errors with default target and message', async () => {
+    mockSteps([
+      { action: 'list_dir' },
+      { action: 'answer', answer: 'Ok.' }
+    ]);
+
+    projectTools.listProjectDirectory.mockRejectedValueOnce({});
+
+    const result = await answerProjectQuestion({ projectId: 24, prompt: 'What files exist?' });
+
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'observation',
+          action: 'list_dir',
+          target: '.',
+          error: 'Failed to list directory'
+        })
+      ])
+    );
+  });
+
+  it('uses the default list_dir error message when error has no message', async () => {
+    mockSteps([
+      { action: 'list_dir', path: 'src' },
+      { action: 'answer', answer: 'Ok.' }
+    ]);
+
+    projectTools.listProjectDirectory.mockRejectedValueOnce({});
+
+    const result = await answerProjectQuestion({ projectId: 23, prompt: 'What files exist?' });
+
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'observation', action: 'list_dir', error: 'Failed to list directory' })
+      ])
+    );
   });
 
   it('throws when read_file action lacks a path', async () => {
@@ -446,16 +635,9 @@ describe('questionToolAgent', () => {
 
     projectTools.readProjectFile.mockResolvedValue('# README\nDetails');
 
-    const result = await answerProjectQuestion({ projectId: 4, prompt: 'Summarize the project' });
-
-    expect(result.answer).toMatch(/fallback answer/i);
-    expect(result.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ action: 'fallback_context' }),
-        expect.objectContaining({ action: 'read_file', target: 'README.md' })
-      ])
-    );
-    expect(llmClient.generateResponse).toHaveBeenCalledTimes(2);
+    await expect(
+      answerProjectQuestion({ projectId: 4, prompt: 'Summarize the project' })
+    ).rejects.toThrow(/need direct context/i);
   });
 
   it('includes stored goals in fallback context when prompt is goal-related', async () => {
@@ -480,15 +662,9 @@ describe('questionToolAgent', () => {
       return `content for ${relativePath}`;
     });
 
-    const result = await answerProjectQuestion({ projectId: 11, prompt: 'list goals' });
-
-    expect(result.answer).toMatch(/including goals/i);
-    expect(result.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ action: 'fallback_context' }),
-        expect.objectContaining({ type: 'observation', action: 'read_file', target: 'agent_goals' })
-      ])
-    );
+    await expect(
+      answerProjectQuestion({ projectId: 11, prompt: 'list goals' })
+    ).rejects.toThrow(/need context/i);
   });
 
   it('does not include agent_goals fallback section when no stored goals exist', async () => {
@@ -500,13 +676,9 @@ describe('questionToolAgent', () => {
     goalStore.listGoals.mockResolvedValue([]);
     projectTools.readProjectFile.mockResolvedValue('# README\nDetails');
 
-    const result = await answerProjectQuestion({ projectId: 11, prompt: 'resume goals' });
-
-    expect(result.answer).toMatch(/without goals/i);
-    const hasAgentGoalsSection = result.steps.some(
-      (step) => step.type === 'observation' && step.action === 'read_file' && step.target === 'agent_goals'
-    );
-    expect(hasAgentGoalsSection).toBe(false);
+    await expect(
+      answerProjectQuestion({ projectId: 11, prompt: 'resume goals' })
+    ).rejects.toThrow(/need context/i);
   });
 
   it('can answer via fallback using only stored goals when fallback files are missing', async () => {
@@ -530,15 +702,9 @@ describe('questionToolAgent', () => {
     // Force all fallback file reads to fail so the only section comes from agent_goals.
     projectTools.readProjectFile.mockRejectedValue(new Error('missing'));
 
-    const result = await answerProjectQuestion({ projectId: 11, prompt: 'resume goals' });
-
-    expect(result.answer).toMatch(/goals only/i);
-    expect(result.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ action: 'fallback_context' }),
-        expect.objectContaining({ type: 'observation', action: 'read_file', target: 'agent_goals' })
-      ])
-    );
+    await expect(
+      answerProjectQuestion({ projectId: 11, prompt: 'resume goals' })
+    ).rejects.toThrow(/need context/i);
   });
 
   it('throws when unable fallback produces no answer', async () => {

@@ -111,6 +111,7 @@ describe('Integration Tests', () => {
         return Promise.resolve(mockLLMTestSuccess());
       }
       if (url === '/api/llm/configure') {
+        llmStatusResponse = buildLlmStatus({ configured: true, ready: true });
         return Promise.resolve(mockLLMConfigureSuccess());
       }
       if (url === '/api/projects') {
@@ -128,7 +129,10 @@ describe('Integration Tests', () => {
     await waitFor(() => expect(mockAxios.post).toHaveBeenCalledWith('/api/llm/test', expect.any(Object)));
     await waitFor(() => expect(mockAxios.post).toHaveBeenCalledWith('/api/llm/configure', expect.any(Object)));
 
-    await screen.findByText('Select Project');
+    await waitFor(() => {
+      expect(screen.queryByTestId('backend-offline-overlay')).not.toBeInTheDocument();
+    });
+    await screen.findByRole('button', { name: 'Create New Project' });
 
     const createButton = await screen.findByRole('button', { name: 'Create New Project' });
     await user.click(createButton);
@@ -150,7 +154,7 @@ describe('Integration Tests', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await screen.findByText('Select Project');
+    await screen.findByRole('button', { name: 'Create New Project' });
 
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
 
@@ -171,26 +175,26 @@ describe('Integration Tests', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await screen.findByText('Select Project');
+    await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Create New Project' }));
     await screen.findByRole('heading', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: /back to projects/i }));
-    await screen.findByText('Select Project');
+    await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Import Project' }));
     await screen.findByText('Import Method');
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
-    await screen.findByText('Select Project');
+    await screen.findByRole('button', { name: 'Create New Project' });
   });
 
   test('form validation across views', async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await screen.findByText('Select Project');
+    await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Create New Project' }));
     const createForm = screen.getByRole('form');
@@ -199,7 +203,7 @@ describe('Integration Tests', () => {
     expect(await screen.findByText('Project name is required')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /back to projects/i }));
-    await screen.findByText('Select Project');
+    await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Import Project' }));
     const importForm = screen.getByRole('form');
@@ -217,7 +221,10 @@ describe('Integration Tests', () => {
     const responses = [
       () => Promise.reject({ response: { data: { error: 'LLM test failed' } } }),
       () => Promise.resolve(mockLLMTestSuccess()),
-      () => Promise.resolve(mockLLMConfigureSuccess()),
+      () => {
+        llmStatusResponse = buildLlmStatus({ configured: true, ready: true });
+        return Promise.resolve(mockLLMConfigureSuccess());
+      },
       () => Promise.reject({ response: { data: { error: 'Project creation failed' } } })
     ];
 
@@ -240,7 +247,10 @@ describe('Integration Tests', () => {
     await user.click(screen.getByRole('button', { name: /Test & Save/i }));
     await waitFor(() => expect(mockAxios.post).toHaveBeenCalledWith('/api/llm/configure', expect.any(Object)));
 
-    await screen.findByText('Select Project');
+    await waitFor(() => {
+      expect(screen.queryByTestId('backend-offline-overlay')).not.toBeInTheDocument();
+    });
+    await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Create New Project' }));
     await screen.findByRole('heading', { name: 'Create New Project' });
@@ -270,8 +280,8 @@ describe('Integration Tests', () => {
     expect(screen.getByText('Persisted Project')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Close project' }));
-    await screen.findByText('Select Project');
+    await screen.findByRole('button', { name: 'Create New Project' });
 
-    expect(screen.queryByText('🚀 Getting Started')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Provider')).not.toBeInTheDocument();
   });
 });

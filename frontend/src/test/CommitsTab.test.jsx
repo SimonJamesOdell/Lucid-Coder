@@ -1181,6 +1181,25 @@ describe('CommitsTab', () => {
     expect(await screen.findByTestId('commit-no-selection')).toBeInTheDocument();
   });
 
+  test('shows commit hint when subject is missing', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-login',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T10:00:00.000Z' }]
+      }
+    };
+
+    axios.get.mockResolvedValueOnce({ data: { success: true, commits: [] } });
+
+    await renderCommitsTab();
+
+    expect(await screen.findByTestId('branch-commit-hint')).toHaveTextContent(
+      'Add a short subject line to enable the commit.'
+    );
+  });
+
   test('commit composer posts to commit endpoint and refreshes', async () => {
     const newCommit = {
       sha: 'fed111122223333',

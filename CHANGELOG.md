@@ -1,6 +1,16 @@
+## 0.4.5 (2026-02-01)
+- Bump version metadata to 0.4.5 across packages and docs.
+- Harden LLM configuration and requests by sanitizing API keys and adding tool-bridge fallback controls, with expanded LLM client/route tests.
+- Update question tool agent behavior with `list_dir` support, simpler fallback handling, and plain-text answer acceptance; refine agent request classification heuristics.
+- Skip autopilot test runs for CSS-only prompts with explicit status summaries.
+- Refine ChatPanel streaming reconciliation, add debug diagnostics toggle, and polish UI controls (ChatPanel, StatusPanel, Dropdown, Getting Started).
+- Expand backend/frontend tests for git settings recovery, agent repair paths, ChatPanel streaming, and goals API streaming.
+
 ## 0.4.4 (2026-01-31)
-- Close remaining backend coverage gaps in git connection service, settings payload normalization, and git scaffolding helpers.
-- Expand backend test coverage for git token expiry edge cases and provider error mapping.
+- Overhaul Git settings UX and data flow, including a richer Git tab UI, settings modal refinements, and improved navigation/preview integration.
+- Add backend Git connection service and git scaffolding helpers, plus expanded routes/settings handling for git workflows.
+- Expand app state settings persistence and Git settings normalization across frontend context helpers.
+- Add comprehensive frontend/backend tests for Git settings, Git tab flows, persistence, and git utilities to keep strict coverage gates green.
 
 ## 0.4.3 (2026-01-29)
 - Update version metadata across the repo and versioning documentation for the 0.4.3 release.

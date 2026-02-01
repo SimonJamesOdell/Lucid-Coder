@@ -232,12 +232,9 @@ describe('ChatPanel - Component Rendering Integration', () => {
       render(<ChatPanel width={320} side="left" onToggleSide={vi.fn()} />);
       
       const button = screen.getByTestId('chat-position-toggle');
-      const svg = button.querySelector('svg');
-      expect(svg).toBeInTheDocument();
-      
-      // Check that the path is for right arrow (M6 starts right-pointing path)
-      const path = svg.querySelector('path');
-      expect(path.getAttribute('d')).toContain('M6');
+      const icon = button.querySelector('.chat-toggle-icon');
+      expect(icon).toBeInTheDocument();
+      expect(icon).toHaveTextContent('◧');
     });
 
     it('renders left-pointing arrow icon when side is right', () => {
@@ -250,12 +247,9 @@ describe('ChatPanel - Component Rendering Integration', () => {
       render(<ChatPanel width={320} side="right" onToggleSide={vi.fn()} />);
       
       const button = screen.getByTestId('chat-position-toggle');
-      const svg = button.querySelector('svg');
-      expect(svg).toBeInTheDocument();
-      
-      // Check that the path is for left arrow (M10 starts left-pointing path)
-      const path = svg.querySelector('path');
-      expect(path.getAttribute('d')).toContain('M10');
+      const icon = button.querySelector('.chat-toggle-icon');
+      expect(icon).toBeInTheDocument();
+      expect(icon).toHaveTextContent('◨');
     });
 
     it('sets correct aria attributes on SVG icons', () => {
@@ -268,10 +262,9 @@ describe('ChatPanel - Component Rendering Integration', () => {
       render(<ChatPanel width={320} side="left" onToggleSide={vi.fn()} />);
       
       const button = screen.getByTestId('chat-position-toggle');
-      const svg = button.querySelector('svg');
-      
-      expect(svg.getAttribute('aria-hidden')).toBe('true');
-      expect(svg.getAttribute('focusable')).toBe('false');
+      const icon = button.querySelector('.chat-toggle-icon');
+
+      expect(icon.getAttribute('aria-hidden')).toBe('true');
     });
   });
 });

@@ -359,6 +359,7 @@ export class LLMClient {
 
     const requestType = options.__lucidcoderRequestType || 'generate';
     const phase = options.__lucidcoderPhase || 'unknown';
+    const disableToolBridgeFallback = options.__lucidcoderDisableToolBridgeFallback === true;
     const metricsContext = {
       provider: this.config.provider,
       model: this.config.model,
@@ -417,12 +418,18 @@ export class LLMClient {
           } catch (retryError) {
             const retryText = this.getErrorMessage(retryError);
             if (/tool choice is none, but model called a tool/i.test(retryText)) {
+              if (disableToolBridgeFallback) {
+                throw retryError;
+              }
               response = await request(this.buildActionToolBridgePayload(basePayload));
             } else {
               throw retryError;
             }
           }
         } else if (/failed to parse tool call arguments as json/i.test(nestedText)) {
+          if (disableToolBridgeFallback) {
+            throw error;
+          }
           // Some OpenAI-compatible providers will reject malformed tool-call argument payloads.
           // Fall back to a plain request (no tool schemas) so we can rely on plain text output.
           response = await request(basePayload);
@@ -431,6 +438,9 @@ export class LLMClient {
           (/not in request\.tools/i.test(nestedText) && /attempted to call tool/i.test(nestedText)) ||
           (/request\.tools/i.test(nestedText) && /not in/i.test(nestedText) && /tool/i.test(nestedText))
         ) {
+          if (disableToolBridgeFallback) {
+            throw error;
+          }
           // Retry with a tool bridge so strict providers accept tool-capable responses.
           // Even if the caller disabled tool bridging, this error indicates the provider expects tools
           // for the model's response; use the action-tool bridge so the model's tool calls can be
