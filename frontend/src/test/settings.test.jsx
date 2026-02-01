@@ -6,7 +6,8 @@ import {
   fetchProjectBranchesOverview,
   checkoutProjectBranch,
   updateGitSettings,
-  testGitConnection
+  testGitConnection,
+  updateProjectGitSettings
 } from '../context/appState/settings.js';
 
 const buildResponse = (ok, payload) => ({
@@ -242,5 +243,61 @@ describe('settings git helpers', () => {
   test('testGitConnection throws default error when response omits details', async () => {
     const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
     await expect(testGitConnection({ trackedFetch })).rejects.toThrow('Failed to test git connection');
+  });
+
+  test('updateProjectGitSettings uses project overrides as base and omits token by default', async () => {
+    let capturedBody;
+    const trackedFetch = (url, options) => {
+      capturedBody = JSON.parse(options.body);
+      return Promise.resolve(buildResponse(true, { success: true, settings: { workflow: 'cloud' } }));
+    };
+    const setProjectGitSettings = vi.fn();
+
+    const projectGitSettings = {
+      'proj-1': {
+        workflow: 'cloud',
+        provider: 'gitlab',
+        remoteUrl: 'https://gitlab.com/acme/demo.git',
+        defaultBranch: 'main',
+        autoPush: true
+      }
+    };
+
+    await updateProjectGitSettings({
+      trackedFetch,
+      projectId: 'proj-1',
+      updates: { defaultBranch: 'release' },
+      gitSettings: { workflow: 'local', provider: 'github' },
+      projectGitSettings,
+      setProjectGitSettings
+    });
+
+    expect(capturedBody).toMatchObject({
+      workflow: 'cloud',
+      provider: 'gitlab',
+      remoteUrl: 'https://gitlab.com/acme/demo.git',
+      defaultBranch: 'release'
+    });
+    expect(Object.prototype.hasOwnProperty.call(capturedBody, 'token')).toBe(false);
+  });
+
+  test('updateProjectGitSettings includes token when explicitly provided', async () => {
+    let capturedBody;
+    const trackedFetch = (url, options) => {
+      capturedBody = JSON.parse(options.body);
+      return Promise.resolve(buildResponse(true, { success: true, settings: { workflow: 'cloud' } }));
+    };
+    const setProjectGitSettings = vi.fn();
+
+    await updateProjectGitSettings({
+      trackedFetch,
+      projectId: 'proj-2',
+      updates: { token: 'secret' },
+      gitSettings: { workflow: 'cloud', provider: 'github', remoteUrl: '' },
+      projectGitSettings: {},
+      setProjectGitSettings
+    });
+
+    expect(capturedBody.token).toBe('secret');
   });
 });

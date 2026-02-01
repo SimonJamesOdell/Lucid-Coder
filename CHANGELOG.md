@@ -1,3 +1,8 @@
+## 0.4.6 (2026-02-01)
+- Bump version metadata to 0.4.6 across packages and docs.
+- Persist per-project Git settings client-side and avoid clearing remote URLs on partial updates.
+- Ensure default branch updates include full project Git settings payload and expand Git settings tests.
+
 ## 0.4.5 (2026-02-01)
 - Bump version metadata to 0.4.5 across packages and docs.
 - Harden LLM configuration and requests by sanitizing API keys and adding tool-bridge fallback controls, with expanded LLM client/route tests.

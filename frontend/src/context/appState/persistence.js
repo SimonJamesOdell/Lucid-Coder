@@ -146,6 +146,45 @@ const loadGitSettingsFromStorage = () => {
   }
 };
 
+const sanitizeProjectGitSettingsEntry = (entry) => {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+  const { autoPush, useCommitTemplate, commitTemplate, ...rest } = entry;
+  return {
+    ...rest,
+    token: ''
+  };
+};
+
+const loadProjectGitSettingsFromStorage = () => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const stored = localStorage.getItem('projectGitSettings');
+    if (!stored) {
+      return {};
+    }
+    const parsed = JSON.parse(stored);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+    const next = {};
+    Object.entries(parsed).forEach(([projectId, entry]) => {
+      const sanitized = sanitizeProjectGitSettingsEntry(entry);
+      if (sanitized) {
+        next[projectId] = sanitized;
+      }
+    });
+    return next;
+  } catch (error) {
+    console.warn('Failed to parse projectGitSettings from storage', error);
+    return {};
+  }
+};
+
 const defaultGitConnectionStatus = {
   provider: '',
   account: null,
@@ -185,6 +224,7 @@ export {
   loadWorkingBranchesFromStorage,
   loadPreviewPanelStateByProject,
   loadGitSettingsFromStorage,
+  loadProjectGitSettingsFromStorage,
   defaultGitConnectionStatus,
   loadGitConnectionStatusFromStorage
 };

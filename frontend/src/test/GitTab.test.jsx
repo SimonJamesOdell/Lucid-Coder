@@ -763,7 +763,12 @@ describe('GitTab', () => {
     await user.click(screen.getByTestId('git-update-default-branch'));
 
     await waitFor(() => {
-      expect(updateProjectGitSettings).toHaveBeenCalledWith('proj-1', { defaultBranch: 'release' });
+      expect(updateProjectGitSettings).toHaveBeenCalledWith('proj-1', {
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/lucid/repo.git',
+        defaultBranch: 'release'
+      });
     });
     expect(await screen.findByText('Default branch set to release.')).toBeInTheDocument();
   });
@@ -781,7 +786,12 @@ describe('GitTab', () => {
     await user.click(screen.getByTestId('git-update-default-branch'));
 
     await waitFor(() => {
-      expect(updateProjectGitSettings).toHaveBeenCalledWith('proj-1', { defaultBranch: 'release' });
+      expect(updateProjectGitSettings).toHaveBeenCalledWith('proj-1', {
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/lucid/repo.git',
+        defaultBranch: 'release'
+      });
     });
     expect(await screen.findByText('Default branch set to release.')).toBeInTheDocument();
   });
@@ -796,6 +806,85 @@ describe('GitTab', () => {
     await user.click(screen.getByTestId('git-update-default-branch'));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to update default branch.');
+  });
+
+  test('update default branch uses global provider when connection mode is global', async () => {
+    const updateProjectGitSettings = vi.fn().mockResolvedValue({ defaultBranch: 'release' });
+    useAppState.mockReturnValue(buildContext({
+      updateProjectGitSettings,
+      gitSettings: { workflow: 'cloud', provider: '', tokenPresent: true }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('project-connection-global'));
+
+    const branchInput = screen.getByTestId('project-default-branch');
+    await user.clear(branchInput);
+    await user.type(branchInput, 'release');
+    await user.click(screen.getByTestId('git-update-default-branch'));
+
+    await waitFor(() => {
+      expect(updateProjectGitSettings).toHaveBeenCalledWith('proj-1', {
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/lucid/repo.git',
+        defaultBranch: 'release'
+      });
+    });
+  });
+
+  test('update default branch uses custom provider when connection mode is custom', async () => {
+    const updateProjectGitSettings = vi.fn().mockResolvedValue({ defaultBranch: 'release' });
+    useAppState.mockReturnValue(buildContext({
+      updateProjectGitSettings,
+      gitSettings: { workflow: 'cloud', provider: 'github', tokenPresent: true },
+      getEffectiveGitSettings: vi.fn().mockReturnValue({
+        workflow: 'cloud',
+        provider: 'gitlab',
+        remoteUrl: 'https://gitlab.com/acme/repo.git',
+        defaultBranch: 'main'
+      }),
+      getProjectGitSettingsSnapshot: vi.fn().mockReturnValue({
+        inheritsFromGlobal: false,
+        effectiveSettings: {
+          workflow: 'cloud',
+          provider: 'gitlab',
+          remoteUrl: 'https://gitlab.com/acme/repo.git',
+          defaultBranch: 'main'
+        },
+        projectSettings: {
+          workflow: 'cloud',
+          provider: 'gitlab',
+          remoteUrl: 'https://gitlab.com/acme/repo.git',
+          defaultBranch: 'main'
+        },
+        globalSettings: {
+          workflow: 'local',
+          provider: 'github',
+          remoteUrl: '',
+          defaultBranch: 'main'
+        }
+      })
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    const branchInput = screen.getByTestId('project-default-branch');
+    await user.clear(branchInput);
+    await user.type(branchInput, 'release');
+    await user.click(screen.getByTestId('git-update-default-branch'));
+
+    await waitFor(() => {
+      expect(updateProjectGitSettings).toHaveBeenCalledWith('proj-1', {
+        workflow: 'cloud',
+        provider: 'gitlab',
+        remoteUrl: 'https://gitlab.com/acme/repo.git',
+        defaultBranch: 'release'
+      });
+    });
   });
 
   test('renders with missing project git status map', () => {
