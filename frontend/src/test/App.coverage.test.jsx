@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, test, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import App from '../App'
 import { VERSION } from '../../../shared/version.mjs'
 
@@ -367,14 +367,15 @@ describe('App coverage branches', () => {
     vi.useFakeTimers()
 
     const healthResponses = [
-      Promise.reject(new Error('Backend unreachable')),
-      Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      () => Promise.resolve({ ok: false, status: 503, json: async () => ({ ok: false }) }),
+      () => Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     ]
 
     fetch.mockReset()
     fetch.mockImplementation((url) => {
       if (url === '/api/health') {
-        return healthResponses.shift()
+        const next = healthResponses.shift();
+        return next ? next() : Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
       }
       if (url === '/api/version') {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: VERSION }) })
@@ -384,19 +385,18 @@ describe('App coverage branches', () => {
 
     render(<App />)
 
-    await vi.advanceTimersByTimeAsync(0)
-    await Promise.resolve()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
 
     expect(screen.getByTestId('backend-offline-overlay')).toBeInTheDocument()
 
-    await vi.advanceTimersByTimeAsync(5000)
-    await Promise.resolve()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
 
     const healthCalls = fetch.mock.calls.filter(([url]) => url === '/api/health')
-    expect(healthCalls.length).toBeGreaterThanOrEqual(1)
-
-    await vi.advanceTimersByTimeAsync(0)
-    await Promise.resolve()
+    expect(healthCalls.length).toBeGreaterThanOrEqual(2)
 
     expect(screen.queryByTestId('backend-offline-overlay')).not.toBeInTheDocument()
 

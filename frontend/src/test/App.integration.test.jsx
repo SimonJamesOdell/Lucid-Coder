@@ -113,7 +113,7 @@ describe('App Component Integration', () => {
       })
 
       // The backend gate should block the rest of the UI while offline.
-      expect(screen.queryByText(/Getting Started/i)).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Provider')).not.toBeInTheDocument()
     })
 
     test('shows backend offline overlay while settings are still loading', async () => {
@@ -184,7 +184,7 @@ describe('App Component Integration', () => {
       })
 
       await screen.findByText('Select Project')
-      expect(screen.queryByText(/Getting Started/i)).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Provider')).not.toBeInTheDocument()
     })
 
     test('shows backend offline overlay when backend is down behind a proxy (502)', async () => {
@@ -615,7 +615,7 @@ describe('App Component Integration', () => {
       renderApp()
 
       await waitFor(() => {
-        expect(screen.getByText(/Getting Started/)).toBeInTheDocument()
+        expect(screen.getByLabelText('Provider')).toBeInTheDocument()
       })
     })
   })
@@ -630,7 +630,7 @@ describe('App Component Integration', () => {
         const hasContent = screen.queryByText('Select Project') ||
           screen.queryByText(/error/i) ||
           screen.queryByText('Loading') ||
-          screen.queryByText(/Getting Started/i)
+          screen.queryByLabelText('Provider')
         expect(hasContent).not.toBeNull()
       })
 

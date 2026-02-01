@@ -189,6 +189,42 @@ describe('goalsApi helpers', () => {
     expect(completed).toEqual([{ kind: 'question' }]);
   });
 
+  test('agentRequestStream parses a trailing event without a delimiter', async () => {
+    const encoder = new TextEncoder();
+    const payload = [
+      'event: chunk\n',
+      'data: {"text":"Hello"}\n\n',
+      'event: done\n',
+      'data: {"result":{"kind":"question"}}'
+    ].join('');
+
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({ value: encoder.encode(payload), done: false })
+        .mockResolvedValueOnce({ value: undefined, done: true })
+    };
+
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { getReader: () => reader }
+    });
+
+    const receivedChunks = [];
+    const completed = [];
+
+    await agentRequestStream({
+      projectId: 'proj-1',
+      prompt: 'Hello',
+      onChunk: (text) => receivedChunks.push(text),
+      onComplete: (result) => completed.push(result)
+    });
+
+    expect(receivedChunks).toEqual(['Hello']);
+    expect(completed).toEqual([{ kind: 'question' }]);
+  });
+
   test('agentRequestStream invokes chunk and done handlers', async () => {
     const encoder = new TextEncoder();
     const reader = {

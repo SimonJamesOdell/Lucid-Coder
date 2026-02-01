@@ -41,6 +41,7 @@ const ChatPanel = ({
   const [goalCount, setGoalCount] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [showAgentDebug, setShowAgentDebug] = useState(false);
   const [pendingClarification, setPendingClarification] = useState(null);
   const [autoFixHalted, setAutoFixHalted] = useState(() => {
     /* c8 ignore next 3 */
@@ -379,11 +380,14 @@ const ChatPanel = ({
     handleUndoLastChangePrompt,
     handleAutopilotMessage,
     handleAutopilotControl,
+    appendStreamingChunk,
     autopilotResumeAttemptedRef,
     isMessagesScrolledToBottom,
     messagesRef,
     messagesContainerRef,
     scrollMessagesToBottom,
+    streamingMessageIdRef,
+    streamingTextRef,
     refreshAutopilotStatus,
     stopAutopilotPoller,
     setAutopilotSession,
@@ -444,6 +448,10 @@ const ChatPanel = ({
       return;
     }
 
+    if (!showAgentDebug) {
+      return;
+    }
+
     const formattedMessages = steps
       .map(formatAgentStepMessage)
       .filter(Boolean)
@@ -452,6 +460,29 @@ const ChatPanel = ({
     if (formattedMessages.length > 0) {
       setMessages((prev) => [...prev, ...formattedMessages]);
     }
+  };
+
+  const buildAgentDiagnostics = (meta) => {
+    if (!meta || typeof meta !== 'object') {
+      return null;
+    }
+    const entries = [];
+    if (meta.classificationError) {
+      entries.push(`classification: ${meta.classificationError}`);
+    }
+    if (meta.questionError) {
+      entries.push(`question: ${meta.questionError}`);
+    }
+    if (meta.planningError) {
+      entries.push(`planning: ${meta.planningError}`);
+    }
+    if (meta.fallbackPlanningError) {
+      entries.push(`fallback planning: ${meta.fallbackPlanningError}`);
+    }
+    if (!entries.length) {
+      return null;
+    }
+    return `Diagnostics: ${entries.join(' | ')}`;
   };
 
   const streamAssistantMessage = useCallback((text, options = {}) => {
@@ -511,6 +542,10 @@ const ChatPanel = ({
       throw new Error(streamError);
     }
 
+    if (!result) {
+      throw new Error('Streaming request did not return a result');
+    }
+
     return result;
   }, [appendStreamingChunk]);
 
@@ -526,6 +561,24 @@ const ChatPanel = ({
     if (result.kind === 'question' && result.answer) {
       if (!streamedAnswer) {
         streamAssistantMessage(result.answer);
+      } else {
+        const streamedText = streamingTextRef.current?.trim() || '';
+        const finalText = result.answer.trim();
+        if (!streamedText || finalText.length > streamedText.length) {
+          streamingTextRef.current = result.answer;
+          if (streamingMessageIdRef.current) {
+            setMessages((prev) => prev.map((item) => (
+              item.id === streamingMessageIdRef.current ? { ...item, text: result.answer } : item
+            )));
+          } else {
+            streamAssistantMessage(result.answer);
+          }
+        }
+      }
+      const diagnostics = buildAgentDiagnostics(result.meta);
+      if (diagnostics && showAgentDebug) {
+        console.warn('[Agent] Diagnostics:', result.meta);
+        setMessages((prev) => [...prev, createMessage('assistant', diagnostics, { variant: 'status' })]);
       }
       return;
     }
@@ -735,25 +788,6 @@ const ChatPanel = ({
 
         let streamedAnswer = false;
         resetStreamingMessage();
-
-        if (!isTestEnv && typeof window !== 'undefined' && typeof window.fetch === 'function') {
-          try {
-            const streamedResult = await runAgentRequestStream({
-              projectId: currentProject.id,
-              prompt: resolvedPrompt
-            });
-            streamedAnswer = Boolean(streamingMessageIdRef.current);
-            await handleAgentResult(streamedResult, {
-              streamedAnswer,
-              prompt: trimmed,
-              resolvedPrompt
-            });
-            resetStreamingMessage();
-            return;
-          } catch (streamError) {
-            resetStreamingMessage();
-          }
-        }
 
         const result = await callAgentWithTimeout({ projectId: currentProject.id, prompt: resolvedPrompt });
         await handleAgentResult(result, {
@@ -973,6 +1007,8 @@ const ChatPanel = ({
   if (ChatPanel.__testHooks?.handlers) {
     ChatPanel.__testHooks.handlers.submitPrompt = submitPrompt;
     ChatPanel.__testHooks.handlers.runAutomatedTestFixGoal = runAutomatedTestFixGoal;
+    ChatPanel.__testHooks.handlers.runAgentRequestStream = runAgentRequestStream;
+    ChatPanel.__testHooks.handlers.handleAgentResult = handleAgentResult;
   }
 
   useEffect(() => {
@@ -1041,52 +1077,39 @@ const ChatPanel = ({
     <div className={panelClassName} style={panelStyle} data-testid="chat-panel">
       <div className="chat-header">
         <h3>AI Assistant</h3>
-        <button
-          type="button"
-          className="chat-autofix-toggle"
-          data-testid="chat-autofix-toggle"
-          onClick={() => setAutofixHaltFlag(!autoFixHalted)}
-          title={autoFixHalted ? 'Resume automated test fixing' : 'Stop automated test fixing'}
-        >
-          {autoFixHalted ? 'Resume' : 'Stop'}
-        </button>
-        {onToggleSide && (
+        <div className="chat-header-actions">
           <button
             type="button"
-            className="chat-position-toggle"
-            onClick={onToggleSide}
-            data-testid="chat-position-toggle"
-            aria-label={side === 'left' ? 'Move assistant to right side' : 'Move assistant to left side'}
+            className="chat-autofix-toggle"
+            data-testid="chat-autofix-toggle"
+            onClick={() => setAutofixHaltFlag(!autoFixHalted)}
+            title={autoFixHalted ? 'Resume automated test fixing' : 'Stop automated test fixing'}
           >
-            {side === 'left' ? (
-              <svg
-                className="chat-toggle-icon"
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                aria-hidden="true"
-                focusable="false"
-              >
-                <path d="M6 4L10 8L6 12V4Z" fill="currentColor"/>
-              </svg>
-            ) : (
-              <svg
-                className="chat-toggle-icon"
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                aria-hidden="true"
-                focusable="false"
-              >
-                <path d="M10 4L6 8L10 12V4Z" fill="currentColor"/>
-              </svg>
-            )}
+            {autoFixHalted ? 'Resume' : '■'}
           </button>
-        )}
+          <button
+            type="button"
+            className={`chat-debug-toggle${showAgentDebug ? ' is-active' : ''}`}
+            onClick={() => setShowAgentDebug((prev) => !prev)}
+            aria-pressed={showAgentDebug}
+            data-testid="chat-debug-toggle"
+          >
+            {showAgentDebug ? 'Hide debug details' : '...'}
+          </button>
+          {onToggleSide && (
+            <button
+              type="button"
+              className="chat-position-toggle"
+              onClick={onToggleSide}
+              data-testid="chat-position-toggle"
+              aria-label={side === 'left' ? 'Move assistant to right side' : 'Move assistant to left side'}
+            >
+              <span className="chat-toggle-icon" aria-hidden="true">
+                {side === 'left' ? '◧' : '◨'}
+              </span>
+            </button>
+          )}
+        </div>
         {isSending ? (
           <div className="chat-typing" data-testid="chat-typing">
             <span className="chat-typing__label">Assistant is thinking</span>

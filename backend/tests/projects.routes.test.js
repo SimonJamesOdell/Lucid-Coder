@@ -12,6 +12,7 @@ import {
   closeDatabase,
   createProject,
   getProject,
+  saveGitSettings,
   saveProjectGitSettings,
   getProjectGitSettings
 } from '../database.js';
@@ -5139,6 +5140,150 @@ describe('Projects API with Scaffolding', () => {
       expect(response.body.inheritsFromGlobal).toBe(true);
       expect(response.body.settings).toMatchObject({ workflow: 'local', provider: 'github' });
       expect(response.body.projectSettings).toBeNull();
+    });
+
+    test('backfills project git settings from git remote when global connection is cloud', async () => {
+      const { project } = await createPersistedProject();
+      await saveGitSettings({ workflow: 'cloud', provider: 'github', defaultBranch: 'main' });
+
+      const response = await request(app).get(`/api/projects/${project.id}/git-settings`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.inheritsFromGlobal).toBe(false);
+      expect(response.body.projectSettings).toMatchObject({
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/octo/repo.git'
+      });
+
+      const stored = await getProjectGitSettings(project.id);
+      expect(stored.remoteUrl).toBe('https://github.com/octo/repo.git');
+    });
+
+    test('recovers git remote and persists default provider/branch', async () => {
+      const { project } = await createPersistedProject();
+      await saveGitSettings({ workflow: 'cloud', provider: '', defaultBranch: '' });
+
+      gitUtils.getRemoteUrl.mockResolvedValueOnce('https://github.com/octo/recovered.git');
+
+      const response = await request(app).get(`/api/projects/${project.id}/git-settings`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.inheritsFromGlobal).toBe(false);
+      expect(response.body.projectSettings).toMatchObject({
+        workflow: 'cloud',
+        provider: 'github',
+        defaultBranch: 'main',
+        remoteUrl: 'https://github.com/octo/recovered.git'
+      });
+      expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(project.path, { defaultBranch: 'main' });
+
+      const stored = await getProjectGitSettings(project.id);
+      expect(stored).toMatchObject({
+        workflow: 'cloud',
+        provider: 'github',
+        defaultBranch: 'main',
+        remoteUrl: 'https://github.com/octo/recovered.git'
+      });
+    });
+
+    test('persists recovered remote settings with defaults when project settings are missing', async () => {
+      const { project } = await createPersistedProject();
+      await saveGitSettings({ workflow: 'cloud', provider: '', defaultBranch: '', username: '' });
+
+      gitUtils.getRemoteUrl.mockResolvedValueOnce('https://github.com/octo/recovered.git');
+
+      const databaseModule = await import('../database.js');
+      const saveSpy = vi.spyOn(databaseModule, 'saveProjectGitSettings');
+
+      const response = await request(app).get(`/api/projects/${project.id}/git-settings`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.inheritsFromGlobal).toBe(false);
+      expect(response.body.projectSettings).toMatchObject({
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/octo/recovered.git',
+        username: '',
+        defaultBranch: 'main',
+        autoPush: false,
+        useCommitTemplate: false,
+        commitTemplate: ''
+      });
+
+      expect(saveSpy).toHaveBeenCalledWith(String(project.id), expect.objectContaining({
+        workflow: 'cloud',
+        provider: 'github',
+        remoteUrl: 'https://github.com/octo/recovered.git',
+        username: '',
+        defaultBranch: 'main',
+        autoPush: false,
+        useCommitTemplate: false,
+        commitTemplate: ''
+      }));
+
+      saveSpy.mockRestore();
+    });
+
+    test('backfills with global defaults when provider and branch are missing', async () => {
+      const { project } = await createPersistedProject();
+      await saveGitSettings({ workflow: 'cloud', provider: '', defaultBranch: '' });
+
+      const response = await request(app).get(`/api/projects/${project.id}/git-settings`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.inheritsFromGlobal).toBe(false);
+      expect(response.body.projectSettings).toMatchObject({
+        workflow: 'cloud',
+        provider: 'github',
+        defaultBranch: 'main'
+      });
+      expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(project.path, { defaultBranch: 'main' });
+    });
+
+    test('backfills when project remoteUrl is blank and preserves project defaults', async () => {
+      const { project } = await createPersistedProject();
+      await saveGitSettings({ workflow: 'cloud', provider: 'github', defaultBranch: 'main' });
+      await saveProjectGitSettings(project.id, {
+        workflow: 'cloud',
+        provider: 'gitlab',
+        remoteUrl: '   ',
+        username: 'ci-bot',
+        defaultBranch: 'develop',
+        autoPush: false
+      });
+
+      gitUtils.getRemoteUrl.mockResolvedValueOnce('https://github.com/octo/blank.git');
+
+      const response = await request(app).get(`/api/projects/${project.id}/git-settings`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.inheritsFromGlobal).toBe(false);
+      expect(response.body.projectSettings).toMatchObject({
+        workflow: 'cloud',
+        provider: 'gitlab',
+        username: 'ci-bot',
+        defaultBranch: 'develop',
+        remoteUrl: 'https://github.com/octo/blank.git'
+      });
+      expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(project.path, { defaultBranch: 'develop' });
+    });
+
+    test('does not backfill when git remote recovery fails', async () => {
+      const { project } = await createPersistedProject();
+      await saveGitSettings({ workflow: 'cloud', provider: 'github', defaultBranch: 'main' });
+
+      gitUtils.ensureGitRepository.mockRejectedValueOnce(new Error('no repo'));
+
+      const response = await request(app).get(`/api/projects/${project.id}/git-settings`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.inheritsFromGlobal).toBe(true);
+      expect(response.body.projectSettings).toBeNull();
+      expect(response.body.settings).toMatchObject({ workflow: 'cloud', provider: 'github' });
+      expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(project.path, { defaultBranch: 'main' });
+      expect(gitUtils.getRemoteUrl).not.toHaveBeenCalled();
     });
 
     test('returns project git settings when they exist', async () => {

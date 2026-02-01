@@ -80,6 +80,31 @@ describe('LLM Routes', () => {
       });
     });
 
+    it('sanitizes API key input before testing', async () => {
+      llmClient.testConnection.mockResolvedValue({
+        model: 'gpt-4',
+        responseTime: 200
+      });
+
+      await request(app)
+        .post('/api/llm/test')
+        .send({
+          provider: 'openai',
+          apiKey: 'sk-test\n\t',
+          model: 'gpt-4',
+          apiUrl: 'https://api.openai.com/v1'
+        })
+        .expect(200);
+
+      expect(llmClient.testConnection).toHaveBeenCalledWith({
+        provider: 'openai',
+        model: 'gpt-4',
+        api_url: 'https://api.openai.com/v1',
+        requires_api_key: true,
+        apiKey: 'sk-test'
+      });
+    });
+
     it('handles configuration without API key', async () => {
       llmClient.testConnection.mockResolvedValue({
         model: 'llama2',
@@ -340,6 +365,31 @@ describe('LLM Routes', () => {
         requiresApiKey: true
       });
       expect(llmClient.initialize).toHaveBeenCalled();
+    });
+
+    it('sanitizes API key input before saving configuration', async () => {
+      db_operations.saveLLMConfig.mockResolvedValue();
+      llmClient.initialize.mockResolvedValue();
+
+      const response = await request(app)
+        .post('/api/llm/configure')
+        .send({
+          provider: 'openai',
+          apiKey: 'sk-test\n',
+          model: 'gpt-4',
+          apiUrl: 'https://api.openai.com/v1'
+        })
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(encryptApiKey).toHaveBeenCalledWith('sk-test');
+      expect(db_operations.saveLLMConfig).toHaveBeenCalledWith({
+        provider: 'openai',
+        model: 'gpt-4',
+        apiUrl: 'https://api.openai.com/v1',
+        apiKeyEncrypted: 'encrypted_sk-test',
+        requiresApiKey: true
+      });
     });
 
     it('saves configuration without API key', async () => {

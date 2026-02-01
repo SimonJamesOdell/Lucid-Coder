@@ -1,22 +1,10 @@
 import { llmClient } from '../llm-client.js';
-import { readProjectFile } from './projectTools.js';
+import { listProjectDirectory, readProjectFile } from './projectTools.js';
 import { listGoals as listStoredGoals } from './goalStore.js';
 import JSON5 from 'json5';
 
 const MAX_AGENT_STEPS = 4;
 const CONTENT_SNIPPET_LIMIT = 1200;
-const FALLBACK_FILES = [
-  'README.md',
-  'package.json',
-  'frontend/package.json',
-  'backend/package.json',
-  'frontend/src/App.jsx',
-  'frontend/src/App.tsx',
-  'frontend/src/main.jsx',
-  'frontend/src/main.tsx',
-  'frontend/src/index.jsx',
-  'frontend/src/index.tsx'
-];
 
 /* c8 ignore start */
 const SYSTEM_PROMPT = `You are an autonomous software engineer with access to developer tools.
@@ -24,19 +12,20 @@ You must figure out answers about a project by reasoning step-by-step and using 
 
 IMPORTANT:
 - You must respond with a SINGLE JSON object and nothing else (no prose, no Markdown, no code fences).
-- Never invoke API-level tool/function calls. All tool usage must be described via the JSON object you output.
-- If you need to use a tool, emit { "action": "read_file", ... } as text; do NOT rely on the API for tools.
+- You may request tools by returning either a JSON action object or a tool call. Tool calls will be converted into JSON actions automatically.
+- Return complete answers (no truncation). If you format with Markdown, ensure it is fully closed and complete.
 - This repo often uses a workspace layout. Frontend files usually live under frontend/ and backend files under backend/. Check those folders first for UI questions.
  - Output MUST be plain text JSON in the assistant message content. Do NOT use tool_calls/function_call.
 
 TOOLS AVAILABLE:
 - read_file(path): returns the contents of the project file at the given relative path.
+- list_dir(path?): lists files and folders at a relative path (root if omitted).
 - list_goals(): returns the persisted goals for the current project (from the DB).
 
 RESPONSE FORMAT:
 Always respond with a strict JSON object containing:
 {
-  "action": "read_file" | "list_goals" | "answer" | "unable",
+  "action": "read_file" | "list_dir" | "list_goals" | "answer" | "unable",
   "path"?: string,
   "reason"?: string,
   "answer"?: string,
@@ -84,6 +73,14 @@ const summarizeContent = (content = '', limit = CONTENT_SNIPPET_LIMIT) => {
     return content;
   }
   return `${content.slice(0, limit)}\n…content truncated…`;
+};
+
+const summarizeDirectory = (entries = []) => {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return 'Directory is empty.';
+  }
+  const lines = entries.map((entry) => `${entry.type === 'dir' ? 'dir' : 'file'}: ${entry.name}`);
+  return summarizeContent(lines.join('\n'));
 };
 
 const shouldIncludeGoalsContext = (prompt = '') => {
@@ -197,6 +194,9 @@ const coerceJsonObject = (raw) => {
 const parseAgentJson = (raw) => {
   const parsed = coerceJsonObject(raw);
   if (!parsed || typeof parsed !== 'object') {
+    if (typeof raw === 'string' && raw.trim()) {
+      return { action: 'answer', answer: raw.trim() };
+    }
     throw Object.assign(new Error('Agent planner returned invalid JSON'), { statusCode: 502 });
   }
   if (!parsed.action) {
@@ -204,6 +204,7 @@ const parseAgentJson = (raw) => {
   }
   return parsed;
 };
+
 
 const tryRepairPlannerJson = async ({ messages, rawDecision }) => {
   // Keep unit tests strict: only attempt self-repair outside test runs.
@@ -227,7 +228,7 @@ const tryRepairPlannerJson = async ({ messages, rawDecision }) => {
     role: 'user',
     content:
       'Rewrite your previous response as EXACTLY one JSON object matching this schema: ' +
-      '{"action":"read_file"|"list_goals"|"answer"|"unable","path"?:string,"reason"?:string,"answer"?:string,"explanation"?:string}.'
+      '{"action":"read_file"|"list_dir"|"list_goals"|"answer"|"unable","path"?:string,"reason"?:string,"answer"?:string,"explanation"?:string}.'
   };
 
   const repaired = await llmClient.generateResponse(
@@ -235,7 +236,7 @@ const tryRepairPlannerJson = async ({ messages, rawDecision }) => {
     {
       max_tokens: 600,
       temperature: 0,
-      __lucidcoderDisableToolBridge: true,
+      __lucidcoderDisableToolBridge: false,
       __lucidcoderPhase: 'question',
       __lucidcoderRequestType: 'question_decision_repair'
     }
@@ -250,84 +251,6 @@ const tryRepairPlannerJson = async ({ messages, rawDecision }) => {
 
 const createAgentError = (message) => Object.assign(new Error(message), { statusCode: 502 });
 
-const FALLBACK_SYSTEM_PROMPT = `You are a senior developer assistant. You will be given project files and a question about the project. Answer the question as accurately as possible using ONLY the supplied files. If the information is not present, say so explicitly. The repo may use frontend/ and backend/ subfolders for source code. You may use Markdown for formatting.`;
-
-const collectFallbackSections = async (projectId, prompt) => {
-  const sections = [];
-
-  if (shouldIncludeGoalsContext(prompt)) {
-    try {
-      const goals = await listStoredGoals(projectId);
-      if (goals.length) {
-        sections.push({
-          path: 'agent_goals',
-          content: summarizeGoalsForPrompt(goals)
-        });
-      }
-    } catch {
-      // Ignore goal listing failures for fallback context.
-    }
-  }
-
-  for (const relativePath of FALLBACK_FILES) {
-    try {
-      const content = await readProjectFile(projectId, relativePath);
-      sections.push({ path: relativePath, content });
-    } catch {
-      // Ignore missing files.
-    }
-  }
-  return sections;
-};
-
-const tryFallbackAnswer = async ({ projectId, prompt, steps }) => {
-  const sections = await collectFallbackSections(projectId, prompt);
-  if (!sections.length) {
-    return null;
-  }
-
-  const contextText = sections
-    .map((section) => `FILE: ${section.path}\n${summarizeContent(section.content)}`)
-    .join('\n\n');
-
-  const messages = [
-    { role: 'system', content: FALLBACK_SYSTEM_PROMPT },
-    {
-      role: 'user',
-      content: `QUESTION:\n${prompt}\n\nPROJECT FILES:\n${contextText}`
-    }
-  ];
-
-  const rawAnswer = await llmClient.generateResponse(messages, {
-    max_tokens: 600,
-    temperature: 0,
-    __lucidcoderDisableToolBridge: true,
-    __lucidcoderPhase: 'question',
-    __lucidcoderRequestType: 'question_fallback_answer'
-  });
-
-  const answer = rawAnswer?.trim();
-  if (!answer) {
-    return null;
-  }
-
-  const fallbackSteps = [
-    {
-      type: 'action',
-      action: 'fallback_context',
-      reason: 'Gather default project files to answer directly.'
-    },
-    ...sections.map((section) => ({
-      type: 'observation',
-      action: 'read_file',
-      target: section.path,
-      summary: summarizeContent(section.content)
-    }))
-  ];
-
-  steps.push(...fallbackSteps);
-  return { answer, steps };
-};
 
 export const answerProjectQuestion = async ({ projectId, prompt }) => {
   if (!projectId) {
@@ -346,7 +269,7 @@ export const answerProjectQuestion = async ({ projectId, prompt }) => {
     const rawDecision = await llmClient.generateResponse(messages, {
       max_tokens: 600,
       temperature: 0,
-      __lucidcoderDisableToolBridge: true,
+      __lucidcoderDisableToolBridge: false,
       __lucidcoderPhase: 'question',
       __lucidcoderRequestType: 'question_decision'
     });
@@ -359,10 +282,6 @@ export const answerProjectQuestion = async ({ projectId, prompt }) => {
       if (repaired) {
         decision = repaired;
       } else {
-        const fallback = await tryFallbackAnswer({ projectId, prompt, steps });
-        if (fallback) {
-          return fallback;
-        }
         throw error;
       }
     }
@@ -394,6 +313,35 @@ export const answerProjectQuestion = async ({ projectId, prompt }) => {
           action: 'read_file',
           target: targetPath,
           error: error.message || 'Failed to read file'
+        });
+      }
+
+      continue;
+    }
+
+    if (action === 'list_dir') {
+      const targetPath = decision.path?.trim() || '';
+      steps.push({
+        type: 'action',
+        action: 'list_dir',
+        target: targetPath || '.',
+        reason: decision.reason || 'List files and folders'
+      });
+
+      try {
+        const entries = await listProjectDirectory(projectId, targetPath);
+        steps.push({
+          type: 'observation',
+          action: 'list_dir',
+          target: targetPath || '.',
+          summary: summarizeDirectory(entries)
+        });
+      } catch (error) {
+        steps.push({
+          type: 'observation',
+          action: 'list_dir',
+          target: targetPath || '.',
+          error: error.message || 'Failed to list directory'
         });
       }
 
@@ -438,20 +386,12 @@ export const answerProjectQuestion = async ({ projectId, prompt }) => {
     }
 
     if (action === 'unable') {
-      const fallback = await tryFallbackAnswer({ projectId, prompt, steps });
-      if (fallback) {
-        return fallback;
-      }
       throw createAgentError(decision.explanation || 'Agent reported it cannot answer the question.');
     }
 
     throw createAgentError(`Unknown agent action: ${action}`);
   }
 
-  const fallback = await tryFallbackAnswer({ projectId, prompt, steps });
-  if (fallback) {
-    return fallback;
-  }
   throw createAgentError('The agent was unable to answer the question within the step limit.');
 };
 

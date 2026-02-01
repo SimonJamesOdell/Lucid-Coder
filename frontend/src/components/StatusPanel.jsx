@@ -136,8 +136,26 @@ const deriveModelState = (providerId, modelName, apiUrl) => {
   };
 };
 
+const formatCheckedAt = (value) => {
+  if (!value) {
+    return 'just now';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'just now';
+  }
+  return date.toLocaleString();
+};
+
 const GettingStarted = ({ allowConfigured = false, onConfigured = null }) => {
-  const { isLLMConfigured, configureLLM, llmConfig } = useAppState();
+  const {
+    isLLMConfigured,
+    configureLLM,
+    llmConfig,
+    llmStatus,
+    refreshLLMStatus
+  } = useAppState();
+  const [showConfigForm, setShowConfigForm] = useState(!llmStatus?.ready);
   const initialProvider = normalizeProviderId(llmConfig?.provider);
   const initialModelState = deriveModelState(initialProvider, llmConfig?.model, llmConfig?.apiUrl);
   const [selectedProvider, setSelectedProvider] = useState(initialProvider);
@@ -169,6 +187,21 @@ const GettingStarted = ({ allowConfigured = false, onConfigured = null }) => {
     setCustomEndpoint(modelState.customEndpoint);
     setUseCustomModel(modelState.useCustomModel);
   }, [llmConfig]);
+
+  useEffect(() => {
+    if (llmStatus?.ready) {
+      setShowConfigForm(false);
+      return;
+    }
+    setShowConfigForm(true);
+  }, [llmStatus?.ready]);
+
+  useEffect(() => {
+    if (!allowConfigured || typeof refreshLLMStatus !== 'function') {
+      return;
+    }
+    refreshLLMStatus({ suppressLoading: true });
+  }, [allowConfigured, refreshLLMStatus]);
 
   const currentProvider = getProviderById(selectedProvider) || getProviderById('groq');
   const isCustomModelInput = useCustomModel || selectedProvider === 'custom';
@@ -225,6 +258,9 @@ const GettingStarted = ({ allowConfigured = false, onConfigured = null }) => {
           apiUrl: currentEndpoint,
           configured: true
         });
+        if (typeof refreshLLMStatus === 'function') {
+          await refreshLLMStatus({ suppressLoading: true });
+        }
         setTestResult((prev) => ({
           ...testResponse.data,
           saved: true
@@ -288,13 +324,29 @@ const GettingStarted = ({ allowConfigured = false, onConfigured = null }) => {
     return null;
   }
 
+  const showConfiguredBanner = Boolean(llmStatus?.ready);
+  const checkedAtLabel = formatCheckedAt(llmStatus?.checkedAt);
+
   return (
     <div className="getting-started-panel">
-      <h3>🚀 Getting Started</h3>
-      <p className="intro-text">
-        Configure your LLM provider to begin using AI-powered code assistance.
-      </p>
-
+      {showConfiguredBanner && (
+        <div className="llm-configured-banner" data-testid="llm-configured-banner">
+          <div className="llm-configured-title">✅ LLM configured</div>
+          <div className="llm-configured-time" data-testid="llm-configured-time">
+            Last checked: {checkedAtLabel}
+          </div>
+          {!showConfigForm && (
+            <button
+              type="button"
+              className="llm-configured-action"
+              onClick={() => setShowConfigForm(true)}
+            >
+              Change configuration
+            </button>
+          )}
+        </div>
+      )}
+      {showConfigForm && (
       <div className="config-form">
         <div className="form-row">
           <div className="form-group">
@@ -461,6 +513,7 @@ const GettingStarted = ({ allowConfigured = false, onConfigured = null }) => {
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 };

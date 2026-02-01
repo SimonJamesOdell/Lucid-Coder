@@ -684,6 +684,35 @@ describe('autopilotFeatureRequest', () => {
     expect(editEvents[0].payload.diffTruncated).toBe(true);
   });
 
+  test('skips tests for CSS-only prompts', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Update CSS background color']));
+    const runTests = vi.fn(() => Promise.resolve(runResult('passed')));
+    const edit = vi.fn().mockResolvedValue(createEditResult());
+
+    const deps = {
+      plan,
+      edit,
+      createBranch: vi.fn(),
+      checkout: vi.fn(),
+      runTests,
+      commit: vi.fn().mockResolvedValue({ commit: { sha: 'css-only' } }),
+      merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+      rollback: vi.fn(),
+      consumeUserUpdates: vi.fn(() => []),
+      shouldCancel: vi.fn(() => false),
+      shouldPause: vi.fn(() => false),
+      reportStatus: vi.fn(),
+      getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+      appendEvent: createAppendEvent()
+    };
+
+    const result = await autopilotFeatureRequest({ projectId: 19, prompt: 'Update CSS background color', deps });
+
+    expect(result.merge).toEqual({ mergedBranch: 'main', current: 'main' });
+    expect(runTests).not.toHaveBeenCalled();
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
   test('uses default workflow dependencies when omitted', async () => {
     const plan = vi.fn().mockResolvedValue(defaultPlan(['Default step']));
     const runQueue = [runResult('failed'), runResult('passed')];
@@ -1296,7 +1325,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(608),
+      shouldCancel: createStackTargetedShouldCancel(652),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2140,7 +2169,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(524),
+      shouldCancel: createStackTargetedShouldCancel(568),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2168,7 +2197,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(572),
+      shouldCancel: createStackTargetedShouldCancel(616),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2268,7 +2297,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(257),
+      shouldCancel: createStackTargetedShouldCancel(276),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(() => {}),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2313,7 +2342,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates,
-      shouldCancel: createStackTargetedShouldCancel(642),
+      shouldCancel: createStackTargetedShouldCancel(686),
       shouldPause: vi.fn(() => false),
       reportStatus,
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2446,7 +2475,7 @@ describe('autopilotFeatureRequest', () => {
       merge: vi.fn(),
       rollback: vi.fn(),
       consumeUserUpdates: vi.fn(() => []),
-      shouldCancel: createStackTargetedShouldCancel(325),
+      shouldCancel: createStackTargetedShouldCancel(344),
       shouldPause: vi.fn(() => false),
       reportStatus: vi.fn(),
       getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
@@ -2554,7 +2583,7 @@ describe('autopilotFeatureRequest', () => {
           merge: vi.fn(),
           rollback: vi.fn(),
           consumeUserUpdates: vi.fn(() => []),
-          shouldCancel: createStackTargetedShouldCancel(238),
+          shouldCancel: createStackTargetedShouldCancel(257),
           shouldPause: vi.fn(() => false),
           reportStatus: vi.fn(),
           getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),

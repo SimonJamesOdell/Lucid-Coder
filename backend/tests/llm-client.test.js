@@ -1333,6 +1333,7 @@ describe('LLM Client Tests', () => {
       ['mistral', 'm-key', { 'Content-Type': 'application/json', Authorization: 'Bearer m-key' }],
       ['custom', null, { 'Content-Type': 'application/json' }],
       ['custom', 'token', { 'Content-Type': 'application/json', Authorization: 'Bearer token' }],
+      ['openai', 'Bearer abc123', { 'Content-Type': 'application/json', Authorization: 'Bearer abc123' }],
       ['ollama', null, { 'Content-Type': 'application/json' }]
     ])('builds expected headers for %s', (provider, apiKey, expectedHeaders) => {
       expect(client.getHeaders(provider, apiKey)).toEqual(expectedHeaders);
@@ -2558,6 +2559,40 @@ describe('LLM Client Tests', () => {
       makeSpy.mockRestore();
     });
 
+    test('rethrows tool_choice none after minimal retry when fallback is disabled', async () => {
+      const makeSpy = vi
+        .spyOn(client, 'makeAPIRequest')
+        .mockRejectedValueOnce({
+          response: {
+            data: {
+              error: {
+                message: 'tool choice is none, but model called a tool'
+              }
+            }
+          }
+        })
+        .mockRejectedValueOnce({
+          response: {
+            data: {
+              error: {
+                message: 'tool choice is none, but model called a tool'
+              }
+            }
+          }
+        });
+
+      await expect(
+        client.generateResponse(messages, {
+          __lucidcoderDisableToolBridgeFallback: true,
+          __lucidcoderDisableDedup: true
+        })
+      ).rejects.toThrow('LLM API Error: tool choice is none, but model called a tool');
+
+      expect(makeSpy).toHaveBeenCalledTimes(2);
+
+      makeSpy.mockRestore();
+    });
+
     test('rethrows the minimal-tool-bridge retry error when it is not a tool_choice none error', async () => {
       const makeSpy = vi
         .spyOn(client, 'makeAPIRequest')
@@ -2617,6 +2652,52 @@ describe('LLM Client Tests', () => {
       expect(firstCallPayload).toEqual(expect.objectContaining({ tools: expect.any(Array), tool_choice: 'auto' }));
       expect(secondCallPayload?.tools).toBeUndefined();
       expect(secondCallPayload?.tool_choice).toBeUndefined();
+
+      makeSpy.mockRestore();
+    });
+
+    test('rethrows tool-call JSON parsing errors when fallback is disabled', async () => {
+      const makeSpy = vi.spyOn(client, 'makeAPIRequest').mockRejectedValueOnce({
+        response: {
+          data: {
+            error: {
+              message: 'failed to parse tool call arguments as json'
+            }
+          }
+        }
+      });
+
+      await expect(
+        client.generateResponse(messages, {
+          __lucidcoderDisableToolBridgeFallback: true,
+          __lucidcoderDisableDedup: true
+        })
+      ).rejects.toThrow('LLM API Error: failed to parse tool call arguments as json');
+
+      expect(makeSpy).toHaveBeenCalledTimes(1);
+
+      makeSpy.mockRestore();
+    });
+
+    test('rethrows tool validation errors when fallback is disabled', async () => {
+      const makeSpy = vi.spyOn(client, 'makeAPIRequest').mockRejectedValueOnce({
+        response: {
+          data: {
+            error: {
+              message: "Tool call validation failed: attempted to call tool 'list_dir' which was not in request.tools"
+            }
+          }
+        }
+      });
+
+      await expect(
+        client.generateResponse(messages, {
+          __lucidcoderDisableToolBridgeFallback: true,
+          __lucidcoderDisableDedup: true
+        })
+      ).rejects.toThrow('LLM API Error: Tool call validation failed: attempted to call tool \'list_dir\' which was not in request.tools');
+
+      expect(makeSpy).toHaveBeenCalledTimes(1);
 
       makeSpy.mockRestore();
     });

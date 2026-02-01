@@ -35,12 +35,31 @@ import {
   safeAppendEvent,
   updateToPrompt
 } from './agentAutopilot/helpers.js';
+import { isStyleOnlyPrompt } from './promptHeuristics.js';
 
 const buildChangelogEntryFromPrompt = (prompt) => {
   const firstLine = typeof prompt === 'string' ? prompt.split(/\r?\n/)[0] : '';
   const trimmed = (firstLine || '').trim();
   return trimmed || 'autopilot updates';
 };
+
+const buildCssOnlySkipRun = (source = 'prompt') => ({
+  status: 'skipped',
+  summary: {
+    total: 0,
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    duration: 0,
+    coverage: {
+      passed: true,
+      skipped: true,
+      reason: 'css-only-branch',
+      source
+    }
+  },
+  workspaceRuns: []
+});
 
 export const __testing = {
   consumeUpdatesAsPrompts,
@@ -350,6 +369,8 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
       await applyPendingReplan('before next step');
 
       const childPrompt = queue.shift();
+      const isStyleOnlyChange = isStyleOnlyPrompt(childPrompt);
+      const cssOnlySkipRun = isStyleOnlyChange ? buildCssOnlySkipRun('prompt') : null;
 
       const stepStartedAt = Date.now();
 
@@ -360,27 +381,39 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
         meta: null
       });
 
-      reportStatus('Writing failing tests…');
+      let failingRun = null;
 
-      if (ui?.navigateTab) {
-        try {
-          ui.navigateTab('files');
-        } catch {
-          // Ignore UI navigation failures.
+      if (!isStyleOnlyChange) {
+        reportStatus('Writing failing tests…');
+
+        if (ui?.navigateTab) {
+          try {
+            ui.navigateTab('files');
+          } catch {
+            // Ignore UI navigation failures.
+          }
         }
-      }
 
-      // 1) Write failing tests.
-      const failingEditResult = await edit({ projectId, prompt: buildFailingTestsPrompt(childPrompt), ui });
-      await appendEditPatchEvent({
-        appendEvent,
-        phase: 'tests',
-        branchName,
-        stepPrompt: childPrompt,
-        editResult: failingEditResult,
-        projectId,
-        getDiffForFiles
-      });
+        // 1) Write failing tests.
+        const failingEditResult = await edit({ projectId, prompt: buildFailingTestsPrompt(childPrompt), ui });
+        await appendEditPatchEvent({
+          appendEvent,
+          phase: 'tests',
+          branchName,
+          stepPrompt: childPrompt,
+          editResult: failingEditResult,
+          projectId,
+          getDiffForFiles
+        });
+      } else {
+        reportStatus('Skipping test generation (CSS-only change)…');
+        safeAppendEvent(appendEvent, {
+          type: 'test:skip',
+          message: 'Skipping tests for CSS-only change',
+          payload: { branchName, prompt: childPrompt, reason: 'css-only' },
+          meta: null
+        });
+      }
 
       // Safe boundary: after tests are written.
       const afterTestsUpdates = await drainUserUpdates({
@@ -407,32 +440,34 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
 
       await waitWhilePaused('before failing run');
 
-      reportStatus('Running tests/coverage (expecting failure)…');
+      if (!isStyleOnlyChange) {
+        reportStatus('Running tests/coverage (expecting failure)…');
 
-      if (ui?.navigateTab) {
-        try {
-          ui.navigateTab('tests');
-        } catch {
-          // Ignore UI navigation failures.
+        if (ui?.navigateTab) {
+          try {
+            ui.navigateTab('tests');
+          } catch {
+            // Ignore UI navigation failures.
+          }
         }
-      }
-      const failingRun = await runTests(projectId, branchName, {
-        real: true,
-        coverageThresholds: thresholds
-      });
-
-      appendRunEvents({ appendEvent, phase: 'failing', branchName, stepPrompt: childPrompt, run: failingRun });
-
-      if (failingRun?.status === 'passed') {
-        await appendRollbackEvents({
-          appendEvent,
-          rollback,
-          projectId,
-          branchName,
-          stepPrompt: childPrompt,
-          reason: 'tdd_violation'
+        failingRun = await runTests(projectId, branchName, {
+          real: true,
+          coverageThresholds: thresholds
         });
-        throw new Error('Autopilot expected failing tests, but tests passed. Refusing to proceed without a failing test run.');
+
+        appendRunEvents({ appendEvent, phase: 'failing', branchName, stepPrompt: childPrompt, run: failingRun });
+
+        if (failingRun?.status === 'passed') {
+          await appendRollbackEvents({
+            appendEvent,
+            rollback,
+            projectId,
+            branchName,
+            stepPrompt: childPrompt,
+            reason: 'tdd_violation'
+          });
+          throw new Error('Autopilot expected failing tests, but tests passed. Refusing to proceed without a failing test run.');
+        }
       }
 
       if (shouldCancel()) {
@@ -498,25 +533,34 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
         throw createCancelledError();
       }
 
-      // 3) Verify.
-      reportStatus('Running tests/coverage…');
+      let passingRun = null;
+      let verifiedRun = null;
 
-      if (ui?.navigateTab) {
-        try {
-          ui.navigateTab('tests');
-        } catch {
-          // Ignore UI navigation failures.
+      if (isStyleOnlyChange) {
+        reportStatus('Skipping tests/coverage (CSS-only change)…');
+        verifiedRun = cssOnlySkipRun;
+      } else {
+        // 3) Verify.
+        reportStatus('Running tests/coverage…');
+
+        if (ui?.navigateTab) {
+          try {
+            ui.navigateTab('tests');
+          } catch {
+            // Ignore UI navigation failures.
+          }
         }
+        passingRun = await runTests(projectId, branchName, {
+          real: true,
+          coverageThresholds: thresholds
+        });
+
+        appendRunEvents({ appendEvent, phase: 'passing', branchName, stepPrompt: childPrompt, run: passingRun });
+
+        verifiedRun = passingRun;
       }
-      const passingRun = await runTests(projectId, branchName, {
-        real: true,
-        coverageThresholds: thresholds
-      });
 
-      appendRunEvents({ appendEvent, phase: 'passing', branchName, stepPrompt: childPrompt, run: passingRun });
-
-      let verifiedRun = passingRun;
-      if (verifiedRun?.status !== 'passed') {
+      if (!isStyleOnlyChange && verifiedRun?.status !== 'passed') {
         let latestRun = verifiedRun;
         let passed = false;
 

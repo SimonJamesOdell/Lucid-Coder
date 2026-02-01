@@ -186,8 +186,6 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
 
   const isClarificationWrapper = /\bOriginal request:\b/i.test(prompt)
     && /\bUser answer:\b/i.test(prompt);
-  const isDirectivePrompt = /^(make|add|update|change|move|fix|set|adjust|ensure|implement|mount|render|place|stick)\b/i
-    .test(prompt.trim());
 
   const safeAnswerProjectQuestion = async (meta = undefined) => {
     try {
@@ -212,14 +210,9 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
     }
   };
 
-  const normalizedPrompt = prompt.trim().toLowerCase();
-  if (normalizedPrompt && /^(continue|resume)\s+goals?$/.test(normalizedPrompt)) {
-    return await safeAnswerProjectQuestion();
-  }
-
   let classification;
   try {
-    if (isClarificationWrapper || isDirectivePrompt) {
+    if (isClarificationWrapper) {
       classification = { kind: 'feature' };
     } else {
       classification = await classifyAgentRequest({ projectId, prompt });

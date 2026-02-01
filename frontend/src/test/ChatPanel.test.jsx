@@ -194,7 +194,7 @@ describe('ChatPanel', () => {
 
       const toggle = screen.getByTestId('chat-autofix-toggle');
       expect(toggle).toBeInTheDocument();
-      expect(toggle).toHaveTextContent('Stop');
+      expect(toggle).toHaveTextContent('■');
 
       const user = userEvent.setup();
       await user.click(toggle);
@@ -1000,6 +1000,8 @@ describe('ChatPanel', () => {
 
       render(<ChatPanel width={320} side="left" />);
 
+      await userEvent.click(screen.getByTestId('chat-debug-toggle'));
+
       const input = screen.getByTestId('chat-input');
       await userEvent.type(input, 'What is this project?');
       await userEvent.click(screen.getByTestId('chat-send-button'));
@@ -1009,6 +1011,26 @@ describe('ChatPanel', () => {
       });
 
       expect(screen.getByText('Test answer')).toBeInTheDocument();
+    });
+
+    it('hides agent step status messages until debug details are enabled', async () => {
+      goalsApi.agentRequest.mockResolvedValue({
+        kind: 'question',
+        answer: 'Test answer',
+        steps: [{ type: 'action', action: 'read_file', target: 'README.md', reason: 'debugging' }]
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = screen.getByTestId('chat-input');
+      await userEvent.type(input, 'What is this project?');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Test answer')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText(/Agent is reading README\.md \(debugging\)\./)).not.toBeInTheDocument();
     });
 
     it('shows scroll-to-bottom button when user scrolls up', async () => {
@@ -1071,10 +1093,7 @@ describe('ChatPanel', () => {
       const originalFetch = window.fetch;
       window.fetch = vi.fn();
 
-      goalsApi.agentRequestStream.mockImplementation(async ({ onChunk, onComplete }) => {
-        onChunk?.('Streaming hello');
-        onComplete?.({ kind: 'question', answer: 'Streamed answer' });
-      });
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Streamed answer', steps: [] });
 
       try {
         render(<ChatPanel width={320} side="left" />);
@@ -1083,10 +1102,8 @@ describe('ChatPanel', () => {
         await userEvent.click(screen.getByTestId('chat-send-button'));
 
         await waitFor(() => {
-          expect(goalsApi.agentRequestStream).toHaveBeenCalled();
+          expect(goalsApi.agentRequest).toHaveBeenCalled();
         });
-
-        expect(goalsApi.agentRequest).not.toHaveBeenCalled();
       } finally {
         restoreMode();
         window.fetch = originalFetch;
@@ -1098,10 +1115,7 @@ describe('ChatPanel', () => {
       const originalFetch = window.fetch;
       window.fetch = vi.fn();
 
-      goalsApi.agentRequestStream.mockImplementation(async ({ onChunk, onComplete }) => {
-        onChunk?.('');
-        onComplete?.({ kind: 'question', answer: 'OK' });
-      });
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'OK', steps: [] });
 
       try {
         render(<ChatPanel width={320} side="left" />);
@@ -1110,7 +1124,7 @@ describe('ChatPanel', () => {
         await userEvent.click(screen.getByTestId('chat-send-button'));
 
         await waitFor(() => {
-          expect(goalsApi.agentRequestStream).toHaveBeenCalled();
+          expect(goalsApi.agentRequest).toHaveBeenCalled();
         });
       } finally {
         restoreMode();
@@ -1123,9 +1137,6 @@ describe('ChatPanel', () => {
       const originalFetch = window.fetch;
       window.fetch = vi.fn();
 
-      goalsApi.agentRequestStream.mockImplementation(async ({ onError }) => {
-        onError?.('Stream failed');
-      });
       goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Fallback answer', steps: [] });
 
       try {
@@ -1135,7 +1146,6 @@ describe('ChatPanel', () => {
         await userEvent.click(screen.getByTestId('chat-send-button'));
 
         await waitFor(() => {
-          expect(goalsApi.agentRequestStream).toHaveBeenCalled();
           expect(goalsApi.agentRequest).toHaveBeenCalled();
         });
       } finally {
@@ -1149,9 +1159,6 @@ describe('ChatPanel', () => {
       const originalFetch = window.fetch;
       window.fetch = vi.fn();
 
-      goalsApi.agentRequestStream.mockImplementation(async ({ onError }) => {
-        onError?.();
-      });
       goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Fallback answer', steps: [] });
 
       try {
@@ -1161,13 +1168,186 @@ describe('ChatPanel', () => {
         await userEvent.click(screen.getByTestId('chat-send-button'));
 
         await waitFor(() => {
-          expect(goalsApi.agentRequestStream).toHaveBeenCalled();
           expect(goalsApi.agentRequest).toHaveBeenCalled();
         });
       } finally {
         restoreMode();
         window.fetch = originalFetch;
       }
+    });
+
+    it('ignores non-string or empty streaming chunks', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const handlers = ChatPanel.__testHooks?.handlers;
+      expect(handlers?.appendStreamingChunk).toBeInstanceOf(Function);
+
+      await act(async () => {
+        handlers.appendStreamingChunk('');
+        handlers.appendStreamingChunk(null);
+        handlers.appendStreamingChunk({});
+      });
+
+      expect(screen.getByText('Welcome! Ask me anything about your project.')).toBeInTheDocument();
+    });
+
+    it('throws when the streaming request reports an error', async () => {
+      goalsApi.agentRequestStream.mockImplementation(async ({ onError }) => {
+        onError('stream failed');
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const runStream = ChatPanel.__testHooks?.handlers?.runAgentRequestStream;
+      expect(runStream).toBeInstanceOf(Function);
+
+      await expect(runStream({ projectId: 123, prompt: 'Stream' }))
+        .rejects
+        .toThrow('stream failed');
+    });
+
+    it('uses a default error message when stream error is missing', async () => {
+      goalsApi.agentRequestStream.mockImplementation(async ({ onError }) => {
+        onError('');
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const runStream = ChatPanel.__testHooks?.handlers?.runAgentRequestStream;
+      expect(runStream).toBeInstanceOf(Function);
+
+      await expect(runStream({ projectId: 123, prompt: 'Stream' }))
+        .rejects
+        .toThrow('Agent request failed');
+    });
+
+    it('throws when the streaming request completes without a result', async () => {
+      goalsApi.agentRequestStream.mockResolvedValue(undefined);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const runStream = ChatPanel.__testHooks?.handlers?.runAgentRequestStream;
+      expect(runStream).toBeInstanceOf(Function);
+
+      await expect(runStream({ projectId: 123, prompt: 'Stream' }))
+        .rejects
+        .toThrow('Streaming request did not return a result');
+    });
+
+    it('returns the payload from a completed streaming request', async () => {
+      const payload = { kind: 'question', answer: 'Done' };
+
+      goalsApi.agentRequestStream.mockImplementation(async ({ onChunk, onComplete }) => {
+        onChunk('Hi');
+        onComplete(payload);
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const runStream = ChatPanel.__testHooks?.handlers?.runAgentRequestStream;
+      expect(runStream).toBeInstanceOf(Function);
+
+      await expect(runStream({ projectId: 123, prompt: 'Stream' }))
+        .resolves
+        .toEqual(payload);
+    });
+
+    it('reconciles streamed answers when no streaming message exists', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const handleAgentResult = ChatPanel.__testHooks?.handlers?.handleAgentResult;
+      expect(handleAgentResult).toBeInstanceOf(Function);
+
+      await act(async () => {
+        await handleAgentResult({ kind: 'question', answer: 'Final answer', steps: [] }, { streamedAnswer: true });
+      });
+
+      expect(screen.getByText('Final answer')).toBeInTheDocument();
+    });
+
+    it('updates the streaming message when final answer is longer', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const handlers = ChatPanel.__testHooks?.handlers;
+      expect(handlers?.appendStreamingChunk).toBeInstanceOf(Function);
+
+      await act(async () => {
+        handlers.appendStreamingChunk('Hi');
+      });
+
+      expect(screen.getByText('Hi')).toBeInTheDocument();
+
+      await act(async () => {
+        await handlers.handleAgentResult({ kind: 'question', answer: 'Hi there', steps: [] }, { streamedAnswer: true });
+      });
+
+      expect(screen.getByText('Hi there')).toBeInTheDocument();
+    });
+
+    it('updates the existing streaming message when new chunks arrive', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Seed message');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Test answer')).toBeInTheDocument();
+      });
+
+      const initialMessageCount = screen.getAllByText(/Seed message|Test answer/).length;
+
+      const handlers = ChatPanel.__testHooks?.handlers;
+      expect(handlers?.appendStreamingChunk).toBeInstanceOf(Function);
+
+      await act(async () => {
+        handlers.appendStreamingChunk('Hi');
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        handlers.appendStreamingChunk(' there');
+      });
+
+      expect(screen.getByText('Hi there')).toBeInTheDocument();
+      const finalMessageCount = screen.getAllByText(/Seed message|Test answer|Hi there/).length;
+      expect(finalMessageCount).toBe(initialMessageCount + 1);
+    });
+
+    it('reconciles streamed answers by updating the existing streaming message', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Seed message');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Test answer')).toBeInTheDocument();
+      });
+
+      const initialMessageCount = screen.getAllByText(/Seed message|Test answer/).length;
+
+      const handlers = ChatPanel.__testHooks?.handlers;
+      expect(handlers?.appendStreamingChunk).toBeInstanceOf(Function);
+      expect(handlers?.handleAgentResult).toBeInstanceOf(Function);
+
+      await act(async () => {
+        handlers.appendStreamingChunk('Hi');
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        await handlers.handleAgentResult({ kind: 'question', answer: 'Hi there', steps: [] }, { streamedAnswer: true });
+      });
+
+      expect(screen.getByText('Hi there')).toBeInTheDocument();
+      expect(screen.queryAllByText('Hi there')).toHaveLength(1);
+      const finalMessageCount = screen.getAllByText(/Seed message|Test answer|Hi there/).length;
+      expect(finalMessageCount).toBe(initialMessageCount + 1);
     });
 
     it('ignores null agent results without crashing', async () => {
@@ -2351,6 +2531,8 @@ describe('ChatPanel', () => {
 
       render(<ChatPanel width={320} side="left" />);
 
+      await userEvent.click(screen.getByTestId('chat-debug-toggle'));
+
       const input = screen.getByTestId('chat-input');
       const sendButton = screen.getByTestId('chat-send-button');
 
@@ -2384,6 +2566,8 @@ describe('ChatPanel', () => {
 
       render(<ChatPanel width={320} side="left" />);
 
+      await userEvent.click(screen.getByTestId('chat-debug-toggle'));
+
       const input = screen.getByTestId('chat-input');
       const sendButton = screen.getByTestId('chat-send-button');
 
@@ -2399,6 +2583,8 @@ describe('ChatPanel', () => {
       goalsApi.agentRequest.mockRejectedValue(new Error('Test error'));
 
       render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.click(screen.getByTestId('chat-debug-toggle'));
 
       const input = screen.getByTestId('chat-input');
       const sendButton = screen.getByTestId('chat-send-button');
@@ -2902,6 +3088,8 @@ describe('ChatPanel', () => {
       });
 
       render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.click(screen.getByTestId('chat-debug-toggle'));
       
       const input = screen.getByTestId('chat-input');
       const sendButton = screen.getByTestId('chat-send-button');
@@ -2913,6 +3101,93 @@ describe('ChatPanel', () => {
         const statusMessage = screen.getByText(/Reading file/i);
         expect(statusMessage.closest('.chat-message')).toHaveClass('chat-message--status');
       });
+    });
+
+    it('shows diagnostics when debug details are enabled', async () => {
+      goalsApi.agentRequest.mockResolvedValue({
+        kind: 'question',
+        answer: 'Diagnostics answer',
+        steps: [],
+        meta: { classificationError: 'bad prompt' }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.click(screen.getByTestId('chat-debug-toggle'));
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Diagnostics');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Diagnostics: classification: bad prompt/)).toBeInTheDocument();
+      });
+    });
+
+    it('includes question and planning diagnostics when present', async () => {
+      goalsApi.agentRequest.mockResolvedValue({
+        kind: 'question',
+        answer: 'Diagnostics answer',
+        steps: [],
+        meta: {
+          questionError: 'missing context',
+          planningError: 'invalid plan',
+          fallbackPlanningError: 'fallback failed'
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.click(screen.getByTestId('chat-debug-toggle'));
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Diagnostics');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Diagnostics: question: missing context \| planning: invalid plan \| fallback planning: fallback failed/)).toBeInTheDocument();
+      });
+    });
+
+    it('does not show diagnostics when meta is empty', async () => {
+      goalsApi.agentRequest.mockResolvedValue({
+        kind: 'question',
+        answer: 'No diagnostics',
+        steps: [],
+        meta: {}
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.click(screen.getByTestId('chat-debug-toggle'));
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'No diagnostics');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        const messages = screen.getByTestId('chat-messages');
+        expect(within(messages).getAllByText('No diagnostics').length).toBeGreaterThanOrEqual(1);
+      });
+
+      expect(screen.queryByText(/Diagnostics:/)).not.toBeInTheDocument();
+    });
+
+    it('ignores non-string answers without crashing', async () => {
+      goalsApi.agentRequest.mockResolvedValue({
+        kind: 'question',
+        answer: 1,
+        steps: []
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Non-string answer');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+
+      expect(screen.queryByText('1')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('chat-error')).not.toBeInTheDocument();
     });
 
     it('displays regular assistant messages without variant', async () => {

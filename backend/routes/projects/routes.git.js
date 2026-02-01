@@ -193,15 +193,48 @@ export function registerProjectGitRoutes(router) {
         getProjectGitSettings(projectId),
         getGitSettings()
       ]);
-      const inheritsFromGlobal = !projectSettings;
-      const effectiveSettings = projectSettings || globalSettings;
+      const normalizeRemoteUrl = (value) => (typeof value === 'string' ? value.trim() : '');
+
+      let projectSettingsSnapshot = projectSettings;
+      let inheritsFromGlobal = !projectSettingsSnapshot;
+      let effectiveSettings = projectSettingsSnapshot || globalSettings;
+
+      const shouldRecoverRemote = globalSettings?.workflow === 'cloud'
+        && (!projectSettingsSnapshot || projectSettingsSnapshot.workflow === 'cloud')
+        && !normalizeRemoteUrl(projectSettingsSnapshot?.remoteUrl);
+
+      if (shouldRecoverRemote && project?.path) {
+        let recoveredRemote = null;
+        try {
+          await ensureGitRepository(project.path, { defaultBranch: effectiveSettings?.defaultBranch || 'main' });
+          recoveredRemote = await getRemoteUrl(project.path, 'origin');
+        } catch {
+          recoveredRemote = null;
+        }
+
+        if (recoveredRemote) {
+          const saved = await saveProjectGitSettings(projectId, {
+            workflow: 'cloud',
+            provider: projectSettingsSnapshot?.provider || globalSettings?.provider || 'github',
+            remoteUrl: recoveredRemote,
+            username: projectSettingsSnapshot?.username || globalSettings?.username || '',
+            defaultBranch: projectSettingsSnapshot?.defaultBranch || globalSettings?.defaultBranch || 'main',
+            autoPush: projectSettingsSnapshot?.autoPush ?? false,
+            useCommitTemplate: projectSettingsSnapshot?.useCommitTemplate ?? false,
+            commitTemplate: projectSettingsSnapshot?.commitTemplate ?? ''
+          });
+          projectSettingsSnapshot = saved;
+          effectiveSettings = saved;
+          inheritsFromGlobal = false;
+        }
+      }
 
       res.json({
         success: true,
         inheritsFromGlobal,
         settings: effectiveSettings,
         effectiveSettings,
-        projectSettings: projectSettings || null,
+        projectSettings: projectSettingsSnapshot || null,
         globalSettings
       });
     } catch (error) {

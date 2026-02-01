@@ -18,6 +18,15 @@ const setAppState = (overrides = {}) => {
     isLLMConfigured: false,
     configureLLM: mockConfigureLLM,
     llmConfig: null,
+    llmStatus: {
+      configured: false,
+      ready: false,
+      reason: null,
+      requiresApiKey: null,
+      hasApiKey: null,
+      checkedAt: null
+    },
+    refreshLLMStatus: vi.fn(),
     ...overrides
   });
 };
@@ -56,8 +65,8 @@ describe('GettingStarted Component', () => {
   test('renders getting started panel when LLM not configured', () => {
     render(<GettingStarted />);
 
-    expect(screen.getByText('🚀 Getting Started')).toBeInTheDocument();
-    expect(screen.getByText(/Configure your LLM provider/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Provider')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Test & Save/i })).toBeInTheDocument();
   });
 
   test('does not render when LLM is configured', () => {
@@ -71,7 +80,65 @@ describe('GettingStarted Component', () => {
     setAppState({ isLLMConfigured: true });
     render(<GettingStarted allowConfigured />);
 
-    expect(screen.getByText('🚀 Getting Started')).toBeInTheDocument();
+    expect(screen.getByLabelText('Provider')).toBeInTheDocument();
+  });
+
+  test('shows configured banner when LLM is ready', () => {
+    setAppState({
+      isLLMConfigured: true,
+      llmStatus: {
+        configured: true,
+        ready: true,
+        reason: null,
+        requiresApiKey: true,
+        hasApiKey: true,
+        checkedAt: '2026-01-31T12:00:00.000Z'
+      }
+    });
+
+    render(<GettingStarted allowConfigured />);
+
+    expect(screen.getByTestId('llm-configured-banner')).toBeInTheDocument();
+    expect(screen.getByText(/LLM configured/i)).toBeInTheDocument();
+    expect(screen.getByTestId('llm-configured-time')).toHaveTextContent(/Last checked:/i);
+    expect(screen.queryByLabelText('Provider')).toBeNull();
+  });
+
+  test('falls back to "just now" when checkedAt is invalid', () => {
+    setAppState({
+      isLLMConfigured: true,
+      llmStatus: {
+        configured: true,
+        ready: true,
+        reason: null,
+        requiresApiKey: true,
+        hasApiKey: true,
+        checkedAt: 'not-a-date'
+      }
+    });
+
+    render(<GettingStarted allowConfigured />);
+
+    expect(screen.getByTestId('llm-configured-time')).toHaveTextContent('Last checked: just now');
+  });
+
+  test('shows configuration form after clicking change configuration', async () => {
+    setAppState({
+      isLLMConfigured: true,
+      llmStatus: {
+        configured: true,
+        ready: true,
+        reason: null,
+        requiresApiKey: true,
+        hasApiKey: true,
+        checkedAt: '2026-01-31T12:00:00.000Z'
+      }
+    });
+
+    const { user } = renderComponent({ allowConfigured: true });
+
+    await user.click(screen.getByRole('button', { name: /change configuration/i }));
+    expect(screen.getByLabelText('Provider')).toBeInTheDocument();
   });
 
   test('shows all provider options in dropdown', () => {

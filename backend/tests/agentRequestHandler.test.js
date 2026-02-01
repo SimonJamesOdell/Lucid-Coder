@@ -247,7 +247,8 @@ describe('agentRequestHandler', () => {
     expect(result).toEqual({ kind: 'feature', parent: { id: 7 }, children: [], message: 'Goals created successfully. Ready for execution.' });
   });
 
-  it('treats "continue goals" as a question and bypasses LLM classification', async () => {
+  it('routes "continue goals" through LLM classification', async () => {
+    llmClient.generateResponse.mockResolvedValue(JSON.stringify({ kind: 'question' }));
     questionAgent.answerProjectQuestion.mockResolvedValue({
       answer: 'Here are your goals.',
       steps: [{ type: 'action', action: 'list_goals', target: 'agent_goals' }]
@@ -255,7 +256,7 @@ describe('agentRequestHandler', () => {
 
     const result = await handleAgentRequest({ projectId: 9, prompt: 'continue goals' });
 
-    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(llmClient.generateResponse).toHaveBeenCalled();
     expect(questionAgent.answerProjectQuestion).toHaveBeenCalledWith({ projectId: 9, prompt: 'continue goals' });
     expect(result).toEqual({
       kind: 'question',
@@ -264,12 +265,13 @@ describe('agentRequestHandler', () => {
     });
   });
 
-  it('bypasses classification for "resume goals" and normalizes missing fields', async () => {
+  it('routes "resume goals" through LLM classification and normalizes missing fields', async () => {
+    llmClient.generateResponse.mockResolvedValue(JSON.stringify({ kind: 'question' }));
     questionAgent.answerProjectQuestion.mockResolvedValue({ answer: '', steps: null });
 
     const result = await handleAgentRequest({ projectId: 10, prompt: 'resume goals' });
 
-    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(llmClient.generateResponse).toHaveBeenCalled();
     expect(questionAgent.answerProjectQuestion).toHaveBeenCalledWith({ projectId: 10, prompt: 'resume goals' });
     expect(result).toEqual({ kind: 'question', answer: null, steps: [] });
   });

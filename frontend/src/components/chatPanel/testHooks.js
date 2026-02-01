@@ -9,11 +9,16 @@ const updateChatPanelTestHooks = (ChatPanelComponent, values = {}) => {
     handleUndoLastChangePrompt,
     handleAutopilotMessage,
     handleAutopilotControl,
+    runAgentRequestStream,
+    handleAgentResult,
+    appendStreamingChunk,
     autopilotResumeAttemptedRef,
     isMessagesScrolledToBottom,
     messagesRef,
     messagesContainerRef,
     scrollMessagesToBottom,
+    streamingMessageIdRef,
+    streamingTextRef,
     refreshAutopilotStatus,
     stopAutopilotPoller,
     setAutopilotSession,
@@ -32,7 +37,10 @@ const updateChatPanelTestHooks = (ChatPanelComponent, values = {}) => {
     changeDirectionPrompt: handleChangeDirectionPrompt,
     undoLastChangePrompt: handleUndoLastChangePrompt,
     autopilotMessage: handleAutopilotMessage,
-    autopilotControl: handleAutopilotControl
+    autopilotControl: handleAutopilotControl,
+    runAgentRequestStream,
+    handleAgentResult,
+    appendStreamingChunk
   };
 
   ChatPanelComponent.__testHooks.latestInstance = {
@@ -41,6 +49,8 @@ const updateChatPanelTestHooks = (ChatPanelComponent, values = {}) => {
     messagesRef,
     messagesContainerRef,
     scrollMessagesToBottom,
+    streamingMessageIdRef,
+    streamingTextRef,
     refreshAutopilotStatus,
     stopAutopilotPoller,
     setAutopilotSession,

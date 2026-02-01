@@ -173,6 +173,19 @@ export const agentRequestStream = async ({ projectId, prompt, onChunk, onComplet
       delimiterIndex = buffer.indexOf('\n\n');
     }
   }
+
+  buffer += decoder.decode();
+
+  if (buffer.trim()) {
+    let delimiterIndex = buffer.indexOf('\n\n');
+    while (delimiterIndex !== -1) {
+      const chunk = buffer.slice(0, delimiterIndex);
+      buffer = buffer.slice(delimiterIndex + 2);
+      parseEventBlock(chunk);
+      delimiterIndex = buffer.indexOf('\n\n');
+    }
+    parseEventBlock(buffer);
+  }
 };
 
 export const agentAutopilot = async ({ projectId, prompt, options } = {}) => {
