@@ -22,6 +22,7 @@
     "release:prep": "node tools/release-prep.mjs",
     "test:backend": "npm --prefix backend test",
     "test:frontend": "npm --prefix frontend test",
+    "test:coverage": "npm run coverage:frontend && npm run coverage:backend",
     "coverage:backend": "npm --prefix backend run test:coverage",
     "coverage:frontend": "npm --prefix frontend run test:coverage",
     "build": "npm --prefix frontend run build",

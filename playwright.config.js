@@ -8,6 +8,7 @@ const REUSE_EXISTING_SERVER = Boolean(process.env.E2E_REUSE_SERVER) && !process.
 module.exports = defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global-setup.js',
+  globalTeardown: './e2e/global-teardown.js',
   timeout: 60_000,
   expect: { timeout: 10_000 },
   retries: process.env.CI ? 1 : 0,

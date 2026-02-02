@@ -66,31 +66,35 @@ test('can import a project and reach main view', async ({ page, request }) => {
 
   const projectName = `E2E Import ${Date.now()}`
   const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucidcoder-e2e-import-'))
-  fs.writeFileSync(
-    path.join(localRoot, 'package.json'),
-    JSON.stringify({ name: 'e2e-import', scripts: { dev: 'vite --host 0.0.0.0' }, dependencies: { vite: '^5.0.0' } })
-  )
+  try {
+    fs.writeFileSync(
+      path.join(localRoot, 'package.json'),
+      JSON.stringify({ name: 'e2e-import', scripts: { dev: 'vite --host 0.0.0.0' }, dependencies: { vite: '^5.0.0' } })
+    )
 
-  await page.goto('/')
-  await expect(page.getByText('Select Project')).toBeVisible()
+    await page.goto('/')
+    await expect(page.getByText('Select Project')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Import Project' }).click()
-  await expect(page.getByRole('heading', { name: 'Import Existing Project' })).toBeVisible()
+    await page.getByRole('button', { name: 'Import Project' }).click()
+    await expect(page.getByRole('heading', { name: 'Import Existing Project' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Next' }).click()
-  await page.getByLabel('Project Folder Path *').fill(localRoot)
-  await page.getByRole('button', { name: 'Next' }).click()
-  await page.getByLabel('Project Name *').fill(projectName)
-  await page.getByLabel('Description').fill('Imported by Playwright E2E')
-  await page.getByRole('button', { name: 'Next' }).click()
-  await page.getByRole('button', { name: 'Next' }).click()
-  await page.getByText('Allow compatibility updates').click()
-  await page.getByText('Move frontend files into a frontend folder').click()
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByLabel('Project Folder Path *').fill(localRoot)
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByLabel('Project Name *').fill(projectName)
+    await page.getByLabel('Description').fill('Imported by Playwright E2E')
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByText('Allow compatibility updates').click()
+    await page.getByText('Move frontend files into a frontend folder').click()
 
-  await page.getByRole('button', { name: 'Import Project' }).click()
+    await page.getByRole('button', { name: 'Import Project' }).click()
 
-  await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByText(projectName)).toBeVisible()
+    await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText(projectName)).toBeVisible()
+  } finally {
+    fs.rmSync(localRoot, { recursive: true, force: true })
+  }
 })
 
 test('closing a project returns to project selector', async ({ page, request }) => {
