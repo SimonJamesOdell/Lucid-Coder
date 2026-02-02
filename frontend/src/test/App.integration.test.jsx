@@ -574,7 +574,7 @@ describe('App Component Integration', () => {
         expect(screen.getByText('Existing Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Open Project'))
+      await user.click(screen.getByRole('button', { name: 'Open Existing Project' }))
 
       await waitFor(() => {
         const inspector = screen.queryByTestId('project-inspector')

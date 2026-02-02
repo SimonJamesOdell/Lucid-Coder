@@ -174,6 +174,16 @@ const fileExists = async (targetPath) => {
   }
 };
 
+const normalizeProjectDates = (project = {}) => {
+  const createdAt = project.createdAt ?? project.created_at ?? null;
+  const updatedAt = project.updatedAt ?? project.updated_at ?? createdAt;
+  return {
+    ...project,
+    createdAt,
+    updatedAt
+  };
+};
+
 const serializeJob = (job) => {
   if (!job) {
     return null;
@@ -356,7 +366,7 @@ router.get('/', async (req, res) => {
     const projects = await getAllProjects();
     res.json({
       success: true,
-      projects: projects || []
+      projects: (projects || []).map(normalizeProjectDates)
     });
   } catch (error) {
     console.error('Error fetching projects:', error);
@@ -671,7 +681,7 @@ router.get('/:id', async (req, res) => {
     
     res.json({
       success: true,
-      project
+      project: normalizeProjectDates(project)
     });
   } catch (error) {
     console.error('Error fetching project:', error);

@@ -128,7 +128,7 @@ describe('ProjectSelector Component', () => {
 
       expect(await screen.findByText('Lifecycle Project')).toBeInTheDocument();
       expect(screen.getByText('Second Project')).toBeInTheDocument();
-      expect(screen.getAllByRole('button', { name: 'Open Project' })).toHaveLength(2);
+      expect(screen.getAllByRole('button', { name: /open/i })).toHaveLength(2);
     });
 
     test('shows project metadata (language, framework, dates)', async () => {
@@ -171,8 +171,8 @@ describe('ProjectSelector Component', () => {
       const user = userEvent.setup();
       render(<ProjectSelector />);
 
-      const openButton = await screen.findByRole('button', { name: 'Open Project' });
-      await user.click(openButton);
+      const projectCard = await screen.findByRole('button', { name: 'Open Lifecycle Project' });
+      await user.click(projectCard);
 
       expect(selectProject).toHaveBeenCalledWith(project);
     });

@@ -78,7 +78,14 @@ const ProjectSelector = () => {
   }, [isDeleting]);
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    if (!dateString) {
+      return 'Unknown date';
+    }
+    const parsedDate = new Date(dateString);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return 'Unknown date';
+    }
+    return parsedDate.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric'
@@ -176,25 +183,46 @@ const ProjectSelector = () => {
         <div className="projects-grid">
           {projects.map(project => {
             const isProjectBeingDeleted = deletingProjectId === project.id && isDeleting;
+            const handleCardActivate = () => {
+              if (isProjectBeingDeleted) {
+                return;
+              }
+              handleSelectProject(project);
+            };
+            const handleCardKeyDown = (event) => {
+              if (isProjectBeingDeleted) {
+                return;
+              }
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                handleSelectProject(project);
+              }
+            };
             return (
-              <div key={project.id} className="project-card">
+              <div
+                key={project.id}
+                className="project-card"
+                role="button"
+                tabIndex={isProjectBeingDeleted ? -1 : 0}
+                aria-disabled={isProjectBeingDeleted}
+                aria-label={`Open ${project.name}`}
+                onClick={handleCardActivate}
+                onKeyDown={handleCardKeyDown}
+              >
               <div className="project-header">
                 <h3 className="project-name">{project.name}</h3>
                 <div className="project-actions">
                   <button
-                    onClick={() => handleSelectProject(project)}
-                    className="select-btn"
-                    disabled={isProjectBeingDeleted}
-                  >
-                    Open Project
-                  </button>
-                  <button
-                    onClick={() => handleDeleteProject(project)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDeleteProject(project);
+                    }}
                     className="delete-btn"
                     disabled={isDeleting}
                     title="Delete project"
                   >
-                    {isProjectBeingDeleted ? 'Deleting…' : 'Delete'}
+                    {isProjectBeingDeleted ? 'Deleting…' : <span aria-hidden="true">🗑️</span>}
+                    <span className="sr-only">Delete</span>
                   </button>
                 </div>
               </div>

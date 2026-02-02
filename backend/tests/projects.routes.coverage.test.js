@@ -441,6 +441,92 @@ describe('Projects routes coverage (projects.js)', () => {
   });
 
   describe('GET /api/projects', () => {
+    test('normalizes camelCase createdAt/updatedAt fields', async () => {
+      const dbModule = await import('../database.js');
+      const getProjectsSpy = vi.spyOn(dbModule, 'getAllProjects').mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'Camel Dates',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z'
+        }
+      ]);
+
+      const response = await request(app)
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body.projects[0]).toMatchObject({
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-02T00:00:00.000Z'
+      });
+      getProjectsSpy.mockRestore();
+    });
+
+    test('normalizes snake_case created_at and updated_at fields', async () => {
+      const dbModule = await import('../database.js');
+      const getProjectsSpy = vi.spyOn(dbModule, 'getAllProjects').mockResolvedValueOnce([
+        {
+          id: 2,
+          name: 'Snake Dates',
+          created_at: '2024-02-01T00:00:00.000Z',
+          updated_at: '2024-02-03T00:00:00.000Z'
+        }
+      ]);
+
+      const response = await request(app)
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body.projects[0]).toMatchObject({
+        createdAt: '2024-02-01T00:00:00.000Z',
+        updatedAt: '2024-02-03T00:00:00.000Z'
+      });
+      getProjectsSpy.mockRestore();
+    });
+
+    test('falls back to createdAt when updated_at is missing', async () => {
+      const dbModule = await import('../database.js');
+      const getProjectsSpy = vi.spyOn(dbModule, 'getAllProjects').mockResolvedValueOnce([
+        {
+          id: 3,
+          name: 'Fallback Dates',
+          created_at: '2024-03-01T00:00:00.000Z',
+          updated_at: null
+        }
+      ]);
+
+      const response = await request(app)
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body.projects[0]).toMatchObject({
+        createdAt: '2024-03-01T00:00:00.000Z',
+        updatedAt: '2024-03-01T00:00:00.000Z'
+      });
+      getProjectsSpy.mockRestore();
+    });
+
+    test('defaults date fields to null when missing', async () => {
+      const dbModule = await import('../database.js');
+      const getProjectsSpy = vi.spyOn(dbModule, 'getAllProjects').mockResolvedValueOnce([
+        {
+          id: 4,
+          name: 'No Dates'
+        }
+      ]);
+
+      const response = await request(app)
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body.projects[0]).toMatchObject({
+        createdAt: null,
+        updatedAt: null
+      });
+      getProjectsSpy.mockRestore();
+    });
+
     test('returns empty list when database returns null', async () => {
       const dbModule = await import('../database.js');
       const getProjectsSpy = vi.spyOn(dbModule, 'getAllProjects').mockResolvedValue(null);

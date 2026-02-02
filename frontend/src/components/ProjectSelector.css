@@ -174,6 +174,16 @@
   padding: 1.5rem;
   transition: all 0.2s;
   position: relative;
+  cursor: pointer;
+}
+
+.project-card[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+.project-card:focus-visible {
+  outline: 2px solid var(--primary-color, #007acc);
+  outline-offset: 2px;
 }
 
 .project-card:hover {
@@ -209,21 +219,6 @@
   cursor: not-allowed;
 }
 
-.select-btn {
-  background: var(--primary-color, #007acc);
-  color: white;
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.select-btn:hover {
-  background: var(--primary-hover, #005a9e);
-}
-
 .delete-btn {
   background: transparent;
   color: var(--error-color, #ff6b6b);
@@ -238,6 +233,18 @@
 .delete-btn:hover {
   background: var(--error-color, #ff6b6b);
   color: white;
+}
+
+.delete-btn .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .project-description {
