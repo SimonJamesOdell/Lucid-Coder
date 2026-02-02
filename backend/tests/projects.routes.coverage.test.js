@@ -31,7 +31,8 @@ vi.mock('../utils/git.js', () => ({
   runGitCommand: vi.fn(async () => ({ stdout: '', code: 1 })),
   getCurrentBranch: vi.fn(),
   ensureGitRepository: vi.fn(),
-  configureGitUser: vi.fn()
+  configureGitUser: vi.fn(),
+  ensureInitialCommit: vi.fn()
 }));
 
 vi.mock('../services/importCompatibility.js', () => ({
@@ -654,6 +655,9 @@ describe('Projects routes coverage (projects.js)', () => {
       const originalProjectsDir = process.env.PROJECTS_DIR;
       process.env.PROJECTS_DIR = projectsRoot;
 
+      const { ensureInitialCommit } = await import('../utils/git.js');
+      ensureInitialCommit.mockClear();
+
       const localPath = path.join(projectsRoot, `git-local-${Date.now()}`);
       await ensureEmptyDir(localPath);
       await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
@@ -670,6 +674,7 @@ describe('Projects routes coverage (projects.js)', () => {
 
       const settings = await getProjectGitSettings(response.body.project.id);
       expect(settings).toMatchObject({ workflow: 'local', remoteUrl: '' });
+      expect(ensureInitialCommit).toHaveBeenCalled();
 
       if (originalProjectsDir === undefined) {
         delete process.env.PROJECTS_DIR;
@@ -713,9 +718,10 @@ describe('Projects routes coverage (projects.js)', () => {
       const originalProjectsDir = process.env.PROJECTS_DIR;
       process.env.PROJECTS_DIR = projectsRoot;
 
-      const { ensureGitRepository, configureGitUser } = await import('../utils/git.js');
+      const { ensureGitRepository, configureGitUser, ensureInitialCommit } = await import('../utils/git.js');
       ensureGitRepository.mockClear();
       configureGitUser.mockClear();
+      ensureInitialCommit.mockClear();
 
       const localPath = path.join(projectsRoot, `git-present-${Date.now()}`);
       await ensureEmptyDir(localPath);
@@ -734,6 +740,7 @@ describe('Projects routes coverage (projects.js)', () => {
 
       expect(ensureGitRepository).not.toHaveBeenCalled();
       expect(configureGitUser).not.toHaveBeenCalled();
+      expect(ensureInitialCommit).not.toHaveBeenCalled();
 
       if (originalProjectsDir === undefined) {
         delete process.env.PROJECTS_DIR;

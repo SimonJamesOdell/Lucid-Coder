@@ -18,7 +18,8 @@ import {
   runGitCommand,
   getCurrentBranch,
   ensureGitRepository,
-  configureGitUser
+  configureGitUser,
+  ensureInitialCommit
 } from '../utils/git.js';
 import { startJob } from '../services/jobRunner.js';
 import { applyCompatibility, applyProjectStructure } from '../services/importCompatibility.js';
@@ -613,6 +614,7 @@ router.post('/import', async (req, res) => {
           name: globalGitSettings?.username,
           email: globalGitSettings?.email
         });
+        await ensureInitialCommit(projectPath, 'Initial commit');
       }
     }
 
