@@ -149,10 +149,19 @@ export const computeProcessSnapshot = (projectId, processInfo) => {
   };
 };
 
-const ProcessesTab = ({ project, processInfo, onRefreshStatus, onRestartProject, onStopProject }) => {
+const ProcessesTab = ({
+  project,
+  processInfo,
+  onRefreshStatus,
+  onRestartProject,
+  onStopProject,
+  onCreateBackend
+}) => {
   const [refreshingState, setRefreshingState] = useState({ frontend: false, backend: false });
   const [restartingState, setRestartingState] = useState({ frontend: false, backend: false });
   const [stoppingState, setStoppingState] = useState({ frontend: false, backend: false });
+  const [creatingBackend, setCreatingBackend] = useState(false);
+  const [createBackendError, setCreateBackendError] = useState('');
 
   useEffect(() => {
     setRefreshingState({ frontend: false, backend: false });
@@ -166,6 +175,7 @@ const ProcessesTab = ({ project, processInfo, onRefreshStatus, onRestartProject,
   );
   const processes = snapshot.processes;
   const ports = snapshot.ports;
+  const hasBackend = processInfo?.capabilities?.backend?.exists ?? true;
 
   const stopEnabled = Boolean(project?.id && onStopProject);
 
@@ -202,6 +212,21 @@ const ProcessesTab = ({ project, processInfo, onRefreshStatus, onRestartProject,
     }
   };
 
+  const handleCreateBackend = async () => {
+    if (!project?.id || !onCreateBackend || creatingBackend) {
+      return;
+    }
+    setCreatingBackend(true);
+    setCreateBackendError('');
+    try {
+      await onCreateBackend(project.id);
+    } catch (error) {
+      setCreateBackendError(error?.message || 'Failed to create backend');
+    } finally {
+      setCreatingBackend(false);
+    }
+  };
+
   if (!project) {
     return (
       <div className="processes-tab empty" data-testid="processes-tab-empty">
@@ -225,18 +250,43 @@ const ProcessesTab = ({ project, processInfo, onRefreshStatus, onRestartProject,
           isRestarting={restartingState.frontend}
           isStopping={stoppingState.frontend}
         />
-        <ProcessColumn
-          label="Backend"
-          processKey="backend"
-          process={processes.backend}
-          ports={ports}
-          onRefresh={() => handleRefresh('backend')}
-          onRestart={() => handleRestart('backend')}
-          onStop={stopEnabled ? () => handleStop('backend') : null}
-          isRefreshing={refreshingState.backend}
-          isRestarting={restartingState.backend}
-          isStopping={stoppingState.backend}
-        />
+        {hasBackend ? (
+          <ProcessColumn
+            label="Backend"
+            processKey="backend"
+            process={processes.backend}
+            ports={ports}
+            onRefresh={() => handleRefresh('backend')}
+            onRestart={() => handleRestart('backend')}
+            onStop={stopEnabled ? () => handleStop('backend') : null}
+            isRefreshing={refreshingState.backend}
+            isRestarting={restartingState.backend}
+            isStopping={stoppingState.backend}
+          />
+        ) : (
+          <div className="process-column" data-testid="process-column-backend">
+            <div className="process-card process-empty">
+              <div className="process-card-header">
+                <h4>Backend</h4>
+              </div>
+              <p className="process-empty-text">This project doesn’t have a backend yet.</p>
+              {createBackendError && (
+                <p className="process-empty-error">{createBackendError}</p>
+              )}
+              <div className="process-controls">
+                <button
+                  type="button"
+                  className="process-control-btn"
+                  onClick={handleCreateBackend}
+                  disabled={creatingBackend || !onCreateBackend}
+                  data-testid="process-create-backend"
+                >
+                  {creatingBackend ? 'Creating backend…' : 'Create backend'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

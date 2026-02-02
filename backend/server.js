@@ -17,6 +17,7 @@ import jobRoutes from './routes/jobs.js';
 import goalsRoutes from './routes/goals.js';
 import agentRoutes from './routes/agent.js';
 import runsRoutes from './routes/runs.js';
+import fsRoutes from './routes/fs.js';
 import { createPreviewProxy } from './routes/previewProxy.js';
 import { attachSocketServer } from './socket/createSocketServer.js';
 import { auditHttpRequestsMiddleware } from './services/auditLog.js';
@@ -167,6 +168,7 @@ app.use('/api/projects/:projectId/tests', testsRoutes);
 app.use('/api/projects/:projectId/jobs', jobRoutes);
 app.use('/api/projects/:projectId/runs', runsRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/fs', fsRoutes);
 app.use(
   '/api/goals',
   (req, res, next) => {

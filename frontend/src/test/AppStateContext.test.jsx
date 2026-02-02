@@ -509,30 +509,48 @@ describe('AppStateContext', () => {
     }))
   })
 
-  test('importProject adds project to local state (no API call)', async () => {
+  test('importProject calls backend and updates state', async () => {
+    const serverProject = { id: 'imported', name: 'Imported Project' }
+
+    fetch
+      .mockResolvedValueOnce(mockApiResponse({ success: true, projects: [] }))
+      .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' }))
+      .mockResolvedValueOnce(gitSettingsResponse())
+      .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(mockApiResponse({ success: true, project: serverProject }))
+      .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
+      .mockResolvedValueOnce(mockApiResponse({ message: 'started' }))
+
     const { result } = renderUseAppState()
 
     await act(async () => {
-      result.current.importProject({ id: 'imported', name: 'Imported Project' })
+      await result.current.importProject({ name: 'Imported Project' })
     })
 
     expect(result.current.projects).toHaveLength(1)
     expect(result.current.projects[0].name).toBe('Imported Project')
+    expect(result.current.currentProject?.id).toBe('imported')
   })
 
-  test('importProject generates ID if not provided', async () => {
-    vi.spyOn(Date, 'now').mockReturnValue(123456)
+  test('importProject uses backend project payload', async () => {
+    const serverProject = { id: 'server-99', name: 'Backend Project' }
+
+    fetch
+      .mockResolvedValueOnce(mockApiResponse({ success: true, projects: [] }))
+      .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' }))
+      .mockResolvedValueOnce(gitSettingsResponse())
+      .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(mockApiResponse({ success: true, project: serverProject }))
+      .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
+      .mockResolvedValueOnce(mockApiResponse({ message: 'started' }))
+
     const { result } = renderUseAppState()
 
-    let imported
     await act(async () => {
-      imported = result.current.importProject({ name: 'Generated ID Project' })
+      await result.current.importProject({ name: 'Backend Project' })
     })
 
-    expect(imported.id).toEqual(expect.any(String))
-    expect(imported.id).not.toBe('')
-    expect(result.current.projects[0].id).toBe(imported.id)
-    Date.now.mockRestore()
+    expect(result.current.projects[0].id).toBe('server-99')
   })
 
   test('toggleTheme switches between dark and light', async () => {
@@ -557,13 +575,18 @@ describe('AppStateContext', () => {
   test('logout clears all state and localStorage', async () => {
     const { result } = renderUseAppState()
 
+    fetch
+      .mockResolvedValueOnce(mockApiResponse({ success: true, projects: [] }))
+      .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' }))
+      .mockResolvedValueOnce(gitSettingsResponse())
+      .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(mockApiResponse({ success: true, project: { id: '1', name: 'Demo' } }))
+      .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
+      .mockResolvedValueOnce(mockApiResponse({ message: 'started' }))
+
     await act(async () => {
       result.current.configureLLM({ provider: 'groq' })
-      result.current.importProject({ id: '1', name: 'Demo' })
-      fetch
-        .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
-        .mockResolvedValueOnce(mockApiResponse({ message: 'started' }))
-      result.current.selectProject({ id: '1', name: 'Demo' })
+      await result.current.importProject({ name: 'Demo' })
     })
 
     await act(async () => {
@@ -1535,26 +1558,48 @@ describe('AppStateContext', () => {
     })
 
     test('closeProject does not affect projects list', async () => {
-      fetch
-        .mockResolvedValueOnce(mockApiResponse({ success: true, projects: [] }))
-        .mockResolvedValueOnce(gitSettingsResponse())
-        .mockResolvedValueOnce(portSettingsResponse())
-        .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
-        .mockResolvedValueOnce(mockApiResponse({ message: 'started' }))
-        .mockResolvedValueOnce(mockApiResponse({ message: 'stopped' }))
+      fetch.mockImplementation((url, options = {}) => {
+        if (url === '/api/projects' && (!options.method || options.method === 'GET')) {
+          return Promise.resolve(mockApiResponse({ success: true, projects: [] }))
+        }
+        if (url === '/api/settings/git') {
+          return Promise.resolve(gitSettingsResponse())
+        }
+        if (url === '/api/settings/ports') {
+          return Promise.resolve(portSettingsResponse())
+        }
+        if (url === '/api/projects/import' && options.method === 'POST') {
+          return Promise.resolve(mockApiResponse({
+            success: true,
+            project: { id: 'keep', name: 'Keep Me' },
+            jobs: []
+          }))
+        }
+        if (typeof url === 'string' && url.includes('/git-settings')) {
+          return Promise.resolve(projectGitSettingsResponse({}, true))
+        }
+        if (typeof url === 'string' && url.includes('/start')) {
+          return Promise.resolve(mockApiResponse({ message: 'started' }))
+        }
+        if (typeof url === 'string' && url.includes('/stop')) {
+          return Promise.resolve(mockApiResponse({ message: 'stopped' }))
+        }
+        return Promise.resolve(mockApiResponse({ success: true }))
+      })
 
       const { result } = renderUseAppState()
 
       await act(async () => {
-        result.current.importProject({ id: 'keep', name: 'Keep Me' })
-        await result.current.selectProject({ id: 'keep', name: 'Keep Me' })
+        await result.current.importProject({ name: 'Keep Me' })
       })
 
       await act(async () => {
         await result.current.closeProject()
       })
 
-      expect(result.current.projects).toHaveLength(1)
+      await waitFor(() => {
+        expect(result.current.projects).toHaveLength(1)
+      })
       expect(result.current.projects[0].id).toBe('keep')
     })
 

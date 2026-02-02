@@ -40,6 +40,9 @@ export const generateProjectFiles = async (projectConfig) => {
   const sanitizedName = sanitizeProjectName(name);
   const frontendPath = path.join(projectPath, 'frontend');
   const backendPath = path.join(projectPath, 'backend');
+  const rootPackageJsonPath = path.join(projectPath, 'package.json');
+  const frontendPackageJsonPath = path.join(frontendPath, 'package.json');
+  const backendPackageJsonPath = path.join(backendPath, 'package.json');
 
   // Create main project directories
   await ensureDirectory(projectPath);
@@ -136,17 +139,25 @@ export const startProject = async (projectPath, options = {}) => {
   
   const frontendPath = path.join(projectPath, 'frontend');
   const backendPath = path.join(projectPath, 'backend');
+  const rootPackageJsonPath = path.join(projectPath, 'package.json');
+  const frontendPackageJsonPath = path.join(frontendPath, 'package.json');
+  const backendPackageJsonPath = path.join(backendPath, 'package.json');
 
   let preferredFrontendPort = normalizePortCandidate(options.frontendPort);
   if (preferredFrontendPort && RESERVED_FRONTEND_PORTS.has(preferredFrontendPort)) {
     preferredFrontendPort = null;
   }
 
-  const packageJsonPath = path.join(backendPath, 'package.json');
   const appPyPath = path.join(backendPath, 'app.py');
 
-  const packageJsonExists = await fs.access(packageJsonPath).then(() => true).catch(() => false);
+  const frontendPackageJsonExists = await fs.access(frontendPackageJsonPath).then(() => true).catch(() => false);
+  const rootPackageJsonExists = await fs.access(rootPackageJsonPath).then(() => true).catch(() => false);
+  const packageJsonExists = await fs.access(backendPackageJsonPath).then(() => true).catch(() => false);
   const appPyExists = await fs.access(appPyPath).then(() => true).catch(() => false);
+  const resolvedFrontendPath = frontendPackageJsonExists
+    ? frontendPath
+    : (rootPackageJsonExists ? projectPath : frontendPath);
+  const hasFrontendEntrypoint = frontendPackageJsonExists || rootPackageJsonExists;
 
   const hasExplicitFrontendBase = Object.prototype.hasOwnProperty.call(options, 'frontendPortBase');
   const resolvedFrontendPortBase = normalizePortBase(options.frontendPortBase, DEFAULT_FRONTEND_PORT_BASE);
@@ -187,6 +198,10 @@ export const startProject = async (projectPath, options = {}) => {
         backend: shouldStartBackend ? stub.backend : null
       }
     };
+  }
+
+  if (shouldStartFrontend && !hasFrontendEntrypoint) {
+    throw new Error('No frontend package.json found in frontend/ or project root');
   }
 
   const processes = {
@@ -274,9 +289,15 @@ export const startProject = async (projectPath, options = {}) => {
 
       console.log('🚀 Starting frontend development server...');
       const frontendProcess = spawn('npm', ['run', 'dev', '--', '--port', String(frontendPort)], {
-        cwd: frontendPath,
+        cwd: resolvedFrontendPath,
         stdio: 'pipe',
-        shell: true
+        shell: true,
+        env: {
+          ...process.env,
+          PORT: String(frontendPort),
+          HOST: '0.0.0.0',
+          HOSTNAME: '0.0.0.0'
+        }
       });
       processes.frontend = createProcessInfo('frontend', frontendProcess, frontendPort);
     }
@@ -439,11 +460,19 @@ export const startProjectTarget = async (projectPath, target, options = {}) => {
 
   const frontendPath = path.join(projectPath, 'frontend');
   const backendPath = path.join(projectPath, 'backend');
+  const rootPackageJsonPath = path.join(projectPath, 'package.json');
+  const frontendPackageJsonPath = path.join(frontendPath, 'package.json');
+  const backendPackageJsonPath = path.join(backendPath, 'package.json');
 
-  const packageJsonPath = path.join(backendPath, 'package.json');
   const appPyPath = path.join(backendPath, 'app.py');
-  const packageJsonExists = await fs.access(packageJsonPath).then(() => true).catch(() => false);
+  const frontendPackageJsonExists = await fs.access(frontendPackageJsonPath).then(() => true).catch(() => false);
+  const rootPackageJsonExists = await fs.access(rootPackageJsonPath).then(() => true).catch(() => false);
+  const packageJsonExists = await fs.access(backendPackageJsonPath).then(() => true).catch(() => false);
   const appPyExists = await fs.access(appPyPath).then(() => true).catch(() => false);
+  const resolvedFrontendPath = frontendPackageJsonExists
+    ? frontendPath
+    : (rootPackageJsonExists ? projectPath : frontendPath);
+  const hasBackendEntrypoint = packageJsonExists || appPyExists;
 
   const hasExplicitFrontendBase = Object.prototype.hasOwnProperty.call(options, 'frontendPortBase');
   const hasExplicitBackendBase = Object.prototype.hasOwnProperty.call(options, 'backendPortBase');
@@ -495,9 +524,15 @@ export const startProjectTarget = async (projectPath, target, options = {}) => {
 
   if (normalizedTarget === 'frontend') {
     const proc = spawn('npm', ['run', 'dev', '--', '--port', String(frontendPort)], {
-      cwd: frontendPath,
+      cwd: resolvedFrontendPath,
       stdio: 'pipe',
-      shell: true
+      shell: true,
+      env: {
+        ...process.env,
+        PORT: String(frontendPort),
+        HOST: '0.0.0.0',
+        HOSTNAME: '0.0.0.0'
+      }
     });
 
     const processInfo = createProcessInfo('frontend', proc, frontendPort);

@@ -74,6 +74,14 @@ describe('App Component Integration', () => {
         return Promise.resolve(mockApiResponse(startProjectResponse))
       }
 
+      if (url === '/api/projects/import') {
+        return Promise.resolve(mockApiResponse({
+          success: true,
+          project: { id: 'imported-1', name: 'Imported Project' },
+          jobs: []
+        }))
+      }
+
       return Promise.resolve(mockApiResponse({ success: true }))
     })
 
@@ -250,7 +258,7 @@ describe('App Component Integration', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
-        expect(screen.getByText('Import Method')).toBeInTheDocument()
+        expect(screen.getByText('Choose an import source')).toBeInTheDocument()
       })
     })
 
@@ -336,8 +344,6 @@ describe('App Component Integration', () => {
       await waitFor(() => {
         expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
       })
-
-      await user.type(screen.getByLabelText('Project Name *'), 'Temp Project')
 
       await user.click(screen.getByText('Cancel'))
 
@@ -486,14 +492,9 @@ describe('App Component Integration', () => {
         expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
       })
 
-      const importBtn = screen.getByText('Import Project')
-      expect(importBtn).toBeDisabled()
-
-      await user.type(screen.getByLabelText('Project Name *'), 'Imported Project')
-      expect(importBtn).toBeDisabled()
-
-      await user.type(screen.getByLabelText('Project Folder Path *'), '/test/path')
-      expect(importBtn).not.toBeDisabled()
+      await user.click(screen.getByText('Next'))
+      await user.click(screen.getByText('Next'))
+      expect(await screen.findByText('Project path is required')).toBeInTheDocument()
     })
 
     test('switches between import methods correctly', async () => {
@@ -508,25 +509,21 @@ describe('App Component Integration', () => {
       await user.click(screen.getByText('Import Project'))
 
       await waitFor(() => {
-        expect(screen.getByText('Import Method')).toBeInTheDocument()
+        expect(screen.getByText('Choose an import source')).toBeInTheDocument()
       })
 
-      expect(screen.getByDisplayValue('folder')).toBeChecked()
-      expect(screen.getByLabelText('Project Folder Path *')).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Local Folder' })).toHaveAttribute('aria-selected', 'true')
 
-      await user.click(screen.getByDisplayValue('git'))
+      await user.click(screen.getByRole('tab', { name: 'GitHub / GitLab' }))
+      expect(screen.getByRole('tab', { name: 'GitHub / GitLab' })).toHaveAttribute('aria-selected', 'true')
 
-      await waitFor(() => {
-        expect(screen.getByLabelText('Git Repository URL *')).toBeInTheDocument()
-      })
+      await user.click(screen.getByText('Next'))
+      expect(await screen.findByLabelText('Git Repository URL *')).toBeInTheDocument()
 
-      expect(screen.queryByLabelText('Project Folder Path *')).not.toBeInTheDocument()
-
-      await user.click(screen.getByDisplayValue('folder'))
-
-      await waitFor(() => {
-        expect(screen.getByLabelText('Project Folder Path *')).toBeInTheDocument()
-      })
+      await user.click(screen.getByText('Back'))
+      await user.click(screen.getByRole('tab', { name: 'Local Folder' }))
+      await user.click(screen.getByText('Next'))
+      expect(await screen.findByLabelText('Project Folder Path *')).toBeInTheDocument()
     })
 
     test('successfully imports project with valid data', async () => {
@@ -544,10 +541,13 @@ describe('App Component Integration', () => {
         expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
       })
 
-      await user.type(screen.getByLabelText('Project Name *'), 'Imported Project')
-      await user.type(screen.getByLabelText('Description'), 'Test imported project')
+      await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Folder Path *'), '/test/path')
-
+      await user.click(screen.getByText('Next'))
+      fireEvent.change(screen.getByLabelText('Project Name *'), { target: { value: 'Imported Project' } })
+      await user.type(screen.getByLabelText('Description'), 'Test imported project')
+      await user.click(screen.getByText('Next'))
+      await user.click(screen.getByText('Next'))
       await user.click(screen.getByText('Import Project'))
 
       await waitFor(() => {

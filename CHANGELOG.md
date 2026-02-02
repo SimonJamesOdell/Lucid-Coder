@@ -1,3 +1,11 @@
+## 0.4.7 (2026-02-02)
+- Add filesystem browsing + tech stack detection APIs, including compatibility scan support for import flows.
+- Add compatibility helpers to normalize Vite/Next/CRA dev scripts and optional frontend structure fixes.
+- Expand project import handling (local + git) with safer copy/link logic, clone URL handling, and setup job enqueueing.
+- Add backend creation endpoint and refine process control flows for restarts and status refresh.
+- Introduce a folder picker modal and richer import UX with tech detection and compatibility consent.
+- Enhance Processes and Files views (status/actions polish, staged diff shortcut, and selection improvements).
+
 ## 0.4.6 (2026-02-01)
 - Bump version metadata to 0.4.6 across packages and docs.
 - Persist per-project Git settings client-side and avoid clearing remote URLs on partial updates.

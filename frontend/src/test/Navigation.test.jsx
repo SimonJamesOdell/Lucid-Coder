@@ -31,6 +31,7 @@ const baseState = () => ({
   closeProject: vi.fn(),
   createProject: vi.fn().mockResolvedValue({ id: 'proj-1', name: 'Created Project' }),
   importProject: vi.fn(),
+  showImportProject: vi.fn(),
   toggleTheme: vi.fn(),
   setPreviewPanelTab: vi.fn(),
   gitSettings: defaultGitSettings,
@@ -533,72 +534,13 @@ describe('Navigation Component', () => {
     alertSpy.mockRestore();
   });
 
-  test('import project reads selected JSON file and dispatches action', async () => {
+  test('import project triggers the import flow', async () => {
     const { user, state } = renderNavigation();
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
-    const realCreateElement = document.createElement.bind(document);
-    const fakeInput = { type: '', accept: '', onchange: null, click: vi.fn() };
-    const createElementSpy = vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
-      if (tagName === 'input') {
-        return fakeInput;
-      }
-      return realCreateElement(tagName, options);
-    });
-    const originalFileReader = window.FileReader;
-    class MockFileReader {
-      readAsText() {
-        this.onload?.({ target: { result: JSON.stringify({ id: 'imported', name: 'Imported Project' }) } });
-      }
-    }
-    window.FileReader = MockFileReader;
-    fakeInput.click.mockImplementation(() => {
-      fakeInput.onchange?.({ target: { files: [{ name: 'project.json' }] } });
-    });
 
     await user.click(screen.getByRole('button', { name: /Projects/ }));
     await user.click(screen.getByText('Import project'));
 
-    expect(fakeInput.click).toHaveBeenCalled();
-    expect(state.importProject).toHaveBeenCalledWith({ id: 'imported', name: 'Imported Project' });
-    expect(alertSpy).toHaveBeenCalledWith('Project imported successfully!');
-
-    createElementSpy.mockRestore();
-    window.FileReader = originalFileReader;
-    alertSpy.mockRestore();
-  });
-
-  test('import project shows error when JSON parsing fails', async () => {
-    const { user, state } = renderNavigation();
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
-    const realCreateElement = document.createElement.bind(document);
-    const fakeInput = { type: '', accept: '', onchange: null, click: vi.fn() };
-    const createElementSpy = vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
-      if (tagName === 'input') {
-        return fakeInput;
-      }
-      return realCreateElement(tagName, options);
-    });
-    const originalFileReader = window.FileReader;
-    class MockFileReader {
-      readAsText() {
-        this.onload?.({ target: { result: 'not-json' } });
-      }
-    }
-    window.FileReader = MockFileReader;
-    fakeInput.click.mockImplementation(() => {
-      fakeInput.onchange?.({ target: { files: [{ name: 'broken.json' }] } });
-    });
-
-    await user.click(screen.getByRole('button', { name: /Projects/ }));
-    await user.click(screen.getByText('Import project'));
-
-    expect(fakeInput.click).toHaveBeenCalled();
-    expect(state.importProject).not.toHaveBeenCalled();
-    expect(alertSpy).toHaveBeenCalledWith('Error importing project: Invalid JSON file');
-
-    createElementSpy.mockRestore();
-    window.FileReader = originalFileReader;
-    alertSpy.mockRestore();
+    expect(state.showImportProject).toHaveBeenCalled();
   });
 
   test('shows close project button when project is selected', () => {

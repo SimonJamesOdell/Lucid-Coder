@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { AppStateProvider, useAppState, __appStateTestHelpers } from './AppStateContext';
+import * as appStateHelpers from './appState/helpers.js';
 
 const createResponse = (ok, payload) => ({
   ok,
@@ -110,18 +111,32 @@ describe('AppStateContext integrations', () => {
     fetchMock.mockImplementation((...args) => defaultFetchImpl(...args));
   });
 
-  test('importProject persists imported metadata and returns the snapshot', () => {
+  test('importProject persists imported metadata and returns the snapshot', async () => {
+    fetchMock.mockImplementation((url, options) => {
+      if (url === '/api/projects/import' && options?.method === 'POST') {
+        return Promise.resolve(createResponse(true, {
+          success: true,
+          project: { id: 'imported-1', name: 'External Repo', description: 'Cloned' },
+          jobs: []
+        }));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
     const { result } = renderHook(() => useAppState(), { wrapper });
     let imported;
 
-    act(() => {
-      imported = result.current.importProject({ name: 'External Repo', description: 'Cloned' });
+    await act(async () => {
+      imported = await result.current.importProject({ name: 'External Repo', description: 'Cloned' });
     });
 
-    expect(imported.name).toBe('External Repo');
-    expect(imported.id).toEqual(expect.any(String));
-    expect(imported.id).not.toBe('');
-    expect(result.current.projects.some((proj) => proj.id === imported.id)).toBe(true);
+    const importedProject = imported?.project || imported;
+    expect(importedProject.name).toBe('External Repo');
+    expect(importedProject.id).toEqual(expect.any(String));
+    expect(importedProject.id).not.toBe('');
+    await waitFor(() => {
+      expect(result.current.currentProject?.id).toBe(importedProject.id);
+    });
   });
 
   test('updateGitSettings merges server response into state', async () => {
@@ -651,6 +666,99 @@ describe('AppStateContext integrations', () => {
     await waitFor(() => {
       expect(result.current.projectProcesses).toBeNull();
     });
+  });
+
+  test('applyProcessSnapshot preserves capabilities from previous snapshots', async () => {
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      __appStateTestHelpers.applyProcessSnapshot('proj-capabilities', {
+        processes: { frontend: { status: 'running' } },
+        capabilities: { backend: { exists: true } }
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.projectProcesses?.capabilities?.backend?.exists).toBe(true);
+    });
+
+    act(() => {
+      __appStateTestHelpers.applyProcessSnapshot('proj-capabilities', {
+        processes: { frontend: { status: 'running' } }
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.projectProcesses?.capabilities?.backend?.exists).toBe(true);
+    });
+  });
+
+  test('applyProcessSnapshot returns null when snapshot building fails', async () => {
+    const snapshotSpy = vi.spyOn(appStateHelpers, 'buildProcessStateSnapshot')
+      .mockReturnValueOnce(null);
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      const snapshot = __appStateTestHelpers.applyProcessSnapshot('proj-null', { processes: {} });
+      expect(snapshot).toBeNull();
+    });
+
+    await waitFor(() => {
+      expect(result.current.projectProcesses).toBeNull();
+    });
+
+    snapshotSpy.mockRestore();
+  });
+
+  test('createBackend delegates to backend creation and refreshes processes', async () => {
+    fetchMock.mockImplementation((url, options) => {
+      if (typeof url === 'string' && url.includes('/backend/create')) {
+        return Promise.resolve(createResponse(true, { success: true, created: true }));
+      }
+      if (typeof url === 'string' && url.includes('/processes')) {
+        return Promise.resolve(createResponse(true, { success: true, processes: {} }));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    await act(async () => {
+      await result.current.createBackend('proj-backend');
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/proj-backend/backend/create',
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/proj-backend/processes');
+  });
+
+  test('createBackend defaults to the current project id', async () => {
+    fetchMock.mockImplementation((url, options) => {
+      if (typeof url === 'string' && url.includes('/backend/create')) {
+        return Promise.resolve(createResponse(true, { success: true, created: true }));
+      }
+      if (typeof url === 'string' && url.includes('/processes')) {
+        return Promise.resolve(createResponse(true, { success: true, processes: {} }));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      result.current.setCurrentProject({ id: 'proj-current', name: 'Current' });
+    });
+
+    await act(async () => {
+      await result.current.createBackend();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/proj-current/backend/create',
+      expect.objectContaining({ method: 'POST' })
+    );
   });
 
   test('clearProjectGitSettings surfaces backend errors', async () => {

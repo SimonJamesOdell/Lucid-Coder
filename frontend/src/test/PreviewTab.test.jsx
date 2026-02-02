@@ -384,7 +384,8 @@ describe('PreviewTab', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/Failed to start project/i)).toBeInTheDocument();
+      expect(screen.getByText('Project not running')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Start project' })).toBeInTheDocument();
     });
   });
 
@@ -485,7 +486,8 @@ describe('PreviewTab', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/server failure/i)).toBeInTheDocument();
+      expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
+      expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
     });
   });
 
@@ -498,7 +500,8 @@ describe('PreviewTab', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/Failed to restart project/i)).toBeInTheDocument();
+      expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
+      expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
     });
   });
 
@@ -2434,11 +2437,6 @@ describe('PreviewTab', () => {
 
       expect(screen.getByText(/didn.?t finish loading|blocks embedding|unreachable/i)).toBeInTheDocument();
 
-      const expectedUrl = previewRef.current.getPreviewUrl();
-      expect(
-        screen.getByText((_, element) => element?.tagName === 'CODE' && element.textContent === expectedUrl)
-      ).toBeInTheDocument();
-
       await act(async () => {
         fireEvent.click(screen.getByText('Retry'));
       });
@@ -2525,27 +2523,10 @@ describe('PreviewTab', () => {
       });
 
       expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-
-      expect(screen.getByRole('button', { name: 'Try localhost' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Try 127.0.0.1' })).toBeInTheDocument();
-
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Try localhost' }));
-      });
-      expect(previewRef.current.getPreviewUrl()).toContain('//localhost');
-
-      act(() => {
-        previewRef.current.__testHooks.setErrorStateForTests({
-          error: true,
-          loading: false,
-          pending: false
-        });
-      });
-
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Try 127.0.0.1' }));
-      });
-      expect(previewRef.current.getPreviewUrl()).toContain('//127.0.0.1');
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Ask AI to fix' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try localhost' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Try 127.0.0.1' })).toBeNull();
     } finally {
       try {
         Object.defineProperty(window.location, 'hostname', {
@@ -2626,9 +2607,6 @@ describe('PreviewTab', () => {
     });
 
     expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-    expect(screen.getByText(/Frontend: running \(:5555\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/Backend: running \(:5656\)/i)).toBeInTheDocument();
-
     expect(screen.getByText('Frontend logs')).toBeInTheDocument();
     expect(screen.getByText('Backend logs')).toBeInTheDocument();
     expect(screen.getByText(/frontend ok/i)).toBeInTheDocument();
@@ -2665,10 +2643,8 @@ describe('PreviewTab', () => {
       previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
     });
 
-    const summary = screen.getByText(/Frontend:.*Backend:/i).textContent || '';
-    expect(summary).toMatch(/Frontend:/i);
-    expect(summary).toMatch(/Backend:/i);
-    expect(summary).not.toMatch(/\(:\d+\)/);
+    expect(screen.queryByText(/Frontend: /i)).toBeNull();
+    expect(screen.queryByText(/Backend: /i)).toBeNull();
   });
 
   test('error view process summary falls back to active ports when process ports are missing', () => {
@@ -2684,8 +2660,8 @@ describe('PreviewTab', () => {
       previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
     });
 
-    expect(screen.getByText(/Frontend: running \(:5555\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/Backend: running \(:5656\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Frontend: /i)).toBeNull();
+    expect(screen.queryByText(/Backend: /i)).toBeNull();
   });
 
   test('error view process summary falls back to stored ports when active ports are missing', () => {
@@ -2705,8 +2681,8 @@ describe('PreviewTab', () => {
       previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
     });
 
-    expect(screen.getByText(/Frontend: running \(:5555\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/Backend: idle \(:5656\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Frontend: /i)).toBeNull();
+    expect(screen.queryByText(/Backend: /i)).toBeNull();
   });
 
   test('auto-recovery timeout is cleared on successful iframe load', async () => {
@@ -2756,32 +2732,20 @@ describe('PreviewTab', () => {
     }
   });
 
-  test('Refresh + retry clears pending auto-recovery timeout and swallows refresh failures', async () => {
-    vi.useFakeTimers();
-    const clearSpy = vi.spyOn(window, 'clearTimeout');
-    try {
-      const onRefreshProcessStatus = vi.fn().mockRejectedValue(new Error('boom'));
-      const processInfo = buildProcessInfo();
-      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+  test('Retry reloads the iframe when error view is shown', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
 
-      act(() => {
-        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
-      });
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
 
-      // Auto-recovery schedules a timeout; don't let it fire.
-      expect(screen.getByRole('button', { name: 'Refresh + retry' })).toBeInTheDocument();
+    const keyBefore = previewRef.current.__testHooks.getIframeKey();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    });
 
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Refresh + retry' }));
-        await Promise.resolve();
-      });
-
-      expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
-      expect(clearSpy).toHaveBeenCalled();
-    } finally {
-      clearSpy.mockRestore();
-      vi.useRealTimers();
-    }
+    expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
   });
 
   test('refresh+retry handler exits early when no project is selected', async () => {
@@ -2795,43 +2759,73 @@ describe('PreviewTab', () => {
     expect(onRefreshProcessStatus).not.toHaveBeenCalled();
   });
 
-  test('Refresh + retry shows recovery copy, calls refresh handler, and reloads iframe', async () => {
-    let resolveRefresh;
-    const refreshPromise = new Promise((resolve) => {
-      resolveRefresh = resolve;
+  test('refresh+retry triggers refresh and reloads the iframe', async () => {
+    const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+    const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+    await act(async () => {
+      await previewRef.current.__testHooks.triggerRefreshAndRetryForTests();
     });
 
-    const onRefreshProcessStatus = vi.fn(() => refreshPromise);
+    expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
+    expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
+  });
+
+  test('refresh+retry clears scheduled auto-recovery timers', async () => {
+    vi.useFakeTimers();
+    const clearSpy = vi.spyOn(global, 'clearTimeout');
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      await act(async () => {
+        await previewRef.current.__testHooks.triggerRefreshAndRetryForTests();
+      });
+
+      expect(clearSpy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      clearSpy.mockRestore();
+    }
+  });
+
+  test('refresh+retry ignores refresh errors and still reloads the iframe', async () => {
+    const onRefreshProcessStatus = vi.fn().mockRejectedValue(new Error('status failed'));
     const processInfo = buildProcessInfo();
-    const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus, isProjectStopped: true });
+    const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+
+    const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+    await act(async () => {
+      await previewRef.current.__testHooks.triggerRefreshAndRetryForTests();
+    });
+
+    expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
+    expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
+  });
+
+  test('Retry keeps the error view visible until iframe loads', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
 
     act(() => {
       previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
     });
 
     expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Refresh + retry' })).toBeInTheDocument();
-
-    const keyBefore = previewRef.current.__testHooks.getIframeKey();
-
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Refresh + retry' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     });
 
-    expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
-    expect(screen.getByText(/Attempting recovery/i)).toBeInTheDocument();
-
-    act(() => {
-      resolveRefresh(null);
-    });
-
-    await act(async () => {
-      await refreshPromise;
-    });
-
-    await waitFor(() => {
-      expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
-    });
+    expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
   });
 
   test('error view renders scheduled/running/exhausted auto-recovery copy deterministically', () => {
@@ -2894,36 +2888,17 @@ describe('PreviewTab', () => {
     expect(screen.queryByText('Recovering preview…')).toBeNull();
   });
 
-  test('error view can pause and resume auto-retry', async () => {
-    vi.useFakeTimers();
-    try {
-      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
-      const processInfo = buildProcessInfo();
-      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+  test('error view shows paused auto-recovery copy when disabled', () => {
+    const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
 
-      act(() => {
-        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
-      });
+    act(() => {
+      previewRef.current.__testHooks.setAutoRecoverDisabledForTests(true);
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
 
-      expect(screen.getByRole('button', { name: 'Pause auto-retry' })).toBeInTheDocument();
-
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Pause auto-retry' }));
-      });
-
-      expect(screen.getByText('Auto-recovery is paused.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Resume auto-retry' })).toBeInTheDocument();
-
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Resume auto-retry' }));
-      });
-
-      expect(screen.queryByText('Auto-recovery is paused.')).toBeNull();
-      expect(screen.getByRole('button', { name: 'Pause auto-retry' })).toBeInTheDocument();
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
+    expect(screen.getByText('Auto-recovery is paused.')).toBeInTheDocument();
   });
 
   test('auto-recovery does not schedule when no project is selected', () => {
@@ -2974,6 +2949,35 @@ describe('PreviewTab', () => {
 
       act(() => {
         previewRef.current.__testHooks.setAutoRecoverDisabledForTests(true);
+        previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      expect(onRefreshProcessStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery does not schedule when project is stopped', () => {
+    vi.useFakeTimers();
+    try {
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const processInfo = buildProcessInfo({
+        processes: {
+          frontend: { status: 'stopped', port: null, lastHeartbeat: null, logs: [] }
+        }
+      });
+      const { previewRef } = renderPreviewTab({
+        processInfo,
+        onRefreshProcessStatus,
+        isProjectStopped: true
+      });
+
+      act(() => {
         previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
       });
 

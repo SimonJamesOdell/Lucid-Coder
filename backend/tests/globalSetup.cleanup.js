@@ -103,7 +103,8 @@ const cleanupWorkerArtifacts = async () => {
         knownTempDirNames.has(name) ||
         /^integration-project-/i.test(name) ||
         /^test-project-diff(?:-content|-resolved)?-/i.test(name) ||
-        /^test-project-files-ops-/i.test(name)
+        /^test-project-files-ops-/i.test(name) ||
+        /^outside-(?:coverage-)?\d+$/i.test(name)
     )
     .map((name) => path.join(backendRoot, name));
 
@@ -114,6 +115,18 @@ const cleanupWorkerArtifacts = async () => {
   if (process.env.LUCIDCODER_WRITE_DEBUG_ARTIFACTS !== '1') {
     await deleteFileWithRetries(path.join(backendRoot, 'process-status-debug.json'));
     await deleteFileWithRetries(path.join(backendRoot, 'running-processes-debug.json'));
+  }
+
+  const tmpFiles = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) =>
+      /^tmp-(?:agent|codeEditAgent|autopilotSessions|coverage-keys)(?:-[\w-]+)?\.txt$/i.test(name)
+    )
+    .map((name) => path.join(backendRoot, name));
+
+  for (const filePath of tmpFiles) {
+    await deleteFileWithRetries(filePath);
   }
 
   // Allow thread-mode test runs to perform fresh startup cleanup.

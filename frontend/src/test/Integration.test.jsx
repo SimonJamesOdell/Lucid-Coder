@@ -184,7 +184,7 @@ describe('Integration Tests', () => {
     await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Import Project' }));
-    await screen.findByText('Import Method');
+    await screen.findByText('Choose an import source');
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await screen.findByRole('button', { name: 'Create New Project' });
@@ -206,13 +206,14 @@ describe('Integration Tests', () => {
     await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Import Project' }));
-    const importForm = screen.getByRole('form');
-    fireEvent.submit(importForm);
-    expect(await screen.findByText('Project name is required')).toBeInTheDocument();
-
-    await user.type(screen.getByLabelText('Project Name *'), 'Sample Name');
-    fireEvent.submit(importForm);
+    await screen.findByText('Choose an import source');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('Project path is required')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Project Folder Path *'), 'C:/Sample');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByLabelText('Project Name *')).toHaveValue('Sample');
   });
 
   test('error handling across views', async () => {

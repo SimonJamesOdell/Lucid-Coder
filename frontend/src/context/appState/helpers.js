@@ -76,7 +76,8 @@ const buildProcessStateSnapshot = (projectId, payload = {}) => {
     fetchedAt: new Date().toISOString(),
     isRunning: hasRunningProcess,
     processes: normalizedProcesses,
-    ports
+    ports,
+    capabilities: payload?.capabilities || null
   };
 };
 

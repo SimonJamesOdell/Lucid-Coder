@@ -52,6 +52,21 @@
   padding: 1.15rem 1.25rem;
 }
 
+.process-card.process-empty {
+  justify-content: center;
+  min-height: 240px;
+}
+
+.process-empty-text {
+  color: var(--text-secondary, #b3b3b3);
+  margin: 0 0 1.25rem;
+}
+
+.process-empty-error {
+  color: var(--error-color, #ff6b6b);
+  margin: 0;
+}
+
 .process-card-header {
   align-items: center;
   display: flex;
