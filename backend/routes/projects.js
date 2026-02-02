@@ -14,7 +14,12 @@ import {
 } from '../database.js';
 import { createProjectWithFiles } from '../services/projectScaffolding.js';
 import { resolveProjectPath, getProjectsDir } from '../utils/projectPaths.js';
-import { runGitCommand, getCurrentBranch } from '../utils/git.js';
+import {
+  runGitCommand,
+  getCurrentBranch,
+  ensureGitRepository,
+  configureGitUser
+} from '../utils/git.js';
 import { startJob } from '../services/jobRunner.js';
 import { applyCompatibility, applyProjectStructure } from '../services/importCompatibility.js';
 import {
@@ -46,6 +51,13 @@ const router = express.Router();
 
 const normalizeImportMethod = (value) => (value === 'git' ? 'git' : 'local');
 const normalizeImportMode = (value) => (value === 'link' ? 'link' : 'copy');
+const normalizeGitConnectionMode = (value) => {
+  const normalized = safeTrim(value).toLowerCase();
+  if (normalized === 'global' || normalized === 'custom') {
+    return normalized;
+  }
+  return 'local';
+};
 const safeTrim = (value) => (typeof value === 'string' ? value.trim() : '');
 
 const extractRepoName = (value) => {
@@ -172,6 +184,52 @@ const fileExists = async (targetPath) => {
     }
     throw error;
   }
+};
+
+const resolveImportGitSettings = ({
+  payload,
+  globalSettings,
+  gitRemoteUrl,
+  gitDefaultBranch,
+  fallbackProvider
+}) => {
+  const connectionMode = normalizeGitConnectionMode(payload?.gitConnectionMode);
+  const requestedRemote = safeTrim(payload?.gitRemoteUrl);
+  const resolvedRemote = requestedRemote || safeTrim(gitRemoteUrl);
+  const requestedProvider = safeTrim(payload?.gitConnectionProvider)
+    || safeTrim(payload?.gitProvider)
+    || fallbackProvider;
+  const requestedBranch = safeTrim(payload?.gitDefaultBranch)
+    || safeTrim(gitDefaultBranch)
+    || safeTrim(globalSettings?.defaultBranch)
+    || 'main';
+
+  if (connectionMode === 'local' || !resolvedRemote) {
+    return {
+      workflow: 'local',
+      provider: requestedProvider,
+      remoteUrl: '',
+      username: '',
+      defaultBranch: requestedBranch
+    };
+  }
+
+  const globalProvider = safeTrim(globalSettings?.provider);
+  const globalUsername = safeTrim(globalSettings?.username);
+  const provider = connectionMode === 'global' && globalProvider
+    ? globalProvider
+    : requestedProvider;
+  const username = connectionMode === 'global' && globalUsername
+    ? globalUsername
+    : safeTrim(payload?.gitUsername);
+
+  return {
+    workflow: 'cloud',
+    provider,
+    remoteUrl: resolvedRemote,
+    username,
+    defaultBranch: requestedBranch
+  };
 };
 
 const normalizeProjectDates = (project = {}) => {
@@ -426,6 +484,14 @@ router.post('/import', async (req, res) => {
     let gitRemoteUrl = null;
     let gitDefaultBranch = null;
     let gitProvider = safeTrim(payload.gitProvider) || 'github';
+    let globalGitSettings = null;
+
+    try {
+      globalGitSettings = await getGitSettings();
+    } catch (error) {
+      console.warn('Failed to load global git settings for import:', error?.message || error);
+      globalGitSettings = null;
+    }
 
     if (importMethod === 'local') {
       const localPath = safeTrim(payload.localPath || payload.path);
@@ -535,6 +601,21 @@ router.post('/import', async (req, res) => {
       projectPath = targetPath;
     }
 
+    if (importMethod === 'local' && projectPath) {
+      const defaultBranch = safeTrim(payload.gitDefaultBranch)
+        || safeTrim(globalGitSettings?.defaultBranch)
+        || 'main';
+      const gitDirPath = path.join(projectPath, '.git');
+      const hasGitDir = await dirExists(gitDirPath);
+      if (!hasGitDir) {
+        await ensureGitRepository(projectPath, { defaultBranch });
+        await configureGitUser(projectPath, {
+          name: globalGitSettings?.username,
+          email: globalGitSettings?.email
+        });
+      }
+    }
+
     let structureResult = null;
     let compatibilityResult = null;
     if (applyStructureFix) {
@@ -568,13 +649,28 @@ router.post('/import', async (req, res) => {
 
     const project = await createProject(dbProjectData);
 
-    if (importMethod === 'git' && project?.id && gitRemoteUrl) {
-      await saveProjectGitSettings(project.id, {
-        provider: gitProvider,
-        remoteUrl: gitRemoteUrl,
-        defaultBranch: gitDefaultBranch || 'main',
-        workflow: 'local'
+    if (project?.id) {
+      const importGitSettings = resolveImportGitSettings({
+        payload,
+        globalSettings: globalGitSettings,
+        gitRemoteUrl,
+        gitDefaultBranch,
+        fallbackProvider: gitProvider
       });
+
+      await saveProjectGitSettings(project.id, importGitSettings);
+
+      if (importGitSettings.workflow === 'cloud' && importGitSettings.remoteUrl) {
+        const { stdout, code } = await runGitCommand(projectPath, ['remote', 'get-url', 'origin'], { allowFailure: true });
+        const existingRemote = typeof stdout === 'string' ? stdout.trim() : '';
+        if (code === 0 && existingRemote) {
+          if (existingRemote !== importGitSettings.remoteUrl) {
+            await runGitCommand(projectPath, ['remote', 'set-url', 'origin', importGitSettings.remoteUrl]);
+          }
+        } else {
+          await runGitCommand(projectPath, ['remote', 'add', 'origin', importGitSettings.remoteUrl]);
+        }
+      }
     }
 
     let setupJobs = [];

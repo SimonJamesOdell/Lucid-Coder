@@ -14,7 +14,9 @@ const mockShowMain = vi.fn();
 vi.mock('../context/AppStateContext', () => ({
   useAppState: () => ({
     importProject: mockImportProject,
-    showMain: mockShowMain
+    showMain: mockShowMain,
+    gitSettings: { provider: 'github', defaultBranch: 'main', tokenPresent: false },
+    gitConnectionStatus: null
   })
 }));
 
@@ -179,6 +181,43 @@ describe('ImportProject Component', () => {
 
       expect(screen.getByRole('tab', { name: 'Local Folder' })).toHaveAttribute('aria-selected', 'true');
     });
+  });
+
+  test('falls back to local-only when git connection is missing a remote URL', async () => {
+    let testHooks;
+    const user = userEvent.setup();
+    mockImportProject.mockResolvedValue({ project: { id: 1 }, jobs: [] });
+
+    render(
+      <ImportProject
+        __testHooks={(hooks) => {
+          testHooks = hooks;
+        }}
+      />
+    );
+
+    await act(async () => {
+      testHooks.setStateForTests({
+        currentStep: 4,
+        activeTab: 'local',
+        importData: {
+          name: 'Local Project',
+          path: 'C:/Projects/local',
+          description: ''
+        },
+        gitConnectionMode: 'custom',
+        gitConnectionRemoteUrl: ''
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Import Project' }));
+
+    expect(mockImportProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitConnectionMode: 'local',
+        gitRemoteUrl: ''
+      })
+    );
   });
 
   describe('Project Source Fields', () => {

@@ -57,7 +57,7 @@ export const guessProjectName = (value) => {
 };
 
 const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
-  const { importProject, showMain } = useAppState();
+  const { importProject, showMain, gitSettings, gitConnectionStatus } = useAppState();
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState('');
   const [activeTab, setActiveTab] = useState(sanitizeImportTab(initialImportMethod));
@@ -65,6 +65,10 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
   const [localImportMode, setLocalImportMode] = useState('copy');
   const [gitProvider, setGitProvider] = useState('github');
   const [gitAuthMethod, setGitAuthMethod] = useState('pat');
+  const [gitConnectionMode, setGitConnectionMode] = useState('local');
+  const [gitConnectionProvider, setGitConnectionProvider] = useState('github');
+  const [gitConnectionRemoteUrl, setGitConnectionRemoteUrl] = useState('');
+  const [gitConnectionDefaultBranch, setGitConnectionDefaultBranch] = useState('main');
   const [isFolderPickerOpen, setFolderPickerOpen] = useState(false);
   const [techDetectStatus, setTechDetectStatus] = useState({
     isLoading: false,
@@ -111,6 +115,18 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
 
   const frontendLanguages = FRONTEND_LANGUAGES;
   const backendLanguages = BACKEND_LANGUAGES;
+  const globalProvider = gitSettings?.provider || gitConnectionStatus?.provider || 'github';
+  const globalDefaultBranch = gitSettings?.defaultBranch || 'main';
+  const isGlobalConfigured = Boolean(gitSettings?.tokenPresent) || Boolean(gitConnectionStatus?.provider);
+
+  useEffect(() => {
+    if (gitConnectionMode === 'global') {
+      setGitConnectionProvider(globalProvider);
+    }
+    if (!gitConnectionDefaultBranch && globalDefaultBranch) {
+      setGitConnectionDefaultBranch(globalDefaultBranch);
+    }
+  }, [gitConnectionDefaultBranch, gitConnectionMode, globalDefaultBranch, globalProvider]);
 
   useEffect(() => {
     if (nameTouched) {
@@ -279,6 +295,18 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
       const trimmedGitUrl = importData.gitUrl.trim();
       const trimmedGitUsername = importData.gitUsername.trim();
       const trimmedGitToken = importData.gitToken.trim();
+      const trimmedGitRemoteUrl = gitConnectionRemoteUrl.trim();
+      const trimmedGitDefaultBranch = gitConnectionDefaultBranch.trim() || globalDefaultBranch;
+      const requestedConnectionMode = gitConnectionMode === 'global' && !isGlobalConfigured
+        ? 'local'
+        : gitConnectionMode;
+      const effectiveConnectionMode = (requestedConnectionMode !== 'local' && !trimmedGitRemoteUrl)
+        ? 'local'
+        : requestedConnectionMode;
+      const effectiveRemoteUrl = effectiveConnectionMode === 'local' ? '' : trimmedGitRemoteUrl;
+      const effectiveConnectionProvider = effectiveConnectionMode === 'global'
+        ? globalProvider
+        : gitConnectionProvider;
       
       const projectData = {
         name: trimmedName,
@@ -300,7 +328,11 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
         gitUsername: trimmedGitUsername,
         gitToken: trimmedGitToken,
         applyCompatibility: compatibilityRequired && compatibilityConsent,
-        applyStructureFix: structureRequired && structureConsent
+        applyStructureFix: structureRequired && structureConsent,
+        gitConnectionMode: effectiveConnectionMode,
+        gitRemoteUrl: effectiveRemoteUrl,
+        gitDefaultBranch: trimmedGitDefaultBranch,
+        gitConnectionProvider: effectiveConnectionProvider
       };
 
       const result = await importProject(projectData);
@@ -386,6 +418,18 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
         }
         if (Object.prototype.hasOwnProperty.call(next, 'gitAuthMethod')) {
           setGitAuthMethod(next.gitAuthMethod);
+        }
+        if (Object.prototype.hasOwnProperty.call(next, 'gitConnectionMode')) {
+          setGitConnectionMode(next.gitConnectionMode);
+        }
+        if (Object.prototype.hasOwnProperty.call(next, 'gitConnectionProvider')) {
+          setGitConnectionProvider(next.gitConnectionProvider);
+        }
+        if (Object.prototype.hasOwnProperty.call(next, 'gitConnectionRemoteUrl')) {
+          setGitConnectionRemoteUrl(next.gitConnectionRemoteUrl);
+        }
+        if (Object.prototype.hasOwnProperty.call(next, 'gitConnectionDefaultBranch')) {
+          setGitConnectionDefaultBranch(next.gitConnectionDefaultBranch);
         }
         if (Object.prototype.hasOwnProperty.call(next, 'setupState')) {
           setSetupState((prev) => ({
@@ -508,12 +552,21 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
 
   const getAvailableBackendFrameworks = () => resolveBackendFrameworks(importData.backend.language);
 
+  const handleGitConnectionModeChange = (nextMode) => {
+    setGitConnectionMode(nextMode);
+    if (nextMode === 'global') {
+      setGitConnectionProvider(globalProvider);
+    }
+  };
+
   const compatibilityRequired = activeTab === 'git'
     || Boolean(compatibilityStatus.error)
     || Boolean(compatibilityPlan?.needsChanges);
   const structureRequired = activeTab === 'git'
     || Boolean(compatibilityPlan?.structure?.needsMove);
   const compatibilityChanges = Array.isArray(compatibilityPlan?.changes) ? compatibilityPlan.changes : [];
+  const gitRemoteRequired = gitConnectionMode !== 'local';
+  const gitRemoteMissing = gitRemoteRequired && !gitConnectionRemoteUrl.trim();
   const setupJobs = setupState.jobs || [];
   const setupProjectId = setupState.projectId;
   const setupError = setupState.error;
@@ -1012,6 +1065,97 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                         </div>
                       </div>
                     </label>
+                  </div>
+
+                  <div className="form-section">
+                    <h3>Git connection</h3>
+                    <p>Choose how this project should connect to Git.</p>
+                    <div className="radio-group">
+                      <label className={`radio-card ${gitConnectionMode === 'local' ? 'selected' : ''}`}>
+                        <input
+                          type="radio"
+                          name="gitConnectionMode"
+                          value="local"
+                          checked={gitConnectionMode === 'local'}
+                          onChange={() => handleGitConnectionModeChange('local')}
+                          disabled={importLoading}
+                        />
+                        <div>
+                          <div className="radio-title">Local only</div>
+                          <div className="radio-subtitle">Keep the project repository on this machine.</div>
+                        </div>
+                      </label>
+                      <label className={`radio-card ${gitConnectionMode === 'global' ? 'selected' : ''}`}>
+                        <input
+                          type="radio"
+                          name="gitConnectionMode"
+                          value="global"
+                          checked={gitConnectionMode === 'global'}
+                          onChange={() => handleGitConnectionModeChange('global')}
+                          disabled={importLoading}
+                        />
+                        <div>
+                          <div className="radio-title">Use global connection</div>
+                          <div className="radio-subtitle">Reuse your global GitHub/GitLab connection.</div>
+                        </div>
+                      </label>
+                      <label className={`radio-card ${gitConnectionMode === 'custom' ? 'selected' : ''}`}>
+                        <input
+                          type="radio"
+                          name="gitConnectionMode"
+                          value="custom"
+                          checked={gitConnectionMode === 'custom'}
+                          onChange={() => handleGitConnectionModeChange('custom')}
+                          disabled={importLoading}
+                        />
+                        <div>
+                          <div className="radio-title">Use custom connection</div>
+                          <div className="radio-subtitle">Specify a different remote and provider.</div>
+                        </div>
+                      </label>
+                    </div>
+
+                    {gitConnectionMode !== 'local' && (
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label htmlFor="import-git-provider">Git Provider</label>
+                          <select
+                            id="import-git-provider"
+                            value={gitConnectionProvider}
+                            onChange={(event) => setGitConnectionProvider(event.target.value)}
+                            className="form-select"
+                            disabled={importLoading || gitConnectionMode === 'global'}
+                          >
+                            <option value="github">GitHub</option>
+                            <option value="gitlab">GitLab</option>
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label htmlFor="import-git-remote-url">Remote Repository URL *</label>
+                          <input
+                            id="import-git-remote-url"
+                            type="url"
+                            placeholder="https://github.com/username/repository.git"
+                            value={gitConnectionRemoteUrl}
+                            onChange={(event) => setGitConnectionRemoteUrl(event.target.value)}
+                            className="form-input"
+                            disabled={importLoading}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {gitConnectionMode === 'global' && !isGlobalConfigured && (
+                      <div className="tech-detect-status">
+                        Global connection is not configured. This import will fall back to local-only Git.
+                      </div>
+                    )}
+
+                    {gitRemoteMissing && gitConnectionMode !== 'local' && (
+                      <div className="tech-detect-status">
+                        No remote URL provided. This import will default to local-only Git.
+                      </div>
+                    )}
                   </div>
                 </>
               )}

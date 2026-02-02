@@ -16,7 +16,7 @@ import projectRoutes, {
   serializeJob,
   copyDirectoryRecursive
 } from '../routes/projects.js';
-import db, { initializeDatabase, closeDatabase, createProject } from '../database.js';
+import db, { initializeDatabase, closeDatabase, createProject, getProjectGitSettings } from '../database.js';
 import { resolveProjectPath } from '../utils/projectPaths.js';
 import * as cleanup from '../routes/projects/cleanup.js';
 
@@ -28,8 +28,10 @@ vi.mock('../services/projectScaffolding.js', () => ({
 }));
 
 vi.mock('../utils/git.js', () => ({
-  runGitCommand: vi.fn(),
-  getCurrentBranch: vi.fn()
+  runGitCommand: vi.fn(async () => ({ stdout: '', code: 1 })),
+  getCurrentBranch: vi.fn(),
+  ensureGitRepository: vi.fn(),
+  configureGitUser: vi.fn()
 }));
 
 vi.mock('../services/importCompatibility.js', () => ({
@@ -640,6 +642,327 @@ describe('Projects routes coverage (projects.js)', () => {
         .expect(201);
 
       expect(response.body).toMatchObject({ success: true });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('defaults imported projects to local-only git settings', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `git-local-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-local-${Date.now()}`
+        })
+        .expect(201);
+
+      const settings = await getProjectGitSettings(response.body.project.id);
+      expect(settings).toMatchObject({ workflow: 'local', remoteUrl: '' });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('imports even when global git settings fail to load', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `git-settings-fail-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const dbModule = await import('../database.js');
+      const gitSettingsSpy = vi.spyOn(dbModule, 'getGitSettings').mockRejectedValue({ message: '' });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-settings-fail-${Date.now()}`
+        })
+        .expect(201);
+
+      expect(response.body).toMatchObject({ success: true });
+
+      gitSettingsSpy.mockRestore();
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('skips git initialization when an imported project already has .git', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { ensureGitRepository, configureGitUser } = await import('../utils/git.js');
+      ensureGitRepository.mockClear();
+      configureGitUser.mockClear();
+
+      const localPath = path.join(projectsRoot, `git-present-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.mkdir(path.join(localPath, '.git'), { recursive: true });
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-present-${Date.now()}`
+        })
+        .expect(201);
+
+      expect(ensureGitRepository).not.toHaveBeenCalled();
+      expect(configureGitUser).not.toHaveBeenCalled();
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('skips project git settings when createProject returns no id', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `git-no-id-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const dbModule = await import('../database.js');
+      const createSpy = vi.spyOn(dbModule, 'createProject').mockResolvedValue({ name: 'no-id' });
+      const saveSpy = vi.spyOn(dbModule, 'saveProjectGitSettings');
+
+      await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-no-id-${Date.now()}`
+        })
+        .expect(201);
+
+      expect(saveSpy).not.toHaveBeenCalled();
+
+      createSpy.mockRestore();
+      saveSpy.mockRestore();
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('stores cloud git settings when a remote connection is provided', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand } = await import('../utils/git.js');
+      runGitCommand.mockClear();
+      runGitCommand
+        .mockResolvedValueOnce({ stdout: 'https://old.example/repo.git\n', code: 0 })
+        .mockResolvedValueOnce({ stdout: '', code: 0 });
+
+      const localPath = path.join(projectsRoot, `git-remote-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'remote' }));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-remote-${Date.now()}`,
+          gitConnectionMode: 'custom',
+          gitRemoteUrl: 'https://github.com/example/repo.git',
+          gitConnectionProvider: 'github'
+        })
+        .expect(201);
+
+      const settings = await getProjectGitSettings(response.body.project.id);
+      expect(settings).toMatchObject({
+        workflow: 'cloud',
+        remoteUrl: 'https://github.com/example/repo.git',
+        provider: 'github'
+      });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('uses gitProvider when connection provider is not supplied', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `git-provider-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'remote' }));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-provider-${Date.now()}`,
+          gitConnectionMode: 'custom',
+          gitRemoteUrl: 'https://gitlab.com/example/repo.git',
+          gitProvider: 'gitlab'
+        })
+        .expect(201);
+
+      const settings = await getProjectGitSettings(response.body.project.id);
+      expect(settings).toMatchObject({ provider: 'gitlab' });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('uses global provider and username when connection mode is global', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const dbModule = await import('../database.js');
+      const gitSettingsSpy = vi.spyOn(dbModule, 'getGitSettings').mockResolvedValue({
+        provider: 'gitlab',
+        username: 'global-user',
+        defaultBranch: 'main'
+      });
+
+      const localPath = path.join(projectsRoot, `git-global-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'remote' }));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-global-${Date.now()}`,
+          gitConnectionMode: 'global',
+          gitRemoteUrl: 'https://gitlab.com/example/repo.git'
+        })
+        .expect(201);
+
+      const settings = await getProjectGitSettings(response.body.project.id);
+      expect(settings).toMatchObject({
+        workflow: 'cloud',
+        provider: 'gitlab',
+        username: 'global-user'
+      });
+
+      gitSettingsSpy.mockRestore();
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('adds origin remote when none exists for a cloud connection', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand } = await import('../utils/git.js');
+      runGitCommand.mockClear();
+      runGitCommand
+        .mockResolvedValueOnce({ stdout: null, code: 1 })
+        .mockResolvedValueOnce({ stdout: '', code: 0 });
+
+      const localPath = path.join(projectsRoot, `git-remote-add-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'remote' }));
+
+      await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-remote-add-${Date.now()}`,
+          gitConnectionMode: 'custom',
+          gitRemoteUrl: 'https://github.com/example/repo.git',
+          gitConnectionProvider: 'github'
+        })
+        .expect(201);
+
+      expect(runGitCommand).toHaveBeenCalledWith(
+        expect.anything(),
+        ['remote', 'add', 'origin', 'https://github.com/example/repo.git']
+      );
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('does not update origin when it already matches the remote URL', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand } = await import('../utils/git.js');
+      runGitCommand.mockClear();
+      runGitCommand
+        .mockResolvedValueOnce({ stdout: 'https://github.com/example/repo.git\n', code: 0 });
+
+      const localPath = path.join(projectsRoot, `git-remote-same-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'remote' }));
+
+      await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-remote-same-${Date.now()}`,
+          gitConnectionMode: 'custom',
+          gitRemoteUrl: 'https://github.com/example/repo.git',
+          gitConnectionProvider: 'github'
+        })
+        .expect(201);
+
+      expect(runGitCommand).toHaveBeenCalledWith(
+        expect.anything(),
+        ['remote', 'get-url', 'origin'],
+        { allowFailure: true }
+      );
+      expect(runGitCommand).not.toHaveBeenCalledWith(
+        expect.anything(),
+        ['remote', 'set-url', 'origin', 'https://github.com/example/repo.git']
+      );
 
       if (originalProjectsDir === undefined) {
         delete process.env.PROJECTS_DIR;

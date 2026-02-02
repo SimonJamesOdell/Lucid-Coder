@@ -45,6 +45,7 @@ vi.mock('../services/remoteRepoService.js', () => {
 
 const gitUtils = vi.hoisted(() => ({
   ensureGitRepository: vi.fn(),
+  configureGitUser: vi.fn(),
   fetchRemote: vi.fn(),
   getAheadBehind: vi.fn(),
   getCurrentBranch: vi.fn(),
