@@ -9,10 +9,14 @@ import {
   updateProject,
   deleteProject,
   getGitSettings,
-  getPortSettings
+  getPortSettings,
+  saveProjectGitSettings
 } from '../database.js';
 import { createProjectWithFiles } from '../services/projectScaffolding.js';
-import { resolveProjectPath } from '../utils/projectPaths.js';
+import { resolveProjectPath, getProjectsDir } from '../utils/projectPaths.js';
+import { runGitCommand, getCurrentBranch } from '../utils/git.js';
+import { startJob } from '../services/jobRunner.js';
+import { applyCompatibility, applyProjectStructure } from '../services/importCompatibility.js';
 import {
   initProgress,
   updateProgress,
@@ -40,6 +44,308 @@ import { registerProjectProcessRoutes } from './projects/routes.processes.js';
 
 const router = express.Router();
 
+const normalizeImportMethod = (value) => (value === 'git' ? 'git' : 'local');
+const normalizeImportMode = (value) => (value === 'link' ? 'link' : 'copy');
+const safeTrim = (value) => (typeof value === 'string' ? value.trim() : '');
+
+const extractRepoName = (value) => {
+  const raw = safeTrim(value);
+  if (!raw) {
+    return '';
+  }
+
+  const cleaned = raw.replace(/[?#].*$/, '');
+  const parts = cleaned.split('/').filter(Boolean);
+  let candidate = parts[parts.length - 1] || '';
+
+  if (candidate.includes(':')) {
+    candidate = candidate.split(':').pop() || candidate;
+  }
+
+  return candidate.replace(/\.git$/i, '');
+};
+
+const stripGitCredentials = (value) => {
+  const raw = safeTrim(value);
+  if (!raw) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.username || parsed.password) {
+      parsed.username = '';
+      parsed.password = '';
+      return parsed.toString();
+    }
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+};
+
+const buildCloneUrl = ({ url, authMethod, token, username, provider }) => {
+  const rawUrl = safeTrim(url);
+  const trimmedToken = safeTrim(token);
+  const normalizedAuth = authMethod === 'ssh' ? 'ssh' : 'pat';
+  const normalizedProvider = safeTrim(provider).toLowerCase();
+
+  if (normalizedAuth !== 'pat' || !trimmedToken) {
+    return {
+      cloneUrl: rawUrl,
+      safeUrl: stripGitCredentials(rawUrl)
+    };
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    const fallbackUser = normalizedProvider === 'gitlab' ? 'oauth2' : 'x-access-token';
+    const authUser = safeTrim(username) || fallbackUser;
+    parsed.username = authUser;
+    parsed.password = trimmedToken;
+    return {
+      cloneUrl: parsed.toString(),
+      safeUrl: stripGitCredentials(parsed.toString())
+    };
+  } catch {
+    return {
+      cloneUrl: rawUrl,
+      safeUrl: stripGitCredentials(rawUrl)
+    };
+  }
+};
+
+const assertDirectoryExists = async (targetPath) => {
+  const stats = await fs.stat(targetPath);
+  if (!stats.isDirectory()) {
+    const error = new Error('Project path must be a directory');
+    error.statusCode = 400;
+    throw error;
+  }
+};
+
+const assertProjectPathAvailable = async (targetPath) => {
+  try {
+    await fs.stat(targetPath);
+    const error = new Error('Project path already exists');
+    error.statusCode = 409;
+    throw error;
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+};
+
+const pathExists = async (targetPath) => {
+  try {
+    await fs.stat(targetPath);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+};
+
+const dirExists = async (targetPath) => {
+  try {
+    const stats = await fs.stat(targetPath);
+    return stats.isDirectory();
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+};
+
+const fileExists = async (targetPath) => {
+  try {
+    const stats = await fs.stat(targetPath);
+    return stats.isFile();
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+};
+
+const serializeJob = (job) => {
+  if (!job) {
+    return null;
+  }
+  return {
+    id: job.id,
+    projectId: job.projectId ?? job.project_id ?? null,
+    type: job.type,
+    displayName: job.displayName,
+    status: job.status,
+    command: job.command,
+    args: job.args,
+    cwd: job.cwd,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    exitCode: job.exitCode,
+    signal: job.signal,
+    logs: job.logs
+  };
+};
+
+const enqueueInstallJobs = async ({ projectId, projectPath }) => {
+  if (!projectId || !projectPath) {
+    return [];
+  }
+
+  const jobs = [];
+  const frontendPath = path.join(projectPath, 'frontend');
+  const backendPath = path.join(projectPath, 'backend');
+  const hasFrontendDir = await dirExists(frontendPath);
+  const hasBackendDir = await dirExists(backendPath);
+  const backendBase = hasBackendDir ? backendPath : projectPath;
+
+  const frontendPackage = hasFrontendDir && await fileExists(path.join(frontendPath, 'package.json'));
+  if (frontendPackage) {
+    try {
+      jobs.push(startJob({
+        projectId,
+        type: 'frontend:install',
+        displayName: 'Install frontend dependencies',
+        command: 'npm',
+        args: ['install'],
+        cwd: frontendPath
+      }));
+    } catch (error) {
+      console.warn('Failed to start frontend install job:', error?.message || error);
+    }
+  }
+
+  const backendPackage = await fileExists(path.join(backendBase, 'package.json'));
+  const backendRequirements = await fileExists(path.join(backendBase, 'requirements.txt'));
+  const backendPyProject = await fileExists(path.join(backendBase, 'pyproject.toml'));
+  const backendPom = await fileExists(path.join(backendBase, 'pom.xml'));
+  const backendGradle = await fileExists(path.join(backendBase, 'build.gradle')) || await fileExists(path.join(backendBase, 'build.gradle.kts'));
+  const backendGradleWrapper = await fileExists(path.join(backendBase, 'gradlew')) || await fileExists(path.join(backendBase, 'gradlew.bat'));
+  const backendGoMod = await fileExists(path.join(backendBase, 'go.mod'));
+  const backendCargo = await fileExists(path.join(backendBase, 'Cargo.toml'));
+  const backendComposer = await fileExists(path.join(backendBase, 'composer.json'));
+  const backendGemfile = await fileExists(path.join(backendBase, 'Gemfile'));
+  const backendSwift = await fileExists(path.join(backendBase, 'Package.swift'));
+
+  let backendCommand = null;
+  let backendArgs = null;
+
+  if (backendPackage) {
+    backendCommand = 'npm';
+    backendArgs = ['install'];
+  } else if (backendRequirements) {
+    backendCommand = 'python';
+    backendArgs = ['-m', 'pip', 'install', '-r', 'requirements.txt'];
+  } else if (backendPyProject) {
+    backendCommand = 'python';
+    backendArgs = ['-m', 'pip', 'install', '-e', '.'];
+  } else if (backendPom) {
+    backendCommand = 'mvn';
+    backendArgs = ['-q', '-DskipTests', 'package'];
+  } else if (backendGradle) {
+    backendCommand = backendGradleWrapper
+      ? (await fileExists(path.join(backendBase, 'gradlew.bat')) ? path.join(backendBase, 'gradlew.bat') : path.join(backendBase, 'gradlew'))
+      : 'gradle';
+    backendArgs = ['build', '-x', 'test'];
+  } else if (backendGoMod) {
+    backendCommand = 'go';
+    backendArgs = ['mod', 'download'];
+  } else if (backendCargo) {
+    backendCommand = 'cargo';
+    backendArgs = ['fetch'];
+  } else if (backendComposer) {
+    backendCommand = 'composer';
+    backendArgs = ['install'];
+  } else if (backendGemfile) {
+    backendCommand = 'bundle';
+    backendArgs = ['install'];
+  } else if (backendSwift) {
+    backendCommand = 'swift';
+    backendArgs = ['package', 'resolve'];
+  }
+
+  if (backendCommand && backendArgs) {
+    try {
+      jobs.push(startJob({
+        projectId,
+        type: 'backend:install',
+        displayName: 'Install backend dependencies',
+        command: backendCommand,
+        args: backendArgs,
+        cwd: backendBase
+      }));
+    } catch (error) {
+      console.warn('Failed to start backend install job:', error?.message || error);
+    }
+  }
+
+  return jobs;
+};
+
+const DEFAULT_COPY_IGNORE_DIRS = new Set(['node_modules', '.git']);
+
+const copyDirectoryRecursive = async (sourceDir, targetDir, { onFileError, ignoreDirs = DEFAULT_COPY_IGNORE_DIRS } = {}) => {
+  await fs.mkdir(targetDir, { recursive: true });
+
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory() && ignoreDirs.has(entry.name)) {
+      continue;
+    }
+    const srcPath = path.join(sourceDir, entry.name);
+    const destPath = path.join(targetDir, entry.name);
+
+    if (entry.isDirectory()) {
+      await copyDirectoryRecursive(srcPath, destPath, { onFileError });
+      continue;
+    }
+
+    if (entry.isSymbolicLink()) {
+      try {
+        const linkTarget = await fs.readlink(srcPath);
+        await fs.symlink(linkTarget, destPath);
+      } catch (error) {
+        if (typeof onFileError === 'function') {
+          onFileError(error, srcPath, destPath);
+        }
+        throw error;
+      }
+      continue;
+    }
+
+    try {
+      await fs.copyFile(srcPath, destPath);
+    } catch (error) {
+      if (typeof onFileError === 'function') {
+        onFileError(error, srcPath, destPath);
+      }
+      throw error;
+    }
+  }
+};
+
+const cleanupExistingImportTarget = async (targetPath) => {
+  if (!targetPath || !isWithinManagedProjectsRoot(targetPath)) {
+    return false;
+  }
+
+  try {
+    await fs.rm(targetPath, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
 registerProjectProcessRoutes(router);
 registerProjectFileRoutes(router);
 registerProjectGitRoutes(router);
@@ -58,6 +364,262 @@ router.get('/', async (req, res) => {
       success: false,
       error: 'Failed to fetch projects'
     });
+  }
+});
+
+// POST /api/projects/import - Import existing project (local or git)
+router.post('/import', async (req, res) => {
+  let createdProjectPath = null;
+  try {
+    const payload = req.body || {};
+    const importMethod = normalizeImportMethod(payload.importMethod);
+    const importMode = normalizeImportMode(payload.importMode);
+    const applyCompatibilityChanges = Boolean(payload.applyCompatibility);
+    const applyStructureFix = Boolean(payload.applyStructureFix);
+
+    let projectName = safeTrim(payload.name);
+    if (!projectName) {
+      if (importMethod === 'git') {
+        projectName = extractRepoName(payload.gitUrl);
+      } else {
+        projectName = extractRepoName(payload.localPath || payload.path);
+      }
+    }
+
+    if (!projectName) {
+      return res.status(400).json({ success: false, error: 'Project name is required' });
+    }
+
+    const existingProject = await getProjectByName(projectName);
+    if (existingProject) {
+      return res.status(409).json({
+        success: false,
+        error: `A project with the name "${projectName}" already exists. Please choose a different name.`
+      });
+    }
+
+    const frontend = payload.frontend || {};
+    const backend = payload.backend || {};
+
+    const frontendConfig = {
+      language: safeTrim(frontend.language) || 'javascript',
+      framework: safeTrim(frontend.framework) || 'react'
+    };
+
+    const backendConfig = {
+      language: safeTrim(backend.language) || 'javascript',
+      framework: safeTrim(backend.framework) || 'express'
+    };
+
+    const description = safeTrim(payload.description);
+    let projectPath = null;
+    let gitRemoteUrl = null;
+    let gitDefaultBranch = null;
+    let gitProvider = safeTrim(payload.gitProvider) || 'github';
+
+    if (importMethod === 'local') {
+      const localPath = safeTrim(payload.localPath || payload.path);
+      if (!localPath) {
+        return res.status(400).json({ success: false, error: 'Project path is required' });
+      }
+
+      await assertDirectoryExists(localPath);
+
+      if (importMode === 'link') {
+        if (!isWithinManagedProjectsRoot(localPath)) {
+          return res.status(400).json({
+            success: false,
+            error: 'Linked projects must be inside the managed projects folder. Use copy instead.'
+          });
+        }
+        projectPath = localPath;
+      } else {
+        const targetPath = resolveProjectPath(projectName);
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        if (await pathExists(targetPath)) {
+          const cleaned = await cleanupExistingImportTarget(targetPath);
+          if (!cleaned) {
+            return res.status(409).json({
+              success: false,
+              error: 'Project path already exists'
+            });
+          }
+        }
+        try {
+          await fs.cp(localPath, targetPath, {
+            recursive: true,
+            filter: (src) => {
+              const normalized = src.replace(/\\/g, '/');
+              return !normalized.includes('/node_modules/') && !normalized.endsWith('/node_modules');
+            }
+          });
+        } catch (copyError) {
+          let failedPath = null;
+          let failure = copyError;
+
+          try {
+            await copyDirectoryRecursive(localPath, targetPath, {
+              onFileError: (error, srcPath) => {
+                failedPath = srcPath;
+                failure = error;
+              }
+            });
+          } catch (recursiveError) {
+            failure = recursiveError;
+          }
+
+          const code = failure?.code || copyError?.code || 'UNKNOWN';
+          const suffix = failedPath ? ` at ${failedPath}` : '';
+          const message = `Failed to copy project files (${code})${suffix}. Try linking instead.`;
+          const error = new Error(message);
+          error.statusCode = 400;
+          error.code = code;
+          error.failedPath = failedPath;
+          throw error;
+        }
+        createdProjectPath = targetPath;
+        projectPath = targetPath;
+      }
+    } else {
+      const gitUrl = safeTrim(payload.gitUrl);
+      if (!gitUrl) {
+        return res.status(400).json({ success: false, error: 'Git repository URL is required' });
+      }
+
+      const targetPath = resolveProjectPath(projectName);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      if (await pathExists(targetPath)) {
+        const cleaned = await cleanupExistingImportTarget(targetPath);
+        if (!cleaned) {
+          return res.status(409).json({
+            success: false,
+            error: 'Project path already exists'
+          });
+        }
+      }
+
+      const authMethod = safeTrim(payload.gitAuthMethod).toLowerCase() === 'ssh' ? 'ssh' : 'pat';
+      const { cloneUrl, safeUrl } = buildCloneUrl({
+        url: gitUrl,
+        authMethod,
+        token: payload.gitToken,
+        username: payload.gitUsername,
+        provider: gitProvider
+      });
+
+      const cloneBaseDir = getProjectsDir();
+      await fs.mkdir(cloneBaseDir, { recursive: true });
+      await runGitCommand(cloneBaseDir, ['clone', cloneUrl, targetPath]);
+      createdProjectPath = targetPath;
+
+      const sanitizedRemoteUrl = safeUrl;
+      await runGitCommand(targetPath, ['remote', 'set-url', 'origin', sanitizedRemoteUrl], { allowFailure: true });
+      gitRemoteUrl = sanitizedRemoteUrl;
+
+      try {
+        gitDefaultBranch = await getCurrentBranch(targetPath);
+      } catch {
+        gitDefaultBranch = null;
+      }
+
+      projectPath = targetPath;
+    }
+
+    let structureResult = null;
+    let compatibilityResult = null;
+    if (applyStructureFix) {
+      try {
+        structureResult = await applyProjectStructure(projectPath);
+      } catch (error) {
+        const structureError = new Error(error?.message || 'Failed to apply project structure updates');
+        structureError.statusCode = 400;
+        throw structureError;
+      }
+    }
+    if (applyCompatibilityChanges) {
+      try {
+        compatibilityResult = await applyCompatibility(projectPath);
+      } catch (error) {
+        const compatError = new Error(error?.message || 'Failed to apply compatibility changes');
+        compatError.statusCode = 400;
+        throw compatError;
+      }
+    }
+
+    const dbProjectData = {
+      name: projectName,
+      description,
+      language: `${frontendConfig.language},${backendConfig.language}`,
+      framework: `${frontendConfig.framework},${backendConfig.framework}`,
+      path: projectPath,
+      frontendPort: null,
+      backendPort: null
+    };
+
+    const project = await createProject(dbProjectData);
+
+    if (importMethod === 'git' && project?.id && gitRemoteUrl) {
+      await saveProjectGitSettings(project.id, {
+        provider: gitProvider,
+        remoteUrl: gitRemoteUrl,
+        defaultBranch: gitDefaultBranch || 'main',
+        workflow: 'local'
+      });
+    }
+
+    let setupJobs = [];
+    try {
+      setupJobs = await enqueueInstallJobs({ projectId: project.id, projectPath });
+    } catch (error) {
+      console.warn('Failed to enqueue setup jobs:', error?.message || error);
+    }
+
+    const enhancedProject = {
+      ...project,
+      frontend: frontendConfig,
+      backend: backendConfig,
+      path: projectPath
+    };
+
+    return res.status(201).json({
+      success: true,
+      project: enhancedProject,
+      jobs: setupJobs.map(serializeJob),
+      structure: structureResult,
+      compatibility: compatibilityResult,
+      message: 'Project imported successfully'
+    });
+  } catch (error) {
+    console.error('Error importing project:', error);
+    if (createdProjectPath && isWithinManagedProjectsRoot(createdProjectPath)) {
+      try {
+        await fs.rm(createdProjectPath, { recursive: true, force: true });
+      } catch (cleanupError) {
+        console.warn('Failed to clean up imported project folder:', cleanupError?.message || cleanupError);
+      }
+    }
+    const rawMessage = typeof error?.message === 'string' ? error.message : '';
+    let statusCode = error?.statusCode || 500;
+    if (rawMessage.includes('UNIQUE constraint failed')) {
+      statusCode = 409;
+    }
+    const errorMessage = statusCode === 500 ? (rawMessage || 'Failed to import project') : error.message;
+    const errorResponse = {
+      success: false,
+      error: errorMessage
+    };
+
+    if (process.env.NODE_ENV === 'development') {
+      errorResponse.details = {
+        code: error?.code || null,
+        name: error?.name || null,
+        failedPath: error?.failedPath || null
+      };
+    }
+
+    attachTestErrorDetails(error, errorResponse);
+
+    return res.status(statusCode).json(errorResponse);
   }
 });
 
@@ -482,5 +1044,18 @@ export {
   __processManager,
   __projectRoutesInternals
 } from './projects/testingExports.js';
+
+export {
+  buildCloneUrl,
+  enqueueInstallJobs,
+  stripGitCredentials,
+  extractRepoName,
+  assertProjectPathAvailable,
+  pathExists,
+  dirExists,
+  fileExists,
+  serializeJob,
+  copyDirectoryRecursive
+};
 
 export default router;

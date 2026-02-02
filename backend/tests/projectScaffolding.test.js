@@ -494,6 +494,46 @@ describe('generateProjectFiles', () => {
   });
 });
 
+describe('startProject entrypoint validation', () => {
+  test('throws when no frontend package.json exists in real mode', async () => {
+    const projectPath = path.join(tempDir, 'no-frontend');
+    await fs.mkdir(projectPath, { recursive: true });
+
+    await runWithRealModeProjectScaffolding(async (module) => {
+      await expect(module.startProject(projectPath)).rejects.toThrow(
+        'No frontend package.json found in frontend/ or project root'
+      );
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  test('uses root package.json as frontend entrypoint in test mode', async () => {
+    const projectPath = path.join(tempDir, 'root-frontend-only');
+    await fs.mkdir(projectPath, { recursive: true });
+    await fs.writeFile(
+      path.join(projectPath, 'package.json'),
+      JSON.stringify({ name: 'root-app', scripts: { dev: 'vite' } })
+    );
+
+    const result = await projectScaffolding.startProject(projectPath);
+
+    expect(result.success).toBe(true);
+    expect(result.processes.frontend).toEqual(expect.objectContaining({ type: 'frontend', isStub: true }));
+  });
+
+  test('startProjectTarget throws when backend entrypoint is missing in real mode', async () => {
+    const projectPath = path.join(tempDir, 'no-backend');
+    await fs.mkdir(projectPath, { recursive: true });
+
+    await runWithRealModeProjectScaffolding(async (module) => {
+      await expect(module.startProjectTarget(projectPath, 'backend')).rejects.toThrow(
+        'No supported backend entrypoint found'
+      );
+    });
+  });
+});
+
 describe('startProjectTarget', () => {
   const getSpawnCall = () => spawnMock.mock.calls.at(-1);
 
@@ -524,6 +564,36 @@ describe('startProjectTarget', () => {
     expect(result.success).toBe(true);
     expect(result.process).toEqual(expect.objectContaining({ type: 'frontend', isStub: true }));
     expect(Number.isInteger(result.port)).toBe(true);
+  });
+
+  test('returns stub frontend when no package.json exists', async () => {
+    const projectPath = path.join(tempDir, 'target-no-frontend-pkg');
+    await fs.mkdir(projectPath, { recursive: true });
+
+    const result = await projectScaffolding.startProjectTarget(projectPath, 'frontend', {
+      frontendPort: 61235,
+      frontendPortBase: 61235
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.process).toEqual(expect.objectContaining({ type: 'frontend', isStub: true }));
+  });
+
+  test('uses root package.json when frontend package.json is missing in test mode', async () => {
+    const projectPath = path.join(tempDir, 'target-root-frontend');
+    await fs.mkdir(projectPath, { recursive: true });
+    await fs.writeFile(
+      path.join(projectPath, 'package.json'),
+      JSON.stringify({ name: 'root-app', scripts: { dev: 'vite' } })
+    );
+
+    const result = await projectScaffolding.startProjectTarget(projectPath, 'frontend', {
+      frontendPort: 61234,
+      frontendPortBase: 61234
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.process).toEqual(expect.objectContaining({ type: 'frontend', isStub: true }));
   });
 
   test('rejects missing project paths', async () => {
@@ -613,6 +683,24 @@ describe('startProjectTarget', () => {
       expect(call?.[0]).toBe('npm');
       expect(call?.[1]).toEqual(expect.arrayContaining(['run', 'dev', '--', '--port']));
       expect(call?.[2]).toEqual(expect.objectContaining({ shell: true }));
+    });
+  });
+
+  test('uses frontend directory when frontend package.json exists in real mode', async () => {
+    const projectPath = path.join(tempDir, 'target-frontend-pkg-real');
+    await ensureDirs(projectPath);
+    await ensurePkg(path.join(projectPath, 'frontend', 'package.json'), { name: 'frontend-app', scripts: { dev: 'vite' } });
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      const result = await startProjectTarget(projectPath, 'frontend', {
+        frontendPort: 61500,
+        frontendPortBase: 61500
+      });
+
+      expect(result.success).toBe(true);
+
+      const call = getSpawnCall();
+      expect(call?.[2]).toEqual(expect.objectContaining({ cwd: path.join(projectPath, 'frontend') }));
     });
   });
 

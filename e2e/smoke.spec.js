@@ -1,4 +1,7 @@
 const { test, expect } = require('@playwright/test')
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
 
 const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://localhost:5000'
 
@@ -62,24 +65,36 @@ test('can import a project and reach main view', async ({ page, request }) => {
   await ensureBootstrapped({ request })
 
   const projectName = `E2E Import ${Date.now()}`
+  const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucidcoder-e2e-import-'))
+  try {
+    fs.writeFileSync(
+      path.join(localRoot, 'package.json'),
+      JSON.stringify({ name: 'e2e-import', scripts: { dev: 'vite --host 0.0.0.0' }, dependencies: { vite: '^5.0.0' } })
+    )
 
-  await page.goto('/')
-  await expect(page.getByText('Select Project')).toBeVisible()
+    await page.goto('/')
+    await expect(page.getByText('Select Project')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Import Project' }).click()
-  await expect(page.getByRole('heading', { name: 'Import Existing Project' })).toBeVisible()
+    await page.getByRole('button', { name: 'Import Project' }).click()
+    await expect(page.getByRole('heading', { name: 'Import Existing Project' })).toBeVisible()
 
-  const gitMethod = page.locator('label.import-method', { hasText: 'Git Repository' })
-  await gitMethod.click({ force: true })
-  await expect(page.getByRole('radio', { name: /Git Repository/i })).toBeChecked()
-  await page.getByLabel('Git Repository URL *').fill('https://example.com/repo.git')
-  await page.getByLabel('Project Name *').fill(projectName)
-  await page.getByLabel('Description').fill('Imported by Playwright E2E')
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByLabel('Project Folder Path *').fill(localRoot)
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByLabel('Project Name *').fill(projectName)
+    await page.getByLabel('Description').fill('Imported by Playwright E2E')
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByText('Allow compatibility updates').click()
+    await page.getByText('Move frontend files into a frontend folder').click()
 
-  await page.getByRole('button', { name: 'Import Project' }).click()
+    await page.getByRole('button', { name: 'Import Project' }).click()
 
-  await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByText(projectName)).toBeVisible()
+    await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText(projectName)).toBeVisible()
+  } finally {
+    fs.rmSync(localRoot, { recursive: true, force: true })
+  }
 })
 
 test('closing a project returns to project selector', async ({ page, request }) => {

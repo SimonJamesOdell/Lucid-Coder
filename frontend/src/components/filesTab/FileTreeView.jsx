@@ -14,12 +14,14 @@ const renderTreeConnector = (level, isLastChild) => {
 
 const FileTreeView = ({
   items,
-  expandedFolders,
+  expandedFolders = new Set(),
   activeFilePath,
-  stagedPathSet,
+  stagedPathSet = new Set(),
+  selectedFolderPath = null,
   onToggleFolder,
   onOpenContextMenu,
-  onSelectFile
+  onSelectFile,
+  onSelectFolder
 }) => {
   const renderFileTree = useCallback((nodes, level = 0) =>
     nodes.map((item, index) => {
@@ -28,20 +30,41 @@ const FileTreeView = ({
       const isLastChild = index === nodes.length - 1;
       const fragmentKey = `${item.path}-${level}-${index}`;
       const isStaged = item.type !== 'folder' && stagedPathSet.has(item.path);
+      const isFolderSelected = item.type === 'folder' && selectedFolderPath === item.path;
 
       if (item.type === 'folder') {
         return (
           <React.Fragment key={fragmentKey}>
             <div
-              className={`folder-item level-${level}`}
-              onClick={() => onToggleFolder(itemPath)}
-              onContextMenu={(event) => onOpenContextMenu(event, item)}
+              className={`folder-item level-${level} ${isFolderSelected ? 'selected' : ''}`}
+              onClick={() => {
+                if (typeof onSelectFolder === 'function') {
+                  onSelectFolder(item);
+                }
+                if (typeof onToggleFolder === 'function') {
+                  onToggleFolder(itemPath);
+                }
+              }}
+              onContextMenu={(event) => {
+                if (typeof onOpenContextMenu === 'function') {
+                  onOpenContextMenu(event, item);
+                }
+              }}
               style={{ paddingLeft: `${level * 0.75 + 0.5}rem` }}
             >
               {renderTreeConnector(level, isLastChild)}
               <span className="folder-icon">{isExpanded ? '📂' : '📁'}</span>
               <span className="folder-name">{item.name}</span>
             </div>
+            {item.isLoading && isExpanded && (
+              <div
+                className={`file-item file-tree-loading level-${level + 1}`}
+                style={{ paddingLeft: `${(level + 1) * 0.75 + 0.5}rem` }}
+              >
+                {renderTreeConnector(level + 1, true)}
+                <span className="file-name">Loading…</span>
+              </div>
+            )}
             {item.children && isExpanded && renderFileTree(item.children, level + 1)}
           </React.Fragment>
         );
@@ -52,8 +75,16 @@ const FileTreeView = ({
           <div
             className={`file-item level-${level} ${activeFilePath === item.path ? 'selected' : ''}`}
             data-testid={`file-item-${item.path}`}
-            onClick={() => onSelectFile(item)}
-            onContextMenu={(event) => onOpenContextMenu(event, item)}
+            onClick={() => {
+              if (typeof onSelectFile === 'function') {
+                onSelectFile(item);
+              }
+            }}
+            onContextMenu={(event) => {
+              if (typeof onOpenContextMenu === 'function') {
+                onOpenContextMenu(event, item);
+              }
+            }}
             style={{ paddingLeft: `${level * 0.75 + 0.5}rem` }}
           >
             {renderTreeConnector(level, isLastChild)}

@@ -20,7 +20,7 @@ const Navigation = ({ versionLabel = null }) => {
     selectProject,
     closeProject,
     createProject,
-    importProject,
+    showImportProject,
     toggleTheme,
     setPreviewPanelTab,
     gitSettings,
@@ -50,26 +50,7 @@ const Navigation = ({ versionLabel = null }) => {
   };
 
   const handleImportProject = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          try {
-            const projectData = JSON.parse(event.target.result);
-            importProject(projectData);
-            alert('Project imported successfully!');
-          } catch (error) {
-            alert('Error importing project: Invalid JSON file');
-          }
-        };
-        reader.readAsText(file);
-      }
-    };
-    input.click();
+    showImportProject();
   };
 
   const handleConfigureLLM = () => {

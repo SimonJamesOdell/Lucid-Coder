@@ -112,6 +112,15 @@ describe('previewProxy', () => {
     createProxyServerMock.mockClear();
   });
 
+  test('resolvePreviewTargetHost preserves localhost host header', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    const req = createReq('/preview/12/', { host: 'LOCALHOST:5173' });
+    const resolved = __testOnly.resolvePreviewTargetHost(req);
+
+    expect(resolved).toBe('LOCALHOST');
+  });
+
   test('proxy error handler auto-restarts on repeated connection failures for iframe navigation', async () => {
     const warn = vi.fn();
     const { createPreviewProxy } = await import('../routes/previewProxy.js');
@@ -785,7 +794,7 @@ describe('previewProxy', () => {
 
       expect(
         __testOnly.resolvePreviewTargetHost(createReq('/preview/1', { 'x-forwarded-host': 'myhost:5173, proxy:1234' }))
-      ).toBe('myhost');
+      ).toBe('localhost');
 
       expect(
         __testOnly.resolvePreviewTargetHost(createReq('/preview/1', { host: '[::1]:5000' }))
@@ -910,7 +919,7 @@ describe('previewProxy', () => {
     expect(next).not.toHaveBeenCalled();
     expect(proxyStub.web).toHaveBeenCalledTimes(1);
     expect(proxyStub.web.mock.calls[0][2]).toMatchObject({
-      target: 'http://192.168.0.60:6100'
+      target: 'http://localhost:6100'
     });
   });
 

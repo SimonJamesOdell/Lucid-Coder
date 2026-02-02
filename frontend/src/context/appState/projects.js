@@ -336,6 +336,39 @@ export const restartProjectProcesses = async ({
   return data.processes || null;
 };
 
+export const createProjectBackend = async ({ projectId, trackedFetch, refreshProcessStatus }) => {
+  if (!projectId) {
+    throw new Error('Select a project before creating a backend');
+  }
+
+  const response = await trackedFetch(`/api/projects/${projectId}/backend/create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  });
+
+  let result = null;
+  try {
+    result = await response.json();
+  } catch (parseError) {
+    result = null;
+  }
+
+  if (!response.ok || !result?.success) {
+    const message = result?.error || `HTTP error! status: ${response.status}`;
+    throw new Error(message);
+  }
+
+  try {
+    await refreshProcessStatus(projectId);
+  } catch {
+    // ignore refresh failures
+  }
+
+  return result;
+};
+
 export const createProjectViaBackend = async ({ projectData, trackedFetch, setProjects, selectProject }) => {
   try {
     const response = await trackedFetch('/api/projects', {
@@ -380,13 +413,32 @@ export const createProjectViaBackend = async ({ projectData, trackedFetch, setPr
   }
 };
 
-export const importProjectLocal = ({ projectData, setProjects }) => {
-  const importedProject = {
-    ...projectData,
-    id: projectData.id || Date.now().toString(),
-    importedAt: new Date().toISOString()
-  };
+export const importProjectViaBackend = async ({ projectData, trackedFetch, setProjects, selectProject }) => {
+  const response = await trackedFetch('/api/projects/import', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(projectData)
+  });
 
-  setProjects((prev) => [...prev, importedProject]);
-  return importedProject;
+  let result = null;
+  try {
+    result = await response.json();
+  } catch (error) {
+    result = null;
+  }
+
+  if (!response.ok || !result?.success) {
+    const message = result?.error || `HTTP error! status: ${response.status}`;
+    throw new Error(message);
+  }
+
+  const newProject = result.project;
+  setProjects((prev) => [...prev, newProject]);
+  await selectProject(newProject);
+  return {
+    project: newProject,
+    jobs: Array.isArray(result.jobs) ? result.jobs : []
+  };
 };

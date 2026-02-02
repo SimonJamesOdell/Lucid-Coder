@@ -33,8 +33,9 @@ import {
   stopProjectProcesses,
   stopProjectProcessTarget,
   restartProjectProcesses,
+  createProjectBackend,
   createProjectViaBackend,
-  importProjectLocal
+  importProjectViaBackend
 } from './appState/projects.js';
 import {
   fetchGitSettingsFromBackend as fetchGitSettingsFromBackendAction,
@@ -424,8 +425,20 @@ export const AppStateProvider = ({ children }) => {
     }
 
     const snapshot = buildProcessStateSnapshot(projectId, payload);
-    setProjectProcesses(snapshot);
-    return snapshot;
+    if (!snapshot) {
+      setProjectProcesses(snapshot);
+      return snapshot;
+    }
+
+    let nextSnapshot = snapshot;
+    setProjectProcesses((prev) => {
+      if (!snapshot.capabilities && prev?.capabilities) {
+        nextSnapshot = { ...snapshot, capabilities: prev.capabilities };
+        return nextSnapshot;
+      }
+      return snapshot;
+    });
+    return nextSnapshot;
   }, [resetProjectProcesses]);
 
   if (isTestEnv) {
@@ -988,14 +1001,23 @@ export const AppStateProvider = ({ children }) => {
     [applyProcessSnapshot, clearProjectStopped, currentProject?.id, refreshProcessStatus, resetProjectProcesses, trackedFetch]
   );
 
+  const createBackend = useCallback(
+    async (projectId = currentProject?.id) => createProjectBackend({
+      projectId,
+      trackedFetch,
+      refreshProcessStatus
+    }),
+    [currentProject?.id, refreshProcessStatus, trackedFetch]
+  );
+
   const createProject = useCallback(
     (projectData) => createProjectViaBackend({ projectData, trackedFetch, setProjects, selectProject }),
     [selectProject, setProjects, trackedFetch]
   );
 
   const importProject = useCallback(
-    (projectData) => importProjectLocal({ projectData, setProjects }),
-    [setProjects]
+    (projectData) => importProjectViaBackend({ projectData, trackedFetch, setProjects, selectProject }),
+    [selectProject, setProjects, trackedFetch]
   );
 
   const updateGitSettings = useCallback(
@@ -1275,6 +1297,7 @@ export const AppStateProvider = ({ children }) => {
     updatePortSettings,
     refreshProcessStatus,
     restartProject,
+    createBackend,
     startAutomationJob,
     cancelAutomationJob,
     refreshJobs,

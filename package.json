@@ -1,6 +1,6 @@
 {
   "name": "lucidcoder-fullstack",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "A fullstack React + Vite / Node.js + Express application",
   "scripts": {
     "install-all": "npm install && npm --prefix backend install && npm --prefix frontend install",
@@ -22,6 +22,7 @@
     "release:prep": "node tools/release-prep.mjs",
     "test:backend": "npm --prefix backend test",
     "test:frontend": "npm --prefix frontend test",
+    "test:coverage": "npm run coverage:frontend && npm run coverage:backend",
     "coverage:backend": "npm --prefix backend run test:coverage",
     "coverage:frontend": "npm --prefix frontend run test:coverage",
     "build": "npm --prefix frontend run build",

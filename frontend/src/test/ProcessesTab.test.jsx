@@ -209,6 +209,24 @@ describe('ProcessesTab', () => {
     await waitFor(() => expect(backendButton).not.toBeDisabled());
   });
 
+  test('create backend ignores clicks when project id is missing', async () => {
+    const user = userEvent.setup();
+    const onCreateBackend = vi.fn().mockResolvedValue(null);
+    const processInfo = {
+      ...buildProcessInfo(),
+      capabilities: { backend: { exists: false } }
+    };
+
+    renderProcessesTab({ project: { id: null, name: 'No Id' }, processInfo, onCreateBackend });
+
+    const button = screen.getByTestId('process-create-backend');
+    expect(button).toBeEnabled();
+
+    await user.click(button);
+
+    expect(onCreateBackend).not.toHaveBeenCalled();
+  });
+
   test('invokes restart handler and clears busy state after completion', async () => {
     const user = userEvent.setup();
     const onRestartProject = vi.fn().mockResolvedValue(null);
@@ -371,6 +389,58 @@ describe('ProcessesTab', () => {
     renderProcessesTab({ onStopProject: null });
     expect(screen.getByTestId('process-stop-frontend')).toBeDisabled();
     expect(screen.getByTestId('process-stop-backend')).toBeDisabled();
+  });
+
+  test('renders backend empty state and triggers create backend action', async () => {
+    const user = userEvent.setup();
+    const onCreateBackend = vi.fn().mockResolvedValue(null);
+    const processInfo = {
+      ...buildProcessInfo(),
+      capabilities: { backend: { exists: false } }
+    };
+
+    renderProcessesTab({ processInfo, onCreateBackend });
+
+    expect(screen.getByText('This project doesn’t have a backend yet.')).toBeInTheDocument();
+
+    const createButton = screen.getByTestId('process-create-backend');
+    await user.click(createButton);
+
+    expect(onCreateBackend).toHaveBeenCalledWith(mockProject.id);
+    await waitFor(() => expect(createButton).not.toBeDisabled());
+  });
+
+  test('shows errors when create backend fails', async () => {
+    const user = userEvent.setup();
+    const onCreateBackend = vi.fn().mockRejectedValue(new Error('backend failed'));
+    const processInfo = {
+      ...buildProcessInfo(),
+      capabilities: { backend: { exists: false } }
+    };
+
+    renderProcessesTab({ processInfo, onCreateBackend });
+
+    const createButton = screen.getByTestId('process-create-backend');
+    await user.click(createButton);
+
+    await waitFor(() => expect(screen.getByText('backend failed')).toBeInTheDocument());
+    await waitFor(() => expect(createButton).not.toBeDisabled());
+  });
+
+  test('shows fallback error when create backend fails without a message', async () => {
+    const user = userEvent.setup();
+    const onCreateBackend = vi.fn().mockRejectedValue({});
+    const processInfo = {
+      ...buildProcessInfo(),
+      capabilities: { backend: { exists: false } }
+    };
+
+    renderProcessesTab({ processInfo, onCreateBackend });
+
+    const createButton = screen.getByTestId('process-create-backend');
+    await user.click(createButton);
+
+    await waitFor(() => expect(screen.getByText('Failed to create backend')).toBeInTheDocument());
   });
 });
 

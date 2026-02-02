@@ -30,6 +30,7 @@ const PreviewPanel = () => {
     refreshProcessStatus,
     restartProject,
     stopProjectProcess,
+    createBackend,
     editorFocusRequest,
     reportBackendConnectivity,
     stoppedProjects
@@ -559,6 +560,7 @@ const PreviewPanel = () => {
             onRefreshStatus={refreshProcessStatus}
             onRestartProject={restartProject}
             onStopProject={stopProjectProcess}
+            onCreateBackend={createBackend}
           />
         );
       case 'llm-usage':

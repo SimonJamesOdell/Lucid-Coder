@@ -1151,21 +1151,12 @@ const PreviewTab = forwardRef(
     }
   }, [urlBarValue, isEditingUrl]);
 
-  const renderStatusBanner = () => (
-    restartStatus?.type === 'error' && (
-      <div className={`preview-status ${restartStatus.type}`} data-testid="preview-status">
-        {restartStatus.message}
-      </div>
-    )
-  );
-
   /* c8 ignore next */
   const startLabel = startInFlight ? 'Starting…' : 'Start project';
 
   if (showNotRunningState) {
     return (
       <div className="preview-tab">
-        {renderStatusBanner()}
         <div className="preview-not-running" data-testid="preview-not-running">
           <div className="preview-not-running-card">
             <h3>Project not running</h3>
@@ -1229,7 +1220,6 @@ const PreviewTab = forwardRef(
 
     return (
       <div className="preview-tab">
-        {renderStatusBanner()}
         <div className="preview-error">
           <div className="preview-loading-card">
             <h3>Failed to load preview</h3>
@@ -1255,84 +1245,14 @@ const PreviewTab = forwardRef(
               unreachable, or the app blocks embedding via security headers.
             </p>
 
-            <p className="expected-url">
-              Expected URL: <code>{expectedUrl}</code>
-            </p>
-
-            {processSummary ? (
-              <p className="expected-url">{processSummary}</p>
-            ) : null}
-
-            <p className="expected-url">
-              <a href={expectedNewTabUrl} target="_blank" rel="noopener noreferrer">
-                Open preview in a new tab
-              </a>
-            </p>
-
             <div className="preview-error-actions">
-              {canRefresh && (
-                <button type="button" className="retry-button" onClick={handleRefreshAndRetry}>
-                  Refresh + retry
-                </button>
-              )}
-
               <button type="button" className="retry-button" onClick={reloadIframe}>
                 Retry
               </button>
 
-              {canRestart && (
-                <button type="button" className="retry-button" onClick={handleRestartProject}>
-                  Restart project
-                </button>
-              )}
-
               <button type="button" className="retry-button" onClick={prefillChatWithPreviewHelp}>
                 Ask AI to fix
               </button>
-
-              {canSuggestLocalhost && (
-                <button
-                  type="button"
-                  className="retry-button"
-                  onClick={() => applyHostnameOverride('localhost')}
-                >
-                  Try localhost
-                </button>
-              )}
-
-              {canSuggestLocalhost && (
-                <button
-                  type="button"
-                  className="retry-button"
-                  onClick={() => applyHostnameOverride('127.0.0.1')}
-                >
-                  Try 127.0.0.1
-                </button>
-              )}
-
-              {canAutoRecover && (
-                <button
-                  type="button"
-                  className="retry-button"
-                  onClick={() => setAutoRecoverDisabled(true)}
-                >
-                  Pause auto-retry
-                </button>
-              )}
-
-              {canRefresh && autoRecoverDisabled && (
-                <button
-                  type="button"
-                  className="retry-button"
-                  onClick={() => {
-                    setAutoRecoverDisabled(false);
-                    autoRecoverAttemptRef.current = 0;
-                    setAutoRecoverState({ attempt: 0, mode: 'idle' });
-                  }}
-                >
-                  Resume auto-retry
-                </button>
-              )}
             </div>
 
             {(Array.isArray(frontendProcess?.logs) && frontendProcess.logs.length > 0) && (
@@ -1559,7 +1479,6 @@ const PreviewTab = forwardRef(
 
   return (
     <div className="preview-tab">
-      {renderStatusBanner()}
       {renderUrlBar()}
       <div className="preview-canvas" ref={canvasRef}>
         {renderLoadingOverlay()}

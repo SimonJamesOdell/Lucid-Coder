@@ -575,9 +575,8 @@ const resolvePreviewTargetHost = (req) => {
     return override === '0.0.0.0' ? 'localhost' : override;
   }
 
-  // Default: target the same host the client used to reach the backend.
-  // This makes previews work automatically whether LucidCoder is accessed via
-  // localhost or via a LAN IP / hostname.
+  // Default: target localhost unless the request already came from localhost.
+  // This keeps LAN access working even when dev servers bind only to loopback.
   const forwardedHost = typeof req?.headers?.['x-forwarded-host'] === 'string'
     ? req.headers['x-forwarded-host']
     : '';
@@ -598,7 +597,13 @@ const resolvePreviewTargetHost = (req) => {
   if (!hostname || hostname === '0.0.0.0') {
     return 'localhost';
   }
-  return hostname;
+
+  const normalized = hostname.toLowerCase();
+  if (normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1') {
+    return hostname;
+  }
+
+  return 'localhost';
 };
 
 export const createPreviewProxy = ({ logger = console } = {}) => {

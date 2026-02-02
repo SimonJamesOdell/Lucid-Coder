@@ -1,9 +1,14 @@
+import fs from 'fs/promises';
+import path from 'path';
 import {
   getPortSettings,
   getProject,
   updateProjectPorts
 } from '../../database.js';
 import { startProject } from '../../services/projectScaffolding.js';
+import { generateBackendFiles } from '../../services/projectScaffolding/generate.js';
+import { sanitizeProjectName } from '../../services/projectScaffolding/files.js';
+import { startJob } from '../../services/jobRunner.js';
 import { hasUnsafeCommandCharacters } from './cleanup.js';
 import { isWithinManagedProjectsRoot } from './cleanup.js';
 import {
@@ -26,6 +31,46 @@ import {
 
 const DEFAULT_FRONTEND_PORT_BASE = Number(process.env.LUCIDCODER_PROJECT_FRONTEND_PORT_BASE) || 5100;
 const DEFAULT_BACKEND_PORT_BASE = Number(process.env.LUCIDCODER_PROJECT_BACKEND_PORT_BASE) || 5500;
+
+const fileExists = async (targetPath) => {
+  try {
+    const stats = await fs.stat(targetPath);
+    return stats.isFile();
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+};
+
+const backendEntrypointExists = async (projectPath) => {
+  if (!projectPath) {
+    return false;
+  }
+  const backendPath = path.join(projectPath, 'backend');
+  const candidates = [
+    'package.json',
+    'app.py',
+    'requirements.txt',
+    'pyproject.toml',
+    'pom.xml',
+    'build.gradle',
+    'build.gradle.kts',
+    'go.mod',
+    'Cargo.toml',
+    'composer.json',
+    'Gemfile',
+    'Package.swift'
+  ];
+
+  for (const candidate of candidates) {
+    if (await fileExists(path.join(backendPath, candidate))) {
+      return true;
+    }
+  }
+  return false;
+};
 
 export function registerProjectProcessRoutes(router) {
   if (process.env.NODE_ENV === 'test') {
@@ -80,6 +125,7 @@ export function registerProjectProcessRoutes(router) {
         frontend: exposedSnapshot.frontend?.port ?? lastKnownPorts.frontend,
         backend: exposedSnapshot.backend?.port ?? lastKnownPorts.backend
       };
+      const hasBackend = await backendEntrypointExists(project.path);
 
       console.log('[process-status]', id, {
         isRunning,
@@ -101,7 +147,12 @@ export function registerProjectProcessRoutes(router) {
           stored: storedPorts,
           preferred: portHints
         },
-        lastKnownPorts
+        lastKnownPorts,
+        capabilities: {
+          backend: {
+            exists: hasBackend
+          }
+        }
       });
     } catch (error) {
       console.error('Error fetching process status:', error);
@@ -277,11 +328,21 @@ export function registerProjectProcessRoutes(router) {
         message: 'Project started successfully'
       });
     } catch (error) {
+      const message = error?.message || 'Failed to start project';
       console.error('Error starting project:', error);
-      res.status(500).json({
+      const status = message.includes('No frontend package.json') ? 400 : 500;
+      const payload = {
         success: false,
-        error: 'Failed to start project'
-      });
+        error: status === 500 ? 'Failed to start project' : message
+      };
+      if (process.env.NODE_ENV !== 'production') {
+        payload.details = {
+          message,
+          name: error?.name || null,
+          stack: error?.stack || null
+        };
+      }
+      res.status(status).json(payload);
     }
   });
 
@@ -327,6 +388,87 @@ export function registerProjectProcessRoutes(router) {
         success: false,
         error: 'Failed to stop project'
       });
+    }
+  });
+
+  // POST /api/projects/:id/backend/create - Scaffold a backend for an existing project
+  router.post('/:id/backend/create', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const project = await getProject(id);
+
+      if (!project) {
+        return res.status(404).json({ success: false, error: 'Project not found' });
+      }
+
+      if (!project.path) {
+        return res.status(400).json({
+          success: false,
+          error: 'Project path not found. Please re-import or recreate the project.'
+        });
+      }
+
+      if (!isWithinManagedProjectsRoot(project.path)) {
+        return res.status(400).json({ success: false, error: 'Invalid project path' });
+      }
+
+      if (await backendEntrypointExists(project.path)) {
+        return res.status(409).json({ success: false, error: 'Backend already exists' });
+      }
+
+      const backendPath = path.join(project.path, 'backend');
+      await fs.mkdir(backendPath, { recursive: true });
+
+      const rawLanguages = typeof project.language === 'string' ? project.language : '';
+      const rawFrameworks = typeof project.framework === 'string' ? project.framework : '';
+      const [, backendLanguageRaw = ''] = rawLanguages.split(',');
+      const [, backendFrameworkRaw = ''] = rawFrameworks.split(',');
+      const backendLanguage = backendLanguageRaw.trim().toLowerCase() || 'javascript';
+      const backendFramework = backendFrameworkRaw.trim().toLowerCase() || 'express';
+
+      await generateBackendFiles(backendPath, {
+        name: sanitizeProjectName(project.name || 'backend'),
+        language: backendLanguage,
+        framework: backendFramework
+      });
+
+      let installJob = null;
+      try {
+        if (await fileExists(path.join(backendPath, 'package.json'))) {
+          installJob = await startJob({
+            projectId: project.id,
+            type: 'backend:install',
+            displayName: 'Install backend dependencies',
+            command: 'npm',
+            args: ['install'],
+            cwd: backendPath
+          });
+        }
+      } catch (jobError) {
+        console.warn('Failed to start backend install job:', jobError?.message || jobError);
+      }
+
+      return res.json({
+        success: true,
+        message: installJob
+          ? 'Backend created. Installing dependencies.'
+          : 'Backend created successfully',
+        job: installJob
+          ? {
+              id: installJob.id,
+              type: installJob.type,
+              displayName: installJob.displayName,
+              status: installJob.status,
+              command: installJob.command,
+              args: installJob.args,
+              cwd: installJob.cwd,
+              createdAt: installJob.createdAt
+            }
+          : null
+      });
+    } catch (error) {
+      console.error('Error creating backend:', error);
+      return res.status(500).json({ success: false, error: 'Failed to create backend' });
     }
   });
 
@@ -429,11 +571,21 @@ export function registerProjectProcessRoutes(router) {
         processes: startResult.processes || null
       });
     } catch (error) {
+      const message = error?.message || 'Failed to restart project';
       console.error('Error restarting project:', error);
-      res.status(500).json({
+      const status = message.includes('No frontend package.json') ? 400 : 500;
+      const payload = {
         success: false,
-        error: 'Failed to restart project'
-      });
+        error: status === 500 ? 'Failed to restart project' : message
+      };
+      if (process.env.NODE_ENV !== 'production') {
+        payload.details = {
+          message,
+          name: error?.name || null,
+          stack: error?.stack || null
+        };
+      }
+      res.status(status).json(payload);
     }
   });
 

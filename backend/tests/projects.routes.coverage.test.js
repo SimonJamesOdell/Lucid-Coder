@@ -1,16 +1,51 @@
-import { describe, test, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import { describe, test, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import path from 'path';
 import fs from 'fs/promises';
-import projectRoutes, { __projectRoutesInternals } from '../routes/projects.js';
+import projectRoutes, {
+  __projectRoutesInternals,
+  buildCloneUrl,
+  enqueueInstallJobs,
+  stripGitCredentials,
+  extractRepoName,
+  assertProjectPathAvailable,
+  pathExists,
+  dirExists,
+  fileExists,
+  serializeJob,
+  copyDirectoryRecursive
+} from '../routes/projects.js';
 import db, { initializeDatabase, closeDatabase, createProject } from '../database.js';
+import { resolveProjectPath } from '../utils/projectPaths.js';
+import * as cleanup from '../routes/projects/cleanup.js';
 
 vi.mock('../services/projectScaffolding.js', () => ({
   createProjectWithFiles: vi.fn(),
   scaffoldProject: vi.fn(),
   installDependencies: vi.fn(),
   startProject: vi.fn()
+}));
+
+vi.mock('../utils/git.js', () => ({
+  runGitCommand: vi.fn(),
+  getCurrentBranch: vi.fn()
+}));
+
+vi.mock('../services/importCompatibility.js', () => ({
+  applyCompatibility: vi.fn(),
+  applyProjectStructure: vi.fn()
+}));
+
+vi.mock('../services/jobRunner.js', () => ({
+  startJob: vi.fn((job) => ({
+    id: `job-${Date.now()}`,
+    ...job
+  }))
+}));
+
+vi.mock('../services/projectScaffolding/generate.js', () => ({
+  generateBackendFiles: vi.fn()
 }));
 
 vi.mock('../services/remoteRepoService.js', () => {
@@ -81,6 +116,1110 @@ describe('Projects routes coverage (projects.js)', () => {
   beforeEach(async () => {
     await cleanDatabase();
     __projectRoutesInternals.resetFsModuleOverride();
+  });
+
+  describe('clone URL helpers', () => {
+    test('extractRepoName handles empty and scp style inputs', () => {
+      expect(extractRepoName('/')).toBe('');
+      expect(extractRepoName('git@github.com:acme')).toBe('acme');
+      expect(extractRepoName('git@github.com:')).toBe('git@github.com:');
+    });
+
+    test('stripGitCredentials removes inline credentials', () => {
+      const url = 'https://user:pass@github.com/acme/repo.git';
+      expect(stripGitCredentials(url)).toBe('https://github.com/acme/repo.git');
+    });
+
+    test('stripGitCredentials returns empty string for blank input', () => {
+      expect(stripGitCredentials('   ')).toBe('');
+    });
+
+    test('stripGitCredentials returns raw value when URL parsing fails', () => {
+      expect(stripGitCredentials('not a url')).toBe('not a url');
+    });
+
+    test('buildCloneUrl uses custom PAT username when provided', () => {
+      const result = buildCloneUrl({
+        url: 'https://github.com/acme/repo.git',
+        authMethod: 'pat',
+        token: 'token123',
+        username: 'custom-user',
+        provider: 'github'
+      });
+
+      expect(result.cloneUrl).toContain('custom-user:token123@');
+      expect(result.safeUrl).toBe('https://github.com/acme/repo.git');
+    });
+
+    test('buildCloneUrl returns raw URL when parsing fails', () => {
+      const result = buildCloneUrl({
+        url: 'not a url',
+        authMethod: 'pat',
+        token: 'token123',
+        username: 'custom-user',
+        provider: 'github'
+      });
+
+      expect(result).toEqual({
+        cloneUrl: 'not a url',
+        safeUrl: 'not a url'
+      });
+    });
+  });
+
+  describe('import path helpers', () => {
+    test('assertProjectPathAvailable throws when path exists', async () => {
+      const filePath = path.join(projectsRoot, `exists-${Date.now()}`);
+      await fs.writeFile(filePath, 'data');
+
+      await expect(assertProjectPathAvailable(filePath)).rejects.toMatchObject({ statusCode: 409 });
+    });
+
+    test('assertProjectPathAvailable resolves when path is missing', async () => {
+      const missingPath = path.join(projectsRoot, `missing-${Date.now()}`);
+      await expect(assertProjectPathAvailable(missingPath)).resolves.toBeUndefined();
+    });
+
+    test('assertProjectPathAvailable rethrows non-ENOENT errors', async () => {
+      const statSpy = vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+
+      await expect(assertProjectPathAvailable('C:/forbidden')).rejects.toMatchObject({ code: 'EACCES' });
+      statSpy.mockRestore();
+    });
+
+    test('pathExists rethrows non-ENOENT errors', async () => {
+      const statSpy = vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+
+      await expect(pathExists('C:/forbidden')).rejects.toMatchObject({ code: 'EACCES' });
+      statSpy.mockRestore();
+    });
+
+    test('dirExists rethrows non-ENOENT errors', async () => {
+      const statSpy = vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+
+      await expect(dirExists('C:/forbidden')).rejects.toMatchObject({ code: 'EACCES' });
+      statSpy.mockRestore();
+    });
+
+    test('fileExists rethrows non-ENOENT errors', async () => {
+      const statSpy = vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+
+      await expect(fileExists('C:/forbidden')).rejects.toMatchObject({ code: 'EACCES' });
+      statSpy.mockRestore();
+    });
+
+    test('serializeJob handles missing job and legacy project_id', () => {
+      expect(serializeJob(null)).toBeNull();
+
+      const primary = serializeJob({
+        id: 'job-1',
+        projectId: 'primary',
+        type: 'test',
+        displayName: 'Test',
+        status: 'queued',
+        command: 'node',
+        args: [],
+        cwd: '.',
+        createdAt: 'now',
+        startedAt: null,
+        completedAt: null,
+        exitCode: null,
+        signal: null,
+        logs: ''
+      });
+
+      const legacy = serializeJob({
+        id: 'job-2',
+        project_id: 'legacy',
+        type: 'test',
+        displayName: 'Test',
+        status: 'queued',
+        command: 'node',
+        args: [],
+        cwd: '.',
+        createdAt: 'now',
+        startedAt: null,
+        completedAt: null,
+        exitCode: null,
+        signal: null,
+        logs: ''
+      });
+
+      const missing = serializeJob({
+        id: 'job-3',
+        type: 'test',
+        displayName: 'Test',
+        status: 'queued',
+        command: 'node',
+        args: [],
+        cwd: '.',
+        createdAt: 'now',
+        startedAt: null,
+        completedAt: null,
+        exitCode: null,
+        signal: null,
+        logs: ''
+      });
+
+      expect(primary.projectId).toBe('primary');
+      expect(legacy.projectId).toBe('legacy');
+      expect(missing.projectId).toBeNull();
+    });
+  });
+
+  describe('enqueueInstallJobs', () => {
+    test('returns empty array when projectId or projectPath is missing', async () => {
+      await expect(enqueueInstallJobs({ projectId: null, projectPath: null })).resolves.toEqual([]);
+      await expect(enqueueInstallJobs({ projectId: '1', projectPath: '' })).resolves.toEqual([]);
+    });
+
+    test('skips frontend install when frontend package is missing', async () => {
+      const projectPath = path.join(projectsRoot, `no-frontend-${Date.now()}`);
+      await ensureEmptyDir(projectPath);
+
+      const jobs = await enqueueInstallJobs({ projectId: 'no-frontend', projectPath });
+      expect(jobs.find((job) => job.type === 'frontend:install')).toBeUndefined();
+    });
+
+    test('skips frontend install when frontend dir exists without package.json', async () => {
+      const projectPath = path.join(projectsRoot, `frontend-empty-${Date.now()}`);
+      const frontendPath = path.join(projectPath, 'frontend');
+      await ensureEmptyDir(frontendPath);
+
+      const jobs = await enqueueInstallJobs({ projectId: 'frontend-empty', projectPath });
+      expect(jobs.find((job) => job.type === 'frontend:install')).toBeUndefined();
+    });
+
+    test('enqueues frontend install job when frontend package.json exists', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const projectPath = path.join(projectsRoot, `frontend-only-${Date.now()}`);
+      const frontendPath = path.join(projectPath, 'frontend');
+      await ensureEmptyDir(frontendPath);
+      await fs.writeFile(path.join(frontendPath, 'package.json'), JSON.stringify({ name: 'frontend' }));
+
+      const jobs = await enqueueInstallJobs({ projectId: 'frontend-1', projectPath });
+      const frontendJob = jobs.find((job) => job.type === 'frontend:install');
+      expect(frontendJob).toBeTruthy();
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('continues when frontend install job throws', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const projectPath = path.join(projectsRoot, `frontend-fail-${Date.now()}`);
+      const frontendPath = path.join(projectPath, 'frontend');
+      await ensureEmptyDir(frontendPath);
+      await fs.writeFile(path.join(frontendPath, 'package.json'), JSON.stringify({ name: 'frontend' }));
+
+      const { startJob } = await import('../services/jobRunner.js');
+      startJob.mockImplementationOnce(() => {
+        throw new Error('frontend job failed');
+      });
+
+      const jobs = await enqueueInstallJobs({ projectId: 'frontend-2', projectPath });
+      const frontendJob = jobs.find((job) => job.type === 'frontend:install');
+      expect(frontendJob).toBeUndefined();
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('logs warning when frontend install job throws without a message', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const projectPath = path.join(projectsRoot, `frontend-throw-${Date.now()}`);
+      const frontendPath = path.join(projectPath, 'frontend');
+      await ensureEmptyDir(frontendPath);
+      await fs.writeFile(path.join(frontendPath, 'package.json'), JSON.stringify({ name: 'frontend' }));
+
+      const { startJob } = await import('../services/jobRunner.js');
+      startJob.mockImplementationOnce(() => {
+        throw 'frontend job failed';
+      });
+
+      const jobs = await enqueueInstallJobs({ projectId: 'frontend-3', projectPath });
+      expect(jobs.find((job) => job.type === 'frontend:install')).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    test('uses gradle wrapper bat when present', async () => {
+      const projectPath = path.join(projectsRoot, `gradle-bat-${Date.now()}`);
+      await ensureEmptyDir(projectPath);
+      await fs.writeFile(path.join(projectPath, 'build.gradle'), 'apply plugin');
+      await fs.writeFile(path.join(projectPath, 'gradlew.bat'), 'echo bat');
+
+      const jobs = await enqueueInstallJobs({ projectId: 'gradle-bat', projectPath });
+      const backendJob = jobs.find((job) => job.type === 'backend:install');
+      expect(backendJob?.command).toBe(path.join(projectPath, 'gradlew.bat'));
+    });
+
+    test('uses gradle wrapper when bat is missing', async () => {
+      const projectPath = path.join(projectsRoot, `gradle-sh-${Date.now()}`);
+      await ensureEmptyDir(projectPath);
+      await fs.writeFile(path.join(projectPath, 'build.gradle'), 'apply plugin');
+      await fs.writeFile(path.join(projectPath, 'gradlew'), 'echo sh');
+
+      const jobs = await enqueueInstallJobs({ projectId: 'gradle-sh', projectPath });
+      const backendJob = jobs.find((job) => job.type === 'backend:install');
+      expect(backendJob?.command).toBe(path.join(projectPath, 'gradlew'));
+    });
+
+    test('falls back to system gradle when wrapper is missing', async () => {
+      const projectPath = path.join(projectsRoot, `gradle-system-${Date.now()}`);
+      await ensureEmptyDir(projectPath);
+      await fs.writeFile(path.join(projectPath, 'build.gradle'), 'apply plugin');
+
+      const jobs = await enqueueInstallJobs({ projectId: 'gradle-system', projectPath });
+      const backendJob = jobs.find((job) => job.type === 'backend:install');
+      expect(backendJob?.command).toBe('gradle');
+    });
+
+    test('logs warning when backend install job throws without a message', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const projectPath = path.join(projectsRoot, `backend-throw-${Date.now()}`);
+      await ensureEmptyDir(projectPath);
+      await fs.writeFile(path.join(projectPath, 'package.json'), JSON.stringify({ name: 'backend' }));
+
+      const { startJob } = await import('../services/jobRunner.js');
+      startJob.mockImplementationOnce(() => {
+        throw { code: 'NOPE' };
+      });
+
+      const jobs = await enqueueInstallJobs({ projectId: 'backend-throw', projectPath });
+      expect(jobs.find((job) => job.type === 'backend:install')).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe('copyDirectoryRecursive', () => {
+    test('rethrows symlink errors without an onFileError handler', async () => {
+      const sourceDir = path.join(projectsRoot, `symlink-src-${Date.now()}`);
+      const targetDir = path.join(projectsRoot, `symlink-dest-${Date.now()}`);
+      await fs.mkdir(sourceDir, { recursive: true });
+
+      const readdirSpy = vi.spyOn(fs, 'readdir').mockResolvedValue([
+        {
+          name: 'link',
+          isDirectory: () => false,
+          isSymbolicLink: () => true
+        }
+      ]);
+      const readlinkSpy = vi.spyOn(fs, 'readlink').mockResolvedValue('target');
+      const symlinkSpy = vi.spyOn(fs, 'symlink').mockRejectedValue(new Error('symlink failed'));
+
+      await expect(copyDirectoryRecursive(sourceDir, targetDir)).rejects.toThrow('symlink failed');
+
+      readdirSpy.mockRestore();
+      readlinkSpy.mockRestore();
+      symlinkSpy.mockRestore();
+    });
+
+    test('rethrows copyFile errors without an onFileError handler', async () => {
+      const sourceDir = path.join(projectsRoot, `copy-src-${Date.now()}`);
+      const targetDir = path.join(projectsRoot, `copy-dest-${Date.now()}`);
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(path.join(sourceDir, 'file.txt'), 'data');
+
+      const copySpy = vi.spyOn(fs, 'copyFile').mockRejectedValue(new Error('copy failed'));
+
+      await expect(copyDirectoryRecursive(sourceDir, targetDir)).rejects.toThrow('copy failed');
+
+      copySpy.mockRestore();
+    });
+  });
+
+  describe('GET /api/projects', () => {
+    test('returns empty list when database returns null', async () => {
+      const dbModule = await import('../database.js');
+      const getProjectsSpy = vi.spyOn(dbModule, 'getAllProjects').mockResolvedValue(null);
+
+      const response = await request(app)
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body).toMatchObject({ success: true, projects: [] });
+      getProjectsSpy.mockRestore();
+    });
+
+    test('returns empty list when database returns undefined', async () => {
+      const dbModule = await import('../database.js');
+      const getProjectsSpy = vi.spyOn(dbModule, 'getAllProjects').mockResolvedValue(undefined);
+
+      const response = await request(app)
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body).toMatchObject({ success: true, projects: [] });
+      getProjectsSpy.mockRestore();
+    });
+
+    test('returns projects from the database', async () => {
+      const project = await createProject({
+        name: `list-${Date.now()}`,
+        description: 'list coverage',
+        language: 'javascript,javascript',
+        framework: 'react,express',
+        path: path.join(projectsRoot, `list-${Date.now()}`),
+        frontendPort: null,
+        backendPort: null
+      });
+
+      const response = await request(app)
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.projects.some((entry) => entry.id === project.id)).toBe(true);
+    });
+
+    test('returns 500 when database throws', async () => {
+      const dbModule = await import('../database.js');
+      const getProjectsSpy = vi.spyOn(dbModule, 'getAllProjects').mockRejectedValue(new Error('boom'));
+
+      const response = await request(app)
+        .get('/api/projects')
+        .expect(500);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Failed to fetch projects' });
+      getProjectsSpy.mockRestore();
+    });
+  });
+
+  describe('POST /api/projects/import (local)', () => {
+    test('rejects imports without a project name', async () => {
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({})
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project name is required' });
+    });
+
+    test('rejects empty import payloads (coverage)', async () => {
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({})
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project name is required' });
+    });
+
+    test('rejects import requests without a body', async () => {
+      const response = await request(app)
+        .post('/api/projects/import')
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project name is required' });
+    });
+
+    test('rejects imports when body parser is missing', async () => {
+      const localApp = express();
+      localApp.use('/api/projects', projectRoutes);
+
+      const response = await request(localApp)
+        .post('/api/projects/import')
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project name is required' });
+    });
+
+    test('imports a local folder with copy mode', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `source-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `local-${Date.now()}`
+        })
+        .expect(201);
+
+      expect(response.body).toMatchObject({ success: true });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('cleans existing target path before copy import', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const projectName = `cleanup-${Date.now()}`;
+      const localPath = path.join(projectsRoot, `source-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+      await fs.writeFile(path.join(localPath, 'index.js'), 'console.log("ok");');
+
+      const targetPath = resolveProjectPath(projectName);
+      await ensureEmptyDir(targetPath);
+      await fs.writeFile(path.join(targetPath, 'stale.txt'), 'stale');
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: projectName
+        })
+        .expect(201);
+
+      expect(response.body).toMatchObject({ success: true });
+      const staleExists = await fs
+        .access(path.join(targetPath, 'stale.txt'))
+        .then(() => true)
+        .catch(() => false);
+      const copiedExists = await fs
+        .access(path.join(targetPath, 'index.js'))
+        .then(() => true)
+        .catch(() => false);
+
+      expect(staleExists).toBe(false);
+      expect(copiedExists).toBe(true);
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('requires a project name when local path does not provide one', async () => {
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath: '',
+          name: ''
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project name is required' });
+    });
+
+    test('enqueues backend install jobs when backend directory exists', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `backend-only-${Date.now()}`);
+      const backendDir = path.join(localPath, 'backend');
+      await ensureEmptyDir(backendDir);
+      await fs.writeFile(path.join(backendDir, 'package.json'), JSON.stringify({ name: 'backend' }));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `backend-only-${Date.now()}`
+        })
+        .expect(201);
+
+      const backendJob = response.body.jobs.find((job) => job.type === 'backend:install');
+      expect(backendJob?.cwd).toContain(path.join(response.body.project.path, 'backend'));
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test.each([
+      {
+        label: 'requirements.txt',
+        fileName: 'requirements.txt',
+        contents: 'flask==2.0.0',
+        command: 'python',
+        args: ['-m', 'pip', 'install', '-r', 'requirements.txt']
+      },
+      {
+        label: 'pyproject.toml',
+        fileName: 'pyproject.toml',
+        contents: '[project]\nname = "backend"',
+        command: 'python',
+        args: ['-m', 'pip', 'install', '-e', '.']
+      },
+      {
+        label: 'go.mod',
+        fileName: 'go.mod',
+        contents: 'module example\nrequire example.com/other v1.0.0',
+        command: 'go',
+        args: ['mod', 'download']
+      },
+      {
+        label: 'Cargo.toml',
+        fileName: 'Cargo.toml',
+        contents: '[dependencies]\nserde = "1"',
+        command: 'cargo',
+        args: ['fetch']
+      },
+      {
+        label: 'composer.json',
+        fileName: 'composer.json',
+        contents: '{"require":{"monolog/monolog":"^3.0"}}',
+        command: 'composer',
+        args: ['install']
+      },
+      {
+        label: 'Gemfile',
+        fileName: 'Gemfile',
+        contents: 'gem "rake"',
+        command: 'bundle',
+        args: ['install']
+      },
+      {
+        label: 'Package.swift',
+        fileName: 'Package.swift',
+        contents: 'import Foundation',
+        command: 'swift',
+        args: ['package', 'resolve']
+      }
+    ])('enqueues backend install jobs for $label', async ({ fileName, contents, command, args }) => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `backend-marker-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, fileName), contents);
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `backend-marker-${Date.now()}`
+        })
+        .expect(201);
+
+      const backendJob = response.body.jobs.find((job) => job.type === 'backend:install');
+      expect(backendJob?.command).toBe(command);
+      expect(backendJob?.args).toEqual(args);
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('enqueues Maven install job when pom.xml exists', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `backend-maven-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'pom.xml'), '<project></project>');
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `backend-maven-${Date.now()}`
+        })
+        .expect(201);
+
+      const backendJob = response.body.jobs.find((job) => job.type === 'backend:install');
+      expect(backendJob?.command).toBe('mvn');
+      expect(backendJob?.args).toEqual(['-q', '-DskipTests', 'package']);
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('enqueues Gradle wrapper job when gradlew.bat exists', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `backend-gradle-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'build.gradle'), 'plugins {}');
+      await fs.writeFile(path.join(localPath, 'gradlew.bat'), '@echo off');
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `backend-gradle-${Date.now()}`
+        })
+        .expect(201);
+
+      const backendJob = response.body.jobs.find((job) => job.type === 'backend:install');
+      expect(backendJob?.command).toBe(path.join(response.body.project.path, 'gradlew.bat'));
+      expect(backendJob?.args).toEqual(['build', '-x', 'test']);
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('continues when backend install job throws', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `backend-job-fail-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'go.mod'), 'module example\nrequire example.com/other v1.0.0');
+
+      const { startJob } = await import('../services/jobRunner.js');
+      startJob.mockImplementationOnce(() => {
+        throw new Error('job failed');
+      });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `backend-job-fail-${Date.now()}`
+        })
+        .expect(201);
+
+      const backendJob = response.body.jobs.find((job) => job.type === 'backend:install');
+      expect(backendJob).toBeUndefined();
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('falls back to recursive copy for symlink entries', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `symlink-source-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const projectName = `symlink-copy-${Date.now()}`;
+      const targetPath = resolveProjectPath(projectName);
+
+      const cpSpy = vi.spyOn(fs, 'cp').mockRejectedValueOnce(new Error('cp failed'));
+      const originalReaddir = fs.readdir;
+      const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(async (candidate, options) => {
+        if (path.resolve(candidate) === path.resolve(localPath)) {
+          return [
+            {
+              name: 'linked.txt',
+              isDirectory: () => false,
+              isSymbolicLink: () => true
+            }
+          ];
+        }
+        return originalReaddir(candidate, options);
+      });
+      const readlinkSpy = vi.spyOn(fs, 'readlink').mockResolvedValue('target.txt');
+      const symlinkSpy = vi.spyOn(fs, 'symlink').mockResolvedValue();
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: projectName
+        })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toMatch(/Failed to copy project files/);
+      expect(readlinkSpy).toHaveBeenCalledWith(path.join(localPath, 'linked.txt'));
+      expect(symlinkSpy).toHaveBeenCalledWith('target.txt', path.join(targetPath, 'linked.txt'));
+
+      cpSpy.mockRestore();
+      readdirSpy.mockRestore();
+      readlinkSpy.mockRestore();
+      symlinkSpy.mockRestore();
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('skips ignored directories and recurses into nested folders', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `recursive-copy-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const projectName = `recursive-copy-${Date.now()}`;
+      const targetPath = resolveProjectPath(projectName);
+
+      const cpSpy = vi.spyOn(fs, 'cp').mockRejectedValueOnce(new Error('cp failed'));
+      const originalReaddir = fs.readdir;
+      const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(async (candidate, options) => {
+        const resolved = path.resolve(candidate);
+        if (resolved === path.resolve(localPath)) {
+          return [
+            { name: 'node_modules', isDirectory: () => true, isSymbolicLink: () => false },
+            { name: 'nested', isDirectory: () => true, isSymbolicLink: () => false },
+            { name: 'root.txt', isDirectory: () => false, isSymbolicLink: () => false }
+          ];
+        }
+        if (resolved === path.resolve(localPath, 'nested')) {
+          return [
+            { name: 'child.txt', isDirectory: () => false, isSymbolicLink: () => false }
+          ];
+        }
+        return originalReaddir(candidate, options);
+      });
+      const copyFileSpy = vi.spyOn(fs, 'copyFile').mockResolvedValue();
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: projectName
+        })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toMatch(/Failed to copy project files/);
+      expect(copyFileSpy).toHaveBeenCalledWith(
+        path.join(localPath, 'root.txt'),
+        path.join(targetPath, 'root.txt')
+      );
+      expect(copyFileSpy).toHaveBeenCalledWith(
+        path.join(localPath, 'nested', 'child.txt'),
+        path.join(targetPath, 'nested', 'child.txt')
+      );
+      const nodeModulesCalls = copyFileSpy.mock.calls.filter(([src]) => String(src).includes('node_modules'));
+      expect(nodeModulesCalls).toHaveLength(0);
+
+      cpSpy.mockRestore();
+      readdirSpy.mockRestore();
+      copyFileSpy.mockRestore();
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('returns failed path when symlink copy fails', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `symlink-error-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const projectName = `symlink-error-${Date.now()}`;
+      const targetPath = resolveProjectPath(projectName);
+
+      const cpSpy = vi.spyOn(fs, 'cp').mockRejectedValueOnce(new Error('cp failed'));
+      const originalReaddir = fs.readdir;
+      const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(async (candidate, options) => {
+        if (path.resolve(candidate) === path.resolve(localPath)) {
+          return [
+            {
+              name: 'linked.txt',
+              isDirectory: () => false,
+              isSymbolicLink: () => true
+            }
+          ];
+        }
+        return originalReaddir(candidate, options);
+      });
+      const readlinkSpy = vi.spyOn(fs, 'readlink').mockResolvedValue('target.txt');
+      const symlinkSpy = vi.spyOn(fs, 'symlink').mockRejectedValueOnce(new Error('link failed'));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: projectName
+        })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain(path.join(localPath, 'linked.txt'));
+      expect(readlinkSpy).toHaveBeenCalledWith(path.join(localPath, 'linked.txt'));
+      expect(symlinkSpy).toHaveBeenCalledWith('target.txt', path.join(targetPath, 'linked.txt'));
+
+      cpSpy.mockRestore();
+      readdirSpy.mockRestore();
+      readlinkSpy.mockRestore();
+      symlinkSpy.mockRestore();
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('rejects link imports outside the managed root', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const outsideRoot = path.join(path.dirname(projectsRoot), `outside-${Date.now()}`);
+      await ensureEmptyDir(outsideRoot);
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'link',
+          localPath: outsideRoot,
+          name: `outside-${Date.now()}`
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        success: false,
+        error: 'Linked projects must be inside the managed projects folder. Use copy instead.'
+      });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('rejects link imports outside the managed root (coverage)', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const outsideRoot = path.join(path.dirname(projectsRoot), `outside-coverage-${Date.now()}`);
+      await ensureEmptyDir(outsideRoot);
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'link',
+          localPath: outsideRoot,
+          name: `outside-coverage-${Date.now()}`
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        success: false,
+        error: 'Linked projects must be inside the managed projects folder. Use copy instead.'
+      });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('imports a local folder with link mode inside the managed root', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `linked-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'link',
+          localPath,
+          name: `linked-${Date.now()}`
+        })
+        .expect(201);
+
+      expect(response.body).toMatchObject({ success: true });
+      expect(response.body.project?.path).toBe(localPath);
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('rejects local import when path is not a directory', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const filePath = path.join(projectsRoot, `file-${Date.now()}.txt`);
+      await fs.writeFile(filePath, 'not a directory');
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath: filePath,
+          name: `file-${Date.now()}`
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        success: false,
+        error: 'Project path must be a directory'
+      });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('rejects when project name already exists', async () => {
+      await createProject({
+        name: 'Duplicate Project',
+        description: 'Existing',
+        language: 'javascript,javascript',
+        framework: 'react,express',
+        path: path.join(projectsRoot, 'dup-existing'),
+        frontendPort: null,
+        backendPort: null
+      });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          name: 'Duplicate Project'
+        })
+        .expect(409);
+
+      expect(response.body).toMatchObject({
+        success: false,
+        error: 'A project with the name "Duplicate Project" already exists. Please choose a different name.'
+      });
+    });
+
+    test('rejects local import when project path is missing', async () => {
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          name: 'Missing Path'
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project path is required' });
+    });
+
+    test('returns 409 when cleanupExistingImportTarget fails', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `cleanup-target-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const projectName = `cleanup-target-${Date.now()}`;
+      const targetPath = resolveProjectPath(projectName);
+      await ensureEmptyDir(targetPath);
+
+      const originalRm = fs.rm;
+      const rmSpy = vi.spyOn(fs, 'rm').mockImplementation(async (candidate, options) => {
+        if (path.resolve(candidate) === path.resolve(targetPath)) {
+          throw new Error('rm failed');
+        }
+        return originalRm(candidate, options);
+      });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: projectName
+        })
+        .expect(409);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project path already exists' });
+
+      rmSpy.mockRestore();
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('returns 409 when cleanup target is outside managed root', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `cleanup-outside-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const projectName = `cleanup-outside-${Date.now()}`;
+      const targetPath = resolveProjectPath(projectName);
+      await ensureEmptyDir(targetPath);
+
+      const withinSpy = vi.spyOn(cleanup, 'isWithinManagedProjectsRoot').mockReturnValue(false);
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: projectName
+        })
+        .expect(409);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project path already exists' });
+
+      withinSpy.mockRestore();
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
   });
 
   afterAll(async () => {
@@ -396,6 +1535,218 @@ describe('Projects routes coverage (projects.js)', () => {
       expect(response.body).toMatchObject({ success: false, error: 'Failed to delete path' });
 
       __projectRoutesInternals.resetFsModuleOverride();
+    });
+  });
+
+  describe('POST /api/projects/import (git)', () => {
+    test('builds clone URL with PAT and applies compatibility/structure flags', async () => {
+      const { runGitCommand, getCurrentBranch } = await import('../utils/git.js');
+      const { applyCompatibility, applyProjectStructure } = await import('../services/importCompatibility.js');
+
+      runGitCommand.mockResolvedValue(undefined);
+      getCurrentBranch.mockResolvedValue('main');
+      applyCompatibility.mockResolvedValue({ applied: true, plan: { needsChanges: true } });
+      applyProjectStructure.mockResolvedValue({ applied: true, plan: { needsMove: true } });
+
+      const repoSuffix = Date.now();
+      const gitUrl = `https://gitlab.com/acme/repo-${repoSuffix}.git`;
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          name: '',
+          importMethod: 'git',
+          gitUrl,
+          gitAuthMethod: 'pat',
+          gitToken: 'token123',
+          gitProvider: 'gitlab',
+          applyCompatibility: true,
+          applyStructureFix: true
+        })
+        .expect(201);
+
+      const cloneCall = runGitCommand.mock.calls.find((call) => call[1]?.[0] === 'clone');
+      expect(cloneCall).toBeTruthy();
+      expect(cloneCall[1][1]).toContain('oauth2:token123@');
+
+      expect(runGitCommand).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining(['remote', 'set-url', 'origin', gitUrl]),
+        expect.any(Object)
+      );
+      expect(applyCompatibility).toHaveBeenCalled();
+      expect(applyProjectStructure).toHaveBeenCalled();
+      expect(response.body).toMatchObject({ success: true });
+      expect(response.body.project.name).toBe(`repo-${repoSuffix}`);
+    });
+
+    test('uses raw git URL for ssh auth and strips credentials for remote', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand, getCurrentBranch } = await import('../utils/git.js');
+      runGitCommand.mockReset();
+      getCurrentBranch.mockReset();
+      runGitCommand.mockResolvedValue(undefined);
+      getCurrentBranch.mockResolvedValue('main');
+
+      const gitUrl = `https://user:pass@github.com/acme/repo-${Date.now()}.git`;
+      const safeUrl = gitUrl.replace('user:pass@', '');
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitAuthMethod: 'ssh',
+          gitToken: 'ignored-token',
+          gitUrl
+        })
+        .expect(201);
+
+      const cloneCall = runGitCommand.mock.calls.find((call) => call[1]?.[0] === 'clone');
+      expect(cloneCall[1][1]).toBe(gitUrl);
+      expect(runGitCommand).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining(['remote', 'set-url', 'origin', safeUrl]),
+        expect.any(Object)
+      );
+      expect(response.body).toMatchObject({ success: true });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('cleans existing git target paths before cloning', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand, getCurrentBranch } = await import('../utils/git.js');
+      runGitCommand.mockResolvedValue(undefined);
+      getCurrentBranch.mockResolvedValue('main');
+
+      const projectName = `git-clean-${Date.now()}`;
+      const targetPath = resolveProjectPath(projectName);
+      await ensureEmptyDir(targetPath);
+      await fs.writeFile(path.join(targetPath, 'stale.txt'), 'stale');
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitUrl: `https://github.com/acme/${projectName}.git`,
+          name: projectName
+        })
+        .expect(201);
+
+      const staleExists = await fs
+        .access(path.join(targetPath, 'stale.txt'))
+        .then(() => true)
+        .catch(() => false);
+
+      expect(staleExists).toBe(false);
+      expect(response.body).toMatchObject({ success: true });
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+  });
+
+  describe('POST /api/projects/import error branches', () => {
+    test('returns 400 when local copy fails after fallback copy', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `copy-fail-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      const badFile = path.join(localPath, 'bad.txt');
+      await fs.writeFile(badFile, 'fail');
+
+      const cpSpy = vi.spyOn(fs, 'cp').mockRejectedValueOnce(Object.assign(new Error('cp failed'), { code: 'EIO' }));
+      const copyFileSpy = vi.spyOn(fs, 'copyFile').mockImplementationOnce(async () => {
+        const err = new Error('copy failed');
+        err.code = 'EACCES';
+        throw err;
+      });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `copy-fail-${Date.now()}`
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false });
+      expect(response.body.error).toContain('Failed to copy project files');
+      expect(response.body.error).toContain('EACCES');
+
+      cpSpy.mockRestore();
+      copyFileSpy.mockRestore();
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('returns 400 when git URL is missing', async () => {
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          name: `missing-git-${Date.now()}`
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Git repository URL is required' });
+    });
+
+    test('continues when cleanup fails after import error', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `cleanup-fail-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const dbModule = await import('../database.js');
+      const createSpy = vi.spyOn(dbModule, 'createProject').mockRejectedValue(new Error('create failed'));
+
+      const originalRm = fs.rm;
+      const rmSpy = vi.spyOn(fs, 'rm').mockImplementationOnce(async (candidate, options) => {
+        if (String(candidate).includes('cleanup-fail-')) {
+          throw new Error('rm failed');
+        }
+        return originalRm(candidate, options);
+      });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `cleanup-fail-${Date.now()}`
+        })
+        .expect(500);
+
+      expect(response.body).toMatchObject({ success: false, error: 'create failed' });
+
+      createSpy.mockRestore();
+      rmSpy.mockRestore();
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
     });
   });
 
@@ -1175,5 +2526,350 @@ describe('Projects routes coverage (projects.js)', () => {
     expect(names).not.toContain('.secret');
     expect(names).not.toContain('Thumbs.db');
     expect(names).not.toContain('node_modules');
+  });
+
+  describe('POST /api/projects/import error coverage', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalProjectsDir = process.env.PROJECTS_DIR;
+
+    beforeEach(async () => {
+      const { runGitCommand, getCurrentBranch } = await import('../utils/git.js');
+      const { applyCompatibility, applyProjectStructure } = await import('../services/importCompatibility.js');
+      runGitCommand.mockReset();
+      getCurrentBranch.mockReset();
+      applyCompatibility.mockReset();
+      applyProjectStructure.mockReset();
+    });
+
+    afterEach(() => {
+      process.env.NODE_ENV = originalNodeEnv;
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('returns 409 when cleanupExistingImportTarget fails for git import', async () => {
+      process.env.PROJECTS_DIR = projectsRoot;
+      const repoName = `cleanup-fail-${Date.now()}`;
+      const targetPath = path.join(projectsRoot, repoName);
+      await ensureEmptyDir(targetPath);
+
+      const originalRm = fs.rm;
+      const rmSpy = vi.spyOn(fs, 'rm').mockImplementation(async (candidate, options) => {
+        if (path.resolve(candidate) === path.resolve(targetPath)) {
+          throw new Error('cannot remove');
+        }
+        return originalRm(candidate, options);
+      });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitUrl: `https://github.com/acme/${repoName}.git`
+        })
+        .expect(409);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Project path already exists' });
+      rmSpy.mockRestore();
+    });
+
+    test('continues when getCurrentBranch fails', async () => {
+      process.env.PROJECTS_DIR = projectsRoot;
+      const { runGitCommand, getCurrentBranch } = await import('../utils/git.js');
+
+      runGitCommand.mockResolvedValue(undefined);
+      getCurrentBranch.mockRejectedValue(new Error('branch error'));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitUrl: `https://github.com/acme/branch-${Date.now()}.git`
+        })
+        .expect(201);
+
+      expect(response.body).toMatchObject({ success: true });
+    });
+
+    test('returns 400 when applyProjectStructure fails', async () => {
+      process.env.PROJECTS_DIR = projectsRoot;
+      const { runGitCommand } = await import('../utils/git.js');
+      const { applyProjectStructure } = await import('../services/importCompatibility.js');
+
+      runGitCommand.mockResolvedValue(undefined);
+      applyProjectStructure.mockRejectedValue(new Error('structure failed'));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitUrl: `https://github.com/acme/structure-${Date.now()}.git`,
+          applyStructureFix: true
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'structure failed' });
+    });
+
+    test('returns 400 when applyProjectStructure fails without a message', async () => {
+      process.env.PROJECTS_DIR = projectsRoot;
+      const { runGitCommand } = await import('../utils/git.js');
+      const { applyProjectStructure } = await import('../services/importCompatibility.js');
+
+      runGitCommand.mockResolvedValue(undefined);
+      applyProjectStructure.mockRejectedValue({ code: 'STRUCTURE_FAIL' });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitUrl: `https://github.com/acme/structure-${Date.now()}.git`,
+          applyStructureFix: true
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        success: false,
+        error: 'Failed to apply project structure updates'
+      });
+    });
+
+    test('returns 400 when applyCompatibility fails', async () => {
+      process.env.PROJECTS_DIR = projectsRoot;
+      const { runGitCommand } = await import('../utils/git.js');
+      const { applyCompatibility } = await import('../services/importCompatibility.js');
+
+      runGitCommand.mockResolvedValue(undefined);
+      applyCompatibility.mockRejectedValue(new Error('compat failed'));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitUrl: `https://github.com/acme/compat-${Date.now()}.git`,
+          applyCompatibility: true
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({ success: false, error: 'compat failed' });
+    });
+
+    test('returns 400 when applyCompatibility fails without a message', async () => {
+      process.env.PROJECTS_DIR = projectsRoot;
+      const { runGitCommand } = await import('../utils/git.js');
+      const { applyCompatibility } = await import('../services/importCompatibility.js');
+
+      runGitCommand.mockResolvedValue(undefined);
+      applyCompatibility.mockRejectedValue({ code: 'COMPAT_FAIL' });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitUrl: `https://github.com/acme/compat-${Date.now()}.git`,
+          applyCompatibility: true
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        success: false,
+        error: 'Failed to apply compatibility changes'
+      });
+    });
+
+    test('returns 201 when enqueueInstallJobs fails', async () => {
+      process.env.PROJECTS_DIR = projectsRoot;
+      const localPath = path.join(projectsRoot, `local-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const originalStat = fs.stat;
+      const statSpy = vi.spyOn(fs, 'stat').mockImplementation(async (candidate) => {
+        if (String(candidate).endsWith(path.join('package.json'))) {
+          throw { code: 'STAT_FAIL' };
+        }
+        return originalStat(candidate);
+      });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          localPath,
+          importMode: 'copy',
+          name: `local-${Date.now()}`
+        })
+        .expect(201);
+
+      expect(response.body).toMatchObject({ success: true, jobs: [] });
+      statSpy.mockRestore();
+    });
+
+    test('maps UNIQUE constraint failures to 409 and includes dev details', async () => {
+      process.env.NODE_ENV = 'development';
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `local-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const dbModule = await import('../database.js');
+      const createSpy = vi.spyOn(dbModule, 'createProject').mockRejectedValue(new Error('UNIQUE constraint failed'));
+      const rmSpy = vi.spyOn(fs, 'rm');
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          localPath,
+          importMode: 'copy',
+          name: `local-${Date.now()}`
+        })
+        .expect(409);
+
+      expect(response.body).toMatchObject({ success: false });
+      expect(response.body.details).toBeTruthy();
+      expect(rmSpy).toHaveBeenCalled();
+
+      createSpy.mockRestore();
+      rmSpy.mockRestore();
+    });
+
+    test('returns 500 fallback message when error message is not a string', async () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `local-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'local' }));
+
+      const dbModule = await import('../database.js');
+      const err = { message: 123, name: '' };
+      const createSpy = vi.spyOn(dbModule, 'createProject').mockRejectedValue(err);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const rmSpy = vi.spyOn(fs, 'rm').mockRejectedValueOnce({ code: 'RM_FAIL' });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          localPath,
+          importMode: 'copy',
+          name: `local-${Date.now()}`
+        })
+        .expect(500);
+
+      expect(response.body).toMatchObject({ success: false, error: 'Failed to import project' });
+      expect(response.body.details?.name).toBeNull();
+
+      createSpy.mockRestore();
+      warnSpy.mockRestore();
+      rmSpy.mockRestore();
+      process.env.NODE_ENV = originalNodeEnv;
+    });
+  });
+
+  describe('POST /api/projects/:id/backend/create', () => {
+    test('uses backend language/framework and warns when install job fails', async () => {
+      const { generateBackendFiles } = await import('../services/projectScaffolding/generate.js');
+      const { startJob } = await import('../services/jobRunner.js');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const projectPath = path.join(projectsRoot, `backend-create-${Date.now()}`);
+      await ensureEmptyDir(projectPath);
+
+      const project = await createProject({
+        name: `backend-create-${Date.now()}`,
+        description: 'backend create coverage',
+        language: 'javascript,python',
+        framework: 'react,flask',
+        path: projectPath,
+        frontendPort: null,
+        backendPort: null
+      });
+
+      generateBackendFiles.mockImplementationOnce(async (backendPath) => {
+        await fs.writeFile(path.join(backendPath, 'package.json'), JSON.stringify({ name: 'backend' }));
+      });
+      startJob.mockImplementationOnce(() => {
+        throw new Error('job failed');
+      });
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/backend/create`)
+        .expect(200);
+
+      const backendPath = path.join(projectPath, 'backend');
+      expect(generateBackendFiles).toHaveBeenCalledWith(
+        backendPath,
+        expect.objectContaining({ language: 'python', framework: 'flask' })
+      );
+      expect(response.body).toMatchObject({ success: true });
+      expect(warnSpy).toHaveBeenCalledWith('Failed to start backend install job:', 'job failed');
+
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe('POST /api/projects/:id/restart', () => {
+    test('returns 400 with details when restart fails for missing frontend entrypoint', async () => {
+      const { startProject } = await import('../services/projectScaffolding.js');
+      startProject.mockRejectedValueOnce(new Error('No frontend package.json found in frontend/ or project root'));
+
+      const project = await createProject({
+        name: `restart-missing-${Date.now()}`,
+        description: 'restart missing frontend',
+        language: 'javascript,javascript',
+        framework: 'react,express',
+        path: path.join(projectsRoot, `restart-missing-${Date.now()}`)
+      });
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/restart`)
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        success: false,
+        error: 'No frontend package.json found in frontend/ or project root'
+      });
+      expect(response.body.details).toBeTruthy();
+    });
+
+    test('returns 500 with details when restart fails unexpectedly', async () => {
+      const { startProject } = await import('../services/projectScaffolding.js');
+      const originalNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+      const error = new Error('boom');
+      error.name = 'RestartError';
+      startProject.mockRejectedValueOnce(error);
+
+      const project = await createProject({
+        name: `restart-fail-${Date.now()}`,
+        description: 'restart unexpected failure',
+        language: 'javascript,javascript',
+        framework: 'react,express',
+        path: path.join(projectsRoot, `restart-fail-${Date.now()}`)
+      });
+
+      try {
+        const response = await request(app)
+          .post(`/api/projects/${project.id}/restart`)
+          .expect(500);
+
+        expect(response.body).toMatchObject({
+          success: false,
+          error: 'Failed to restart project'
+        });
+        expect(response.body.details?.message).toBe('boom');
+        expect(response.body.details?.name).toBe('RestartError');
+        expect(response.body.details?.stack).toContain('RestartError');
+      } finally {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+    });
   });
 });
