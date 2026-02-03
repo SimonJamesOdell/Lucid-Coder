@@ -1,3 +1,8 @@
+## 0.4.8 (2026-02-03)
+- Split import flow into compatibility and git configuration steps, with tailored copy for local vs git imports.
+- Prefill git remote URLs from git import inputs and refine git connection defaults and warnings.
+- Expand ImportProject and ProjectSelector coverage to keep frontend coverage at 100%.
+
 ## 0.4.7 (2026-02-02)
 - Add filesystem browsing + tech stack detection APIs, including compatibility scan support for import flows.
 - Add compatibility helpers to normalize Vite/Next/CRA dev scripts and optional frontend structure fixes.

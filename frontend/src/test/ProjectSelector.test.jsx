@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ProjectSelector from '../components/ProjectSelector';
 import { useAppState } from '../context/AppStateContext';
@@ -152,6 +152,24 @@ describe('ProjectSelector Component', () => {
       expect(await screen.findByText('Updated Jan 15, 2024')).toBeInTheDocument();
       expect(screen.getByText('Updated Jan 10, 2024')).toBeInTheDocument();
     });
+
+    test('falls back to unknown date when updatedAt is invalid', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get.mockResolvedValueOnce(mockProjectsPayload([
+        {
+          id: 'proj-3',
+          name: 'Invalid Date Project',
+          description: '',
+          language: 'JavaScript',
+          framework: 'React',
+          updatedAt: 'not-a-date'
+        }
+      ]));
+
+      render(<ProjectSelector />);
+
+      expect(await screen.findByText('Updated Unknown date')).toBeInTheDocument();
+    });
   });
 
   describe('Project Actions', () => {
@@ -175,6 +193,38 @@ describe('ProjectSelector Component', () => {
       await user.click(projectCard);
 
       expect(selectProject).toHaveBeenCalledWith(project);
+    });
+
+    test('supports keyboard activation and blocks interactions while deleting', async () => {
+      const selectProject = vi.fn();
+      useAppState.mockReturnValue(mockAppState({ selectProject }));
+      axios.get.mockResolvedValueOnce(mockProjectsPayload([project]));
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const projectCard = await screen.findByRole('button', { name: 'Open Lifecycle Project' });
+
+      fireEvent.keyDown(projectCard, { key: 'Enter' });
+      fireEvent.keyDown(projectCard, { key: ' ' });
+      expect(selectProject).toHaveBeenCalledTimes(2);
+
+      let resolveDelete;
+      axios.delete.mockImplementation(() => new Promise((resolve) => { resolveDelete = resolve; }));
+
+      await user.click(screen.getByRole('button', { name: 'Delete' }));
+      await user.click(screen.getByTestId('modal-confirm'));
+
+      await waitFor(() => expect(axios.delete).toHaveBeenCalled());
+
+      await user.click(projectCard);
+      fireEvent.keyDown(projectCard, { key: 'Enter' });
+
+      expect(selectProject).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        resolveDelete({ data: { success: true } });
+      });
     });
 
     test('surfaces delete failures and resets modal state', async () => {

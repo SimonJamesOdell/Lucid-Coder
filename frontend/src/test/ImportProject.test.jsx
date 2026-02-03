@@ -10,13 +10,15 @@ import ImportProject, {
 
 const mockImportProject = vi.fn();
 const mockShowMain = vi.fn();
+let mockGitSettings;
+let mockGitConnectionStatus;
 
 vi.mock('../context/AppStateContext', () => ({
   useAppState: () => ({
     importProject: mockImportProject,
     showMain: mockShowMain,
-    gitSettings: { provider: 'github', defaultBranch: 'main', tokenPresent: false },
-    gitConnectionStatus: null
+    gitSettings: mockGitSettings,
+    gitConnectionStatus: mockGitConnectionStatus
   })
 }));
 
@@ -116,6 +118,8 @@ const goToGitConfigStep = async (user, options = {}) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGitSettings = { provider: 'github', defaultBranch: 'main', tokenPresent: false };
+  mockGitConnectionStatus = null;
   vi.stubGlobal('fetch', vi.fn(mockFetch));
 });
 
@@ -225,6 +229,195 @@ describe('ImportProject Component', () => {
     );
   });
 
+  test('falls back to local connection when global Git is not configured', async () => {
+    let testHooks;
+    const user = userEvent.setup();
+    mockImportProject.mockResolvedValue({ project: { id: 1 }, jobs: [] });
+
+    render(
+      <ImportProject
+        __testHooks={(hooks) => {
+          testHooks = hooks;
+        }}
+      />
+    );
+
+    await act(async () => {
+      testHooks.setStateForTests({
+        currentStep: 5,
+        activeTab: 'local',
+        importData: {
+          name: 'Global Mode Project',
+          path: 'C:/Projects/global-mode',
+          description: ''
+        },
+        gitConnectionMode: 'global',
+        gitConnectionRemoteUrl: 'https://github.com/org/repo.git'
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Import Project' }));
+
+    expect(mockImportProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitConnectionMode: 'local',
+        gitRemoteUrl: ''
+      })
+    );
+  });
+
+  test('uses the global git provider when global connection is configured', async () => {
+    let testHooks;
+    const user = userEvent.setup();
+    mockGitSettings = { provider: 'gitlab', defaultBranch: 'main', tokenPresent: true };
+    mockImportProject.mockResolvedValue({ project: { id: 1 }, jobs: [] });
+
+    render(
+      <ImportProject
+        __testHooks={(hooks) => {
+          testHooks = hooks;
+        }}
+      />
+    );
+
+    await act(async () => {
+      testHooks.setStateForTests({
+        currentStep: 5,
+        activeTab: 'local',
+        importData: {
+          name: 'Global Provider Project',
+          path: 'C:/Projects/global-provider',
+          description: ''
+        },
+        gitConnectionMode: 'global',
+        gitConnectionRemoteUrl: 'https://github.com/org/repo.git'
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Import Project' }));
+
+    expect(mockImportProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitConnectionMode: 'global',
+        gitConnectionProvider: 'gitlab'
+      })
+    );
+  });
+
+  test('uses connection status provider when git settings are missing', async () => {
+    let testHooks;
+    const user = userEvent.setup();
+    mockGitSettings = { defaultBranch: 'main', tokenPresent: false };
+    mockGitConnectionStatus = { provider: 'gitlab' };
+    mockImportProject.mockResolvedValue({ project: { id: 1 }, jobs: [] });
+
+    render(
+      <ImportProject
+        __testHooks={(hooks) => {
+          testHooks = hooks;
+        }}
+      />
+    );
+
+    await act(async () => {
+      testHooks.setStateForTests({
+        currentStep: 5,
+        activeTab: 'local',
+        importData: {
+          name: 'Status Provider Project',
+          path: 'C:/Projects/status-provider',
+          description: ''
+        },
+        gitConnectionMode: 'global',
+        gitConnectionRemoteUrl: 'https://github.com/org/repo.git'
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Import Project' }));
+
+    expect(mockImportProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitConnectionMode: 'global',
+        gitConnectionProvider: 'gitlab'
+      })
+    );
+  });
+
+  test('uses github when no global provider is available', async () => {
+    let testHooks;
+    const user = userEvent.setup();
+    mockGitSettings = { defaultBranch: 'main', tokenPresent: true };
+    mockGitConnectionStatus = {};
+    mockImportProject.mockResolvedValue({ project: { id: 1 }, jobs: [] });
+
+    render(
+      <ImportProject
+        __testHooks={(hooks) => {
+          testHooks = hooks;
+        }}
+      />
+    );
+
+    await act(async () => {
+      testHooks.setStateForTests({
+        currentStep: 5,
+        activeTab: 'local',
+        importData: {
+          name: 'Default Provider Project',
+          path: 'C:/Projects/default-provider',
+          description: ''
+        },
+        gitConnectionMode: 'global',
+        gitConnectionRemoteUrl: 'https://github.com/org/repo.git'
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Import Project' }));
+
+    expect(mockImportProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitConnectionMode: 'global',
+        gitConnectionProvider: 'github'
+      })
+    );
+  });
+
+  test('falls back to main branch when git settings omit the default branch', async () => {
+    let testHooks;
+    const user = userEvent.setup();
+    mockGitSettings = { provider: 'github', tokenPresent: true };
+    mockImportProject.mockResolvedValue({ project: { id: 1 }, jobs: [] });
+
+    render(
+      <ImportProject
+        __testHooks={(hooks) => {
+          testHooks = hooks;
+        }}
+      />
+    );
+
+    await act(async () => {
+      testHooks.setStateForTests({
+        currentStep: 5,
+        activeTab: 'local',
+        gitConnectionDefaultBranch: '   ',
+        importData: {
+          name: 'Fallback Branch Project',
+          path: 'C:/Projects/fallback-branch',
+          description: ''
+        }
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Import Project' }));
+
+    expect(mockImportProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitDefaultBranch: 'main'
+      })
+    );
+  });
+
   describe('Project Source Fields', () => {
     test('shows folder path input on local source step', async () => {
       const { user } = renderComponent();
@@ -242,6 +435,38 @@ describe('ImportProject Component', () => {
       expect(screen.getByLabelText('Git Provider')).toBeInTheDocument();
     });
 
+    test('shows git configuration copy and warnings', async () => {
+      let testHooks;
+      render(<ImportProject __testHooks={(hooks) => { testHooks = hooks; }} />);
+
+      await waitFor(() => expect(testHooks).toBeTruthy());
+
+      await act(async () => {
+        testHooks.setStateForTests({
+          currentStep: 5,
+          activeTab: 'local',
+          gitConnectionMode: 'global'
+        });
+      });
+
+      expect(screen.getByText('Configure Git')).toBeInTheDocument();
+      expect(screen.getByText('LucidCoder will initialize Git if needed and can connect the repo to a remote.')).toBeInTheDocument();
+      expect(screen.getByText('Global connection is not configured. This import will fall back to local-only Git.')).toBeInTheDocument();
+
+      await act(async () => {
+        testHooks.setStateForTests({
+          currentStep: 5,
+          activeTab: 'git',
+          gitConnectionMode: 'custom',
+          gitConnectionRemoteUrl: ''
+        });
+      });
+
+      expect(screen.getByText('Configure Git connection')).toBeInTheDocument();
+      expect(screen.getByText('Decide whether to keep this clone local or connect it to a cloud workflow.')).toBeInTheDocument();
+      expect(screen.getByText('No remote URL provided. This import will default to local-only Git.')).toBeInTheDocument();
+    });
+
     test('prefills git remote URL from the git repository URL', async () => {
       const { user } = renderComponent();
       const gitUrl = 'https://github.com/test/repo.git';
@@ -251,6 +476,189 @@ describe('ImportProject Component', () => {
       await user.click(screen.getByRole('radio', { name: /Use custom connection/i }));
 
       expect(screen.getByLabelText('Remote Repository URL *')).toHaveValue(gitUrl);
+    });
+
+    test('selecting local-only mode triggers the local radio handler', async () => {
+      let testHooks;
+      const user = userEvent.setup();
+      render(<ImportProject __testHooks={(hooks) => { testHooks = hooks; }} />);
+
+      await act(async () => {
+        testHooks.setStateForTests({
+          currentStep: 5,
+          activeTab: 'local',
+          gitConnectionMode: 'custom'
+        });
+      });
+
+      await user.click(screen.getByRole('radio', { name: /Local only/i }));
+
+      expect(screen.getByRole('radio', { name: /Local only/i })).toBeChecked();
+    });
+
+    test('changing git provider uses the git config select handler', async () => {
+      let testHooks;
+      const user = userEvent.setup();
+      render(<ImportProject __testHooks={(hooks) => { testHooks = hooks; }} />);
+
+      await act(async () => {
+        testHooks.setStateForTests({
+          currentStep: 5,
+          activeTab: 'local',
+          gitConnectionMode: 'custom',
+          gitConnectionProvider: 'github'
+        });
+      });
+
+      const providerSelect = screen.getByLabelText('Git Provider');
+      await user.selectOptions(providerSelect, 'gitlab');
+
+      expect(providerSelect).toHaveValue('gitlab');
+    });
+
+    test('renders framework options for selected languages', async () => {
+      let testHooks;
+      render(<ImportProject __testHooks={(hooks) => { testHooks = hooks; }} />);
+
+      await act(async () => {
+        testHooks.setStateForTests({
+          currentStep: 3,
+          activeTab: 'local',
+          importData: {
+            name: 'Tech Project',
+            description: '',
+            path: 'C:/Projects/tech',
+            gitUrl: '',
+            gitUsername: '',
+            gitToken: '',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' }
+          }
+        });
+      });
+
+      const frontendSelect = screen.getByLabelText('Frontend Framework *');
+      const backendSelect = screen.getByLabelText('Backend Framework *');
+
+      expect(within(frontendSelect).getByRole('option', { name: /react/i })).toBeInTheDocument();
+      expect(within(backendSelect).getByRole('option', { name: /express/i })).toBeInTheDocument();
+    });
+
+    test('restores the default branch when cleared', async () => {
+      let testHooks;
+      const user = userEvent.setup();
+      mockImportProject.mockResolvedValue({ project: { id: 1 }, jobs: [] });
+
+      render(
+        <ImportProject
+          __testHooks={(hooks) => {
+            testHooks = hooks;
+          }}
+        />
+      );
+
+      await act(async () => {
+        testHooks.setStateForTests({
+          currentStep: 5,
+          activeTab: 'local',
+          gitConnectionDefaultBranch: '',
+          importData: {
+            name: 'Default Branch Project',
+            path: 'C:/Projects/default-branch',
+            description: ''
+          }
+        });
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Import Project' }));
+
+      expect(mockImportProject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gitDefaultBranch: 'main'
+        })
+      );
+    });
+
+    test('switching to global connection resets provider to the global setting', async () => {
+      let testHooks;
+      const user = userEvent.setup();
+      render(<ImportProject __testHooks={(hooks) => { testHooks = hooks; }} />);
+
+      await waitFor(() => expect(testHooks).toBeTruthy());
+
+      await act(async () => {
+        testHooks.setStateForTests({
+          currentStep: 5,
+          activeTab: 'local',
+          gitConnectionMode: 'custom',
+          gitConnectionProvider: 'gitlab'
+        });
+      });
+
+      const providerSelect = screen.getByLabelText('Git Provider');
+      expect(providerSelect).toHaveValue('gitlab');
+
+      await user.click(screen.getByRole('radio', { name: /Use global connection/i }));
+
+      expect(providerSelect).toHaveValue('github');
+      expect(providerSelect).toBeDisabled();
+    });
+
+    test('typing a custom remote URL updates the git connection value', async () => {
+      const { user } = renderComponent();
+      const gitUrl = 'https://github.com/test/repo.git';
+
+      await goToGitConfigStep(user, { tab: 'git', name: 'Git Project', gitUrl });
+
+      await user.click(screen.getByRole('radio', { name: /Use custom connection/i }));
+
+      const remoteInput = screen.getByLabelText('Remote Repository URL *');
+      await user.clear(remoteInput);
+      await user.type(remoteInput, 'https://gitlab.com/org/new.git');
+
+      expect(remoteInput).toHaveValue('https://gitlab.com/org/new.git');
+    });
+
+    test('uses the default git branch set through test hooks', async () => {
+      let testHooks;
+      const user = userEvent.setup();
+      mockImportProject.mockResolvedValue({ project: { id: 1 }, jobs: [] });
+
+      render(
+        <ImportProject
+          __testHooks={(hooks) => {
+            testHooks = hooks;
+          }}
+        />
+      );
+
+      await waitFor(() => expect(testHooks).toBeTruthy());
+
+      await act(async () => {
+        testHooks.setStateForTests({
+          currentStep: 5,
+          activeTab: 'local',
+          gitConnectionDefaultBranch: 'develop',
+          importData: {
+            name: 'Branch Project',
+            description: '',
+            path: 'C:/Projects/branch-project',
+            gitUrl: '',
+            gitUsername: '',
+            gitToken: '',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' }
+          }
+        });
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Import Project' }));
+
+      expect(mockImportProject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gitDefaultBranch: 'develop'
+        })
+      );
     });
 
     test('opens the folder picker when browsing for a path', async () => {
