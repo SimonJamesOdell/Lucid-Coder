@@ -35,7 +35,9 @@ Default endpoints:
 - npm run backend — run backend only
 - npm run test:backend — backend test suite
 - npm run test:frontend — frontend test suite
-- npm run test:e2e — end-to-end tests via PowerShell
+- npm run test:quick — fast local loop (frontend + backend unit-only)
+- npm run e2e — end-to-end tests (Playwright)
+- npm run e2e:flake-check — repeat clean E2E runs to detect flakes
 
 ## Configuration
 

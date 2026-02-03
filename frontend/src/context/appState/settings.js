@@ -1,5 +1,20 @@
 import { sanitizeGitSettings } from './helpers.js';
 
+const readJsonSafely = async (response) => {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
+
+const errorMessageOr = (error, fallback) => {
+  if (error && typeof error === 'object' && typeof error.message === 'string' && error.message.trim()) {
+    return error.message;
+  }
+  return fallback;
+};
+
 const stripDeprecatedGitFields = (settings = null) => {
   /* c8 ignore start -- defensive: settings can be null */
   if (!settings) {
@@ -110,15 +125,24 @@ export const updateGitSettings = async ({ trackedFetch, gitSettings, setGitSetti
     delete body.token;
   }
 
-  const response = await trackedFetch('/api/settings/git', {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body)
-  });
+  let response;
+  try {
+    response = await trackedFetch('/api/settings/git', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    throw new Error(errorMessageOr(error, 'Failed to save git settings'));
+  }
 
-  const data = await response.json();
+  const data = await readJsonSafely(response);
+
+  if (!data) {
+    throw new Error('Failed to save git settings');
+  }
 
   if (!response.ok || !data.success) {
     const message = data?.error || 'Failed to save git settings';
@@ -147,15 +171,24 @@ export const testGitConnection = async ({ trackedFetch, provider = 'github', tok
     token
   };
 
-  const response = await trackedFetch('/api/settings/git/test', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
+  let response;
+  try {
+    response = await trackedFetch('/api/settings/git/test', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    throw new Error(errorMessageOr(error, 'Failed to test git connection'));
+  }
 
-  const data = await response.json();
+  const data = await readJsonSafely(response);
+
+  if (!data) {
+    throw new Error('Failed to test git connection');
+  }
 
   if (!response.ok || !data.success) {
     const message = data?.error || 'Failed to test git connection';
@@ -179,15 +212,24 @@ export const updatePortSettings = async ({
     backendPortBase: Number.parseInt(updates.backendPortBase ?? portSettings.backendPortBase, 10)
   };
 
-  const response = await trackedFetch('/api/settings/ports', {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
+  let response;
+  try {
+    response = await trackedFetch('/api/settings/ports', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    throw new Error(errorMessageOr(error, 'Failed to save port settings'));
+  }
 
-  const data = await response.json();
+  const data = await readJsonSafely(response);
+
+  if (!data) {
+    throw new Error('Failed to save port settings');
+  }
 
   if (!response.ok || !data.success) {
     const message = data?.error || 'Failed to save port settings';

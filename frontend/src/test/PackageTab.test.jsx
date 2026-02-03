@@ -146,6 +146,24 @@ describe('PackageTab', () => {
     });
   });
 
+  test('opens and closes the add package modal', async () => {
+    useAppState.mockReturnValue(createAppState());
+    render(<PackageTab project={{ id: 42, name: 'Demo' }} />);
+
+    const user = userEvent.setup();
+    const panel = await getWorkspacePanel('frontend');
+    const openButton = within(panel).getByTestId('package-add-open-frontend');
+    await waitFor(() => expect(openButton).toBeEnabled());
+
+    await user.click(openButton);
+    expect(await screen.findByTestId('package-add-modal-frontend')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('package-add-cancel-frontend'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('package-add-modal-frontend')).toBeNull();
+    });
+  });
+
   test('focuses add-package name input without requestAnimationFrame and closes on Escape', async () => {
     const context = createAppState();
     useAppState.mockReturnValue(context);
