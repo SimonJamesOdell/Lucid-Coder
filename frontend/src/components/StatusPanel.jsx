@@ -500,7 +500,7 @@ const GettingStarted = ({ allowConfigured = false, onConfigured = null }) => {
 
         <div className="action-buttons">
           <button
-            className="save-btn"
+            className="git-settings-button primary"
             onClick={handleTestAndSave}
             disabled={
               isLoading

@@ -492,8 +492,25 @@ const buildPreviewBridgeScript = ({ previewPrefix }) => {
       }
     };
 
+    var emitPointerDown = function(event){
+      try {
+        if (!event) return;
+
+        // If the user opened the preview in a new tab (top-level browsing
+        // context), do not emit click signals for the parent UI.
+        if (window.parent === window) return;
+
+        if (typeof event.button === 'number' && event.button !== 0) return;
+
+        send('LUCIDCODER_PREVIEW_BRIDGE_POINTER', { kind: 'pointerdown' });
+      } catch (e) {
+        // ignore
+      }
+    };
+
     window.addEventListener('contextmenu', emitContextMenu, true);
     window.addEventListener('mousedown', emitContextMenu, true);
+    window.addEventListener('mousedown', emitPointerDown, true);
 
     send('LUCIDCODER_PREVIEW_HELPER_READY', { href: readHref() });
 
@@ -660,28 +677,9 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       '<title>Preview proxy error</title>' +
       '<style>' +
       'html,body{height:100%;margin:0;padding:0;}' +
-      'body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b0f1a;color:#e7eaf1;}' +
-      '.preview-loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;}' +
-      '.preview-loading-card{width:min(520px,100%);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);border-radius:14px;padding:18px 18px 14px 18px;box-shadow:0 10px 30px rgba(0,0,0,0.35);backdrop-filter:blur(10px);}' +
-      '.preview-loading-card h3{margin:0 0 12px 0;font-size:18px;letter-spacing:0.2px;}' +
-      '.preview-loading-bar{height:10px;border-radius:999px;overflow:hidden;background:rgba(255,255,255,0.12);position:relative;}' +
-      '.preview-loading-bar-swoosh{position:absolute;inset:0;width:45%;background:linear-gradient(90deg,rgba(125,155,255,0),rgba(125,155,255,0.85),rgba(125,155,255,0));transform:translateX(-60%);animation:swoosh 1.1s infinite;}' +
-      '@keyframes swoosh{0%{transform:translateX(-60%);}100%{transform:translateX(220%);}}' +
-      '.hint{margin:12px 0 0 0;opacity:0.9;line-height:1.4;font-size:13px;}' +
-      'details{margin-top:12px;opacity:0.9;}' +
-      'summary{cursor:pointer;}' +
-      'code{display:block;white-space:pre-wrap;word-break:break-word;margin-top:8px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.10);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;}' +
+      'body{background:#0b0f1a;color:#e7eaf1;}' +
       '</style>' +
-      '</head><body>' +
-      '<div class="preview-loading">' +
-      '<div class="preview-loading-card">' +
-      '<h3>Loading preview…</h3>' +
-      '<div class="preview-loading-bar" aria-hidden="true"><span class="preview-loading-bar-swoosh"></span></div>' +
-      '<p class="hint">Connecting to the preview server. Retrying automatically…</p>' +
-      '<details><summary>Details</summary><code>' +
-      String(message).replace(/</g, '&lt;').replace(/>/g, '&gt;') +
-      '</code></details>' +
-      '</div></div>' +
+      '</head><body aria-busy="true">' +
       '<script>setTimeout(function(){try{location.reload();}catch(e){}},900);</script>' +
       '</body></html>';
 

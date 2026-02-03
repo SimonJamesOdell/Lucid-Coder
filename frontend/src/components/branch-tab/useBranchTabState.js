@@ -67,7 +67,8 @@ const useBranchTabState = ({
     workspaceChanges,
     workingBranches: contextWorkingBranches,
     startAutomationJob,
-    markTestRunIntent
+    markTestRunIntent,
+    projectProcesses
   } = useAppState();
 
   const workspaceChangesRef = useRef(workspaceChanges);
@@ -341,6 +342,26 @@ const useBranchTabState = ({
     return selectedFiles.every((entry) => isCssStylesheetPath(entry?.path));
   }, [hasSelectedFiles, selectedFiles]);
 
+  const hasBackend = useMemo(() => {
+    const backendCapability = projectProcesses?.capabilities?.backend?.exists;
+    if (backendCapability === false) {
+      return false;
+    }
+    const projectBackend = project?.backend;
+    if (projectBackend === null) {
+      return false;
+    }
+    if (typeof projectBackend?.exists === 'boolean') {
+      return projectBackend.exists;
+    }
+    return true;
+  }, [project?.backend, projectProcesses?.capabilities?.backend?.exists]);
+
+  const visibleTestJobTypes = useMemo(
+    () => (hasBackend ? TEST_JOB_TYPES : TEST_JOB_TYPES.filter((type) => type !== 'backend:test')),
+    [hasBackend]
+  );
+
   const triggerAutomationSuites = useCallback(async (branchNameParam, options = {}) => {
     if (!projectId || !startAutomationJob) {
       return;
@@ -371,12 +392,12 @@ const useBranchTabState = ({
       return;
     }
 
-    TEST_JOB_TYPES.forEach((jobType) => {
+    visibleTestJobTypes.forEach((jobType) => {
       startAutomationJob(jobType, { projectId, branchName: targetBranchName }).catch((jobError) => {
         console.warn(`[BranchTab] Failed to start ${jobType}`, jobError);
       });
     });
-  }, [markTestRunIntent, projectId, selectedBranchName, startAutomationJob]);
+  }, [markTestRunIntent, projectId, selectedBranchName, startAutomationJob, visibleTestJobTypes]);
 
   const performCommit = useCallback(async (branchName) => {
     if (!projectId || !branchName) {

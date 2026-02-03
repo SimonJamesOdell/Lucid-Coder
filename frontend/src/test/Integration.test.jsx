@@ -180,7 +180,7 @@ describe('Integration Tests', () => {
     await user.click(screen.getByRole('button', { name: 'Create New Project' }));
     await screen.findByRole('heading', { name: 'Create New Project' });
 
-    await user.click(screen.getByRole('button', { name: /back to projects/i }));
+    await user.click(screen.getByRole('button', { name: /close create project/i }));
     await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Import Project' }));
@@ -202,7 +202,7 @@ describe('Integration Tests', () => {
 
     expect(await screen.findByText('Project name is required')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /back to projects/i }));
+    await user.click(screen.getByRole('button', { name: /close create project/i }));
     await screen.findByRole('button', { name: 'Create New Project' });
 
     await user.click(screen.getByRole('button', { name: 'Import Project' }));

@@ -47,6 +47,7 @@ const buildAppState = (overrides = {}) => ({
   workspaceChanges: {},
   workingBranches: {},
   startAutomationJob: vi.fn().mockResolvedValue({}),
+  projectProcesses: null,
   ...overrides
 });
 
@@ -2504,6 +2505,30 @@ describe('useBranchTabState targeted guards', () => {
       projectId: defaultProject.id,
       branchName: 'main'
     }));
+  });
+
+  test('triggerAutomationSuites skips backend tests when project has no backend', async () => {
+    const startAutomationJob = vi.fn().mockResolvedValue({});
+
+    await renderHookState({
+      appStateOverrides: {
+        startAutomationJob,
+        projectProcesses: { capabilities: { backend: { exists: false } } }
+      }
+    });
+
+    const latestInstance = useBranchTabState.__testHooks.getLatestInstance();
+    expect(latestInstance).toBeTruthy();
+
+    await act(async () => {
+      await latestInstance.triggerAutomationSuites('main');
+    });
+
+    expect(startAutomationJob).toHaveBeenCalledWith('frontend:test', expect.objectContaining({
+      projectId: defaultProject.id,
+      branchName: 'main'
+    }));
+    expect(startAutomationJob).toHaveBeenCalledTimes(1);
   });
 
   test('performCommit guard exits when branch name or project is missing', async () => {

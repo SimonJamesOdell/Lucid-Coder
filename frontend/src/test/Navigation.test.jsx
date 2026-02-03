@@ -31,6 +31,7 @@ const baseState = () => ({
   closeProject: vi.fn(),
   createProject: vi.fn().mockResolvedValue({ id: 'proj-1', name: 'Created Project' }),
   importProject: vi.fn(),
+  showCreateProject: vi.fn(),
   showImportProject: vi.fn(),
   toggleTheme: vi.fn(),
   setPreviewPanelTab: vi.fn(),
@@ -449,89 +450,33 @@ describe('Navigation Component', () => {
     alertSpy.mockRestore();
   });
 
-  test('create project functionality works', async () => {
-    const createProject = vi.fn().mockResolvedValue({ id: 'new', name: 'New Project' });
-    const { user, state } = renderNavigation({ createProject });
-    const promptSpy = vi
-      .spyOn(window, 'prompt')
-      .mockImplementationOnce(() => '  New Project  ')
-      .mockImplementationOnce(() => '  New description  ');
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+  test('create project triggers the create project view', async () => {
+    const showCreateProject = vi.fn();
+    const closeProject = vi.fn();
+    const { user } = renderNavigation({ showCreateProject, closeProject });
 
     await user.click(screen.getByRole('button', { name: /Projects/ }));
     await user.click(screen.getByText('Create new project'));
 
-    await waitFor(() =>
-      expect(createProject).toHaveBeenCalledWith({ name: 'New Project', description: 'New description' })
-    );
-    expect(alertSpy).toHaveBeenCalledWith('Project created successfully!');
-
-    promptSpy.mockRestore();
-    alertSpy.mockRestore();
-    expect(state.createProject).toBe(createProject);
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(showCreateProject).toHaveBeenCalledTimes(1);
   });
 
-  test('create project falls back to empty description when prompt cancelled', async () => {
-    const createProject = vi
-      .fn()
-      .mockResolvedValue({ id: 'no-desc', name: 'Project Without Description' });
-    const { user } = renderNavigation({ createProject });
-    const promptSpy = vi
-      .spyOn(window, 'prompt')
-      .mockImplementationOnce(() => 'Project Without Description')
-      .mockImplementationOnce(() => null);
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+  test('create project closes the active project before showing the view', async () => {
+    const closeProject = vi.fn().mockResolvedValue(undefined);
+    const showCreateProject = vi.fn();
+    const { user } = renderNavigation({
+      currentProject: { id: 'p-1', name: 'Alpha Project' },
+      closeProject,
+      showCreateProject
+    });
 
     await user.click(screen.getByRole('button', { name: /Projects/ }));
     await user.click(screen.getByText('Create new project'));
 
-    await waitFor(() =>
-      expect(createProject).toHaveBeenCalledWith({
-        name: 'Project Without Description',
-        description: ''
-      })
-    );
-    expect(alertSpy).toHaveBeenCalledWith('Project created successfully!');
-
-    promptSpy.mockRestore();
-    alertSpy.mockRestore();
-  });
-
-  test('handles project creation cancellation', async () => {
-    const { user, state } = renderNavigation();
-    const promptSpy = vi.spyOn(window, 'prompt').mockImplementation(() => '');
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
-
-    await user.click(screen.getByRole('button', { name: /Projects/ }));
-    await user.click(screen.getByText('Create new project'));
-
-    expect(promptSpy).toHaveBeenCalledTimes(1);
-    expect(state.createProject).not.toHaveBeenCalled();
-    expect(alertSpy).not.toHaveBeenCalled();
-
-    promptSpy.mockRestore();
-    alertSpy.mockRestore();
-  });
-  
-  test('surfaces project creation errors to the user', async () => {
-    const createProject = vi.fn().mockRejectedValue(new Error('Backend offline'));
-    const { user, state } = renderNavigation({ createProject });
-    const promptSpy = vi
-      .spyOn(window, 'prompt')
-      .mockImplementationOnce(() => '  Broken Project  ')
-      .mockImplementationOnce(() => '  desc  ');
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
-
-    await user.click(screen.getByRole('button', { name: /Projects/ }));
-    await user.click(screen.getByText('Create new project'));
-
-    await waitFor(() => expect(createProject).toHaveBeenCalledWith({ name: 'Broken Project', description: 'desc' }));
-    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Failed to create project: Backend offline'));
-
-    expect(state.createProject).toBe(createProject);
-
-    promptSpy.mockRestore();
-    alertSpy.mockRestore();
+    await waitFor(() => expect(showCreateProject).toHaveBeenCalled());
+    expect(closeProject).toHaveBeenCalledTimes(1);
+    expect(closeProject.mock.invocationCallOrder[0]).toBeLessThan(showCreateProject.mock.invocationCallOrder[0]);
   });
 
   test('import project triggers the import flow', async () => {

@@ -535,6 +535,12 @@ const PreviewTab = forwardRef(
         return;
       }
 
+      if (payload.type === 'LUCIDCODER_PREVIEW_BRIDGE_POINTER') {
+        setPreviewContextMenu(null);
+        window.dispatchEvent(new Event('lucidcoder:close-dropdowns'));
+        return;
+      }
+
       if (payload.type === 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU') {
         const iframe = iframeRef.current;
         const canvas = canvasRef.current;

@@ -86,7 +86,7 @@ const generateProgressKey = () => {
 const POLL_SUPPRESSION_WINDOW_MS = 1500;
 
 const CreateProject = () => {
-  const { createProject, selectProject, showMain } = useAppState();
+  const { createProject, selectProject, showMain, fetchProjects } = useAppState();
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState('');
   const [progress, setProgress] = useState(null);
@@ -436,6 +436,10 @@ const CreateProject = () => {
         if (response.data.processes) {
           setProcesses(response.data.processes);
         }
+
+        if (typeof fetchProjects === 'function') {
+          fetchProjects();
+        }
         
         // Auto-select the newly created project
         const projectData = response.data.project;
@@ -527,11 +531,20 @@ const CreateProject = () => {
         )}
         
         <div className="create-project-header" style={{ display: isProgressBlocking ? 'none' : 'block' }}>
-          <button onClick={handleCancel} className="back-btn">
-            ← Back to Projects
-          </button>
-          <h1>Create New Project</h1>
-          <p>Set up a new project with AI-powered coding assistance.</p>
+          <div className="create-project-header-row">
+            <div>
+              <h1>Create New Project</h1>
+              <p>Set up a new project with AI-powered coding assistance.</p>
+            </div>
+            <button
+              type="button"
+              className="create-project-close"
+              onClick={handleCancel}
+              aria-label="Close create project"
+            >
+              &times;
+            </button>
+          </div>
         </div>
 
         <div className="create-project-form" style={{ display: isProgressBlocking ? 'none' : 'block' }}>
@@ -680,7 +693,7 @@ const CreateProject = () => {
               <button
                 type="button"
                 onClick={handleCancel}
-                className="cancel-btn"
+                className="git-settings-button secondary"
                 disabled={createLoading}
               >
                 Cancel
@@ -688,7 +701,7 @@ const CreateProject = () => {
               
               <button
                 type="submit"
-                className="create-btn"
+                className="git-settings-button primary"
                 disabled={createLoading}
               >
                 {createLoading ? 'Creating Project...' : 'Create Project'}

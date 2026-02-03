@@ -2161,6 +2161,195 @@ describe('branchWorkflow staging automation', () => {
     expect(overview.workingBranches.find((branch) => branch.name === staged.branch.name)).toBeUndefined();
   });
 
+  it('pushes main to origin when cloud workflow is configured', async () => {
+    const staged = await branchWorkflow.stageWorkspaceChange(projectId, {
+      filePath: 'src/server/auto-push.js',
+      autoRun: false
+    });
+
+    await branchWorkflow.runTestsForBranch(projectId, staged.branch.name);
+    await branchWorkflow.commitBranchChanges(projectId, staged.branch.name, {
+      message: 'feat: auto push'
+    });
+
+    await saveProjectGitSettings(projectId, {
+      workflow: 'cloud',
+      provider: 'github',
+      remoteUrl: 'https://github.com/example/auto-push.git',
+      defaultBranch: 'main'
+    });
+
+    branchWorkflow.__testing.setGitContextOverride(projectId, 'C:/tmp/git-auto-push');
+
+    vi.spyOn(git, 'getCurrentBranch').mockResolvedValue('main');
+    vi.spyOn(git, 'stashWorkingTree').mockResolvedValue();
+    vi.spyOn(git, 'popBranchStash').mockResolvedValue();
+    vi.spyOn(git, 'removeBranchStashes').mockResolvedValue();
+    vi.spyOn(git, 'commitAllChanges').mockResolvedValue();
+
+    const runSpy = vi.spyOn(git, 'runGitCommand').mockImplementation((_, args = []) => {
+      return Promise.resolve({ stdout: '' });
+    });
+
+    const result = await branchWorkflow.mergeBranch(projectId, staged.branch.name);
+    expect(result).toEqual({ mergedBranch: staged.branch.name, current: 'main' });
+
+    const pushCall = runSpy.mock.calls.find((call) => Array.isArray(call[1]) && call[1][0] === 'push');
+    expect(pushCall).toBeTruthy();
+    expect(pushCall[1]).toEqual(['push', 'origin', 'main']);
+
+    branchWorkflow.__testing.setGitContextOverride(projectId);
+  });
+
+  it('continues merging when auto push fails', async () => {
+    const staged = await branchWorkflow.stageWorkspaceChange(projectId, {
+      filePath: 'src/server/auto-push-fail.js',
+      autoRun: false
+    });
+
+    await branchWorkflow.runTestsForBranch(projectId, staged.branch.name);
+    await branchWorkflow.commitBranchChanges(projectId, staged.branch.name, {
+      message: 'feat: auto push fail'
+    });
+
+    await saveProjectGitSettings(projectId, {
+      workflow: 'cloud',
+      provider: 'github',
+      remoteUrl: 'https://github.com/example/auto-push.git',
+      defaultBranch: 'main'
+    });
+
+    branchWorkflow.__testing.setGitContextOverride(projectId, 'C:/tmp/git-auto-push-fail');
+
+    vi.spyOn(git, 'getCurrentBranch').mockResolvedValue('main');
+    vi.spyOn(git, 'stashWorkingTree').mockResolvedValue();
+    vi.spyOn(git, 'popBranchStash').mockResolvedValue();
+    vi.spyOn(git, 'removeBranchStashes').mockResolvedValue();
+    vi.spyOn(git, 'commitAllChanges').mockResolvedValue();
+
+    vi.spyOn(git, 'runGitCommand').mockImplementation((_, args = []) => {
+      if (args[0] === 'push') {
+        throw new Error('push failed');
+      }
+      return Promise.resolve({ stdout: '' });
+    });
+
+    const result = await branchWorkflow.mergeBranch(projectId, staged.branch.name);
+    expect(result).toEqual({ mergedBranch: staged.branch.name, current: 'main' });
+
+    branchWorkflow.__testing.setGitContextOverride(projectId);
+  });
+
+  it('skips auto push when remoteUrl is blank', async () => {
+    const staged = await branchWorkflow.stageWorkspaceChange(projectId, {
+      filePath: 'src/server/auto-push-empty-remote.js',
+      autoRun: false
+    });
+
+    await branchWorkflow.runTestsForBranch(projectId, staged.branch.name);
+    await branchWorkflow.commitBranchChanges(projectId, staged.branch.name, {
+      message: 'feat: auto push empty remote'
+    });
+
+    await saveProjectGitSettings(projectId, {
+      workflow: 'cloud',
+      provider: 'github',
+      remoteUrl: '',
+      defaultBranch: 'main'
+    });
+
+    branchWorkflow.__testing.setGitContextOverride(projectId, 'C:/tmp/git-auto-push-empty');
+
+    vi.spyOn(git, 'getCurrentBranch').mockResolvedValue('main');
+    vi.spyOn(git, 'stashWorkingTree').mockResolvedValue();
+    vi.spyOn(git, 'popBranchStash').mockResolvedValue();
+    vi.spyOn(git, 'removeBranchStashes').mockResolvedValue();
+    vi.spyOn(git, 'commitAllChanges').mockResolvedValue();
+
+    const runSpy = vi.spyOn(git, 'runGitCommand').mockImplementation((_, args = []) => {
+      return Promise.resolve({ stdout: '' });
+    });
+
+    const result = await branchWorkflow.mergeBranch(projectId, staged.branch.name);
+    expect(result).toEqual({ mergedBranch: staged.branch.name, current: 'main' });
+
+    const pushCall = runSpy.mock.calls.find((call) => Array.isArray(call[1]) && call[1][0] === 'push');
+    expect(pushCall).toBeUndefined();
+
+    branchWorkflow.__testing.setGitContextOverride(projectId);
+  });
+
+  it('continues merging when git settings lookup fails', async () => {
+    const staged = await branchWorkflow.stageWorkspaceChange(projectId, {
+      filePath: 'src/server/auto-push-settings-fail.js',
+      autoRun: false
+    });
+
+    await branchWorkflow.runTestsForBranch(projectId, staged.branch.name);
+    await branchWorkflow.commitBranchChanges(projectId, staged.branch.name, {
+      message: 'feat: auto push settings fail'
+    });
+
+    branchWorkflow.__testing.setGitContextOverride(projectId, 'C:/tmp/git-auto-push-settings-fail');
+
+    vi.spyOn(git, 'getCurrentBranch').mockResolvedValue('main');
+    vi.spyOn(git, 'stashWorkingTree').mockResolvedValue();
+    vi.spyOn(git, 'popBranchStash').mockResolvedValue();
+    vi.spyOn(git, 'removeBranchStashes').mockResolvedValue();
+    vi.spyOn(git, 'commitAllChanges').mockResolvedValue();
+
+    const settingsSpy = vi.spyOn(databaseModule, 'getGitSettings')
+      .mockRejectedValueOnce(new Error('settings failed'));
+    vi.spyOn(git, 'runGitCommand').mockImplementation((_, args = []) => {
+      return Promise.resolve({ stdout: '' });
+    });
+
+    const result = await branchWorkflow.mergeBranch(projectId, staged.branch.name);
+    expect(result).toEqual({ mergedBranch: staged.branch.name, current: 'main' });
+
+    settingsSpy.mockRestore();
+    branchWorkflow.__testing.setGitContextOverride(projectId);
+  });
+
+  it('skips auto push when workflow is local', async () => {
+    const staged = await branchWorkflow.stageWorkspaceChange(projectId, {
+      filePath: 'src/server/auto-push-local.js',
+      autoRun: false
+    });
+
+    await branchWorkflow.runTestsForBranch(projectId, staged.branch.name);
+    await branchWorkflow.commitBranchChanges(projectId, staged.branch.name, {
+      message: 'feat: auto push local'
+    });
+
+    await saveProjectGitSettings(projectId, {
+      workflow: 'local',
+      provider: 'github',
+      remoteUrl: 'https://github.com/example/auto-push.git',
+      defaultBranch: 'main'
+    });
+
+    branchWorkflow.__testing.setGitContextOverride(projectId, 'C:/tmp/git-auto-push-local');
+
+    vi.spyOn(git, 'getCurrentBranch').mockResolvedValue('main');
+    vi.spyOn(git, 'stashWorkingTree').mockResolvedValue();
+    vi.spyOn(git, 'popBranchStash').mockResolvedValue();
+    vi.spyOn(git, 'removeBranchStashes').mockResolvedValue();
+    vi.spyOn(git, 'commitAllChanges').mockResolvedValue();
+
+    const runSpy = vi.spyOn(git, 'runGitCommand').mockImplementation((_, args = []) => {
+      return Promise.resolve({ stdout: '' });
+    });
+
+    const result = await branchWorkflow.mergeBranch(projectId, staged.branch.name);
+    expect(result).toEqual({ mergedBranch: staged.branch.name, current: 'main' });
+
+    const pushCall = runSpy.mock.calls.find((call) => Array.isArray(call[1]) && call[1][0] === 'push');
+    expect(pushCall).toBeUndefined();
+
+    branchWorkflow.__testing.setGitContextOverride(projectId);
+  });
+
   it('rejects merge attempts when latest tests fail', async () => {
     const staged = await branchWorkflow.stageWorkspaceChange(projectId, {
       filePath: 'src/routes/branches.js',

@@ -41,7 +41,7 @@ const buildFetchMock = () => vi.fn((url) => {
   }
 
   if (url === '/api/projects') {
-    return Promise.resolve(createResponse(false, { success: true, projects: [] }));
+    return Promise.resolve(createResponse(true, { success: true, projects: [] }));
   }
 
   if (url === '/api/settings/git') {
@@ -1134,13 +1134,14 @@ describe('AppStateContext integrations', () => {
     warnSpy.mockRestore();
   });
 
-  test('fetchProjects stores backend projects even when the HTTP response is not ok but the payload is success=true', async () => {
+  test('fetchProjects falls back to localStorage when the HTTP response is not ok', async () => {
+    localStorage.setItem('projects', JSON.stringify([{ id: 'proj-local', name: 'Local Project' }]));
     fetchMock.mockImplementation((url, options) => {
       if (url === '/api/projects') {
         return Promise.resolve({
           ok: false,
           status: 500,
-          json: () => Promise.resolve({ success: true })
+          json: () => Promise.resolve({ success: true, projects: [] })
         });
       }
       return defaultFetchImpl(url, options);
@@ -1153,7 +1154,7 @@ describe('AppStateContext integrations', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.projects).toEqual([]);
+      expect(result.current.projects).toEqual([{ id: 'proj-local', name: 'Local Project' }]);
     });
   });
 

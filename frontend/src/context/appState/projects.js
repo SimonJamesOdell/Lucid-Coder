@@ -1,11 +1,41 @@
 export const fetchProjectsFromBackend = async ({ trackedFetch, setProjects }) => {
   try {
     const response = await trackedFetch('/api/projects');
+    let result = null;
+    try {
+      result = await response.json();
+    } catch {
+      result = null;
+    }
+
     if (!response.ok) {
-      const result = await response.json();
-      if (result.success) {
-        setProjects(result.projects || []);
-      }
+      throw new Error(result?.error || 'Failed to fetch projects');
+    }
+
+    if (result?.success) {
+      const nextProjects = Array.isArray(result.projects) ? result.projects : [];
+      setProjects((prev) => {
+        if (nextProjects.length === 0 && Array.isArray(prev) && prev.length > 0) {
+          return prev;
+        }
+
+        const merged = new Map();
+        if (Array.isArray(prev)) {
+          prev.forEach((project) => {
+            if (project?.id) {
+              merged.set(project.id, project);
+            }
+          });
+        }
+
+        nextProjects.forEach((project) => {
+          if (project?.id) {
+            merged.set(project.id, { ...merged.get(project.id), ...project });
+          }
+        });
+
+        return Array.from(merged.values());
+      });
     }
   } catch (error) {
     console.warn('Failed to fetch projects from backend:', error);

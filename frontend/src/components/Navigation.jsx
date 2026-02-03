@@ -19,7 +19,7 @@ const Navigation = ({ versionLabel = null }) => {
     theme,
     selectProject,
     closeProject,
-    createProject,
+    showCreateProject,
     showImportProject,
     toggleTheme,
     setPreviewPanelTab,
@@ -37,15 +37,16 @@ const Navigation = ({ versionLabel = null }) => {
   const [isLLMConfigOpen, setLLMConfigOpen] = useState(false);
 
   const handleCreateProject = async () => {
-    const name = prompt('Enter project name:');
-    if (name && name.trim()) {
-      const description = prompt('Enter project description (optional):') || '';
+    if (currentProject?.id && typeof closeProject === 'function') {
       try {
-        await createProject({ name: name.trim(), description: description.trim() });
-        alert('Project created successfully!');
+        await closeProject();
       } catch (error) {
-        alert('Failed to create project: ' + error.message);
+        console.error('Failed to close active project', error);
       }
+    }
+
+    if (typeof showCreateProject === 'function') {
+      showCreateProject();
     }
   };
 

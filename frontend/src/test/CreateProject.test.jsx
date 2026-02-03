@@ -7,6 +7,7 @@ import CreateProject, { BACKEND_UNAVAILABLE_MESSAGE } from '../components/Create
 const mockCreateProject = vi.fn();
 const mockSelectProject = vi.fn();
 const mockShowMain = vi.fn();
+const mockFetchProjects = vi.fn();
 
 const socketInstances = [];
 let socketConfig = {
@@ -146,7 +147,8 @@ vi.mock('../context/AppStateContext', () => ({
   useAppState: () => ({
     createProject: mockCreateProject,
     selectProject: mockSelectProject,
-    showMain: mockShowMain
+    showMain: mockShowMain,
+    fetchProjects: mockFetchProjects
   })
 }));
 
@@ -184,8 +186,13 @@ const fillDescription = async (user, value = 'A sample project') => {
 };
 
 const submitForm = async (user) => {
-  await user.click(screen.getByRole('button', { name: /create project/i }));
+  await user.click(
+    within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+  );
 };
+
+const getCreateProjectButton = () =>
+  within(screen.getByRole('form')).getByRole('button', { name: /create project/i });
 
 const createSuccessResponse = (overrides = {}) => ({
   data: {
@@ -241,7 +248,7 @@ describe('CreateProject Component', () => {
       expect(screen.getByLabelText('Backend Language *')).toBeInTheDocument();
       expect(screen.getByLabelText('Backend Framework *')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /create project/i })).toBeInTheDocument();
+      expect(getCreateProjectButton()).toBeInTheDocument();
     });
 
     test('has proper form sections', () => {
@@ -252,10 +259,10 @@ describe('CreateProject Component', () => {
       expect(screen.getByText('Backend Technology')).toBeInTheDocument();
     });
 
-    test('shows back button', () => {
+    test('shows close button', () => {
       render(<CreateProject />);
 
-      expect(screen.getByRole('button', { name: /back to projects/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /close create project/i })).toBeInTheDocument();
     });
 
     test('has autofocus on project name input', () => {
@@ -299,7 +306,7 @@ describe('CreateProject Component', () => {
     test('submit button is enabled to allow validation', () => {
       render(<CreateProject />);
 
-      expect(screen.getByRole('button', { name: /create project/i })).not.toBeDisabled();
+      expect(getCreateProjectButton()).not.toBeDisabled();
     });
 
     test('submit button is enabled when name is provided', async () => {
@@ -308,7 +315,7 @@ describe('CreateProject Component', () => {
       render(<CreateProject />);
       await fillProjectName(user);
 
-      expect(screen.getByRole('button', { name: /create project/i })).not.toBeDisabled();
+      expect(getCreateProjectButton()).not.toBeDisabled();
     });
   });
 
@@ -397,6 +404,7 @@ describe('CreateProject Component', () => {
       });
 
       expect(mockSelectProject).toHaveBeenCalledWith(expect.objectContaining({ name: 'My Project' }));
+      expect(mockFetchProjects).toHaveBeenCalled();
     });
 
     test('tolerates socket disconnect errors when closing progress stream', async () => {
@@ -807,7 +815,7 @@ describe('CreateProject Component', () => {
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Polling Error' }
       });
-      fireEvent.click(screen.getByRole('button', { name: /create project/i }));
+      fireEvent.click(getCreateProjectButton());
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(260);
@@ -848,7 +856,7 @@ describe('CreateProject Component', () => {
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Polling Project' }
       });
-      fireEvent.click(screen.getByRole('button', { name: /create project/i }));
+      fireEvent.click(getCreateProjectButton());
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(260);
@@ -897,7 +905,7 @@ describe('CreateProject Component', () => {
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Timestamp Guard' }
       });
-      fireEvent.click(screen.getByRole('button', { name: /create project/i }));
+      fireEvent.click(getCreateProjectButton());
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(260);
@@ -1333,7 +1341,7 @@ describe('CreateProject Component', () => {
         const matches = screen.getAllByText('Stream exploded');
         expect(matches.some((node) => node.classList.contains('progress-error'))).toBe(true);
       });
-      expect(screen.getByRole('button', { name: /create project/i })).not.toBeDisabled();
+      expect(getCreateProjectButton()).not.toBeDisabled();
       expect(stream.closed).toBe(true);
 
       resolveRequest({ data: { success: false } });
@@ -1595,7 +1603,7 @@ describe('CreateProject Component', () => {
       await submitForm(user);
 
       await waitFor(() => expect(screen.getByText('Server down')).toBeInTheDocument());
-      expect(screen.getByRole('button', { name: /create project/i })).not.toBeDisabled();
+      expect(getCreateProjectButton()).not.toBeDisabled();
     });
 
     test('shows actionable error when backend server is unreachable', async () => {
@@ -1632,11 +1640,11 @@ describe('CreateProject Component', () => {
       expect(mockShowMain).toHaveBeenCalled();
     });
 
-    test('back button calls showMain', async () => {
+    test('close button calls showMain', async () => {
       const { user } = renderComponent();
 
       render(<CreateProject />);
-      await user.click(screen.getByRole('button', { name: /back to projects/i }));
+      await user.click(screen.getByRole('button', { name: /close create project/i }));
 
       expect(mockShowMain).toHaveBeenCalled();
     });

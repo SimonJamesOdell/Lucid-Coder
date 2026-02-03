@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useMemo, useState } from 'react';
 import Modal from './Modal';
+import SettingsModal from './SettingsModal';
 import './GitSettingsModal.css';
 
 const emptySettings = {
@@ -41,7 +42,7 @@ const GitSettingsModal = ({
     : 'Global Default';
   const scopeDescription = scope === 'project'
     ? `Overrides just for ${projectName || 'this project'}.`
-    : 'Configure cloud provider access. Commits stay manual after testing completes.';
+    : 'Configure cloud provider access. Cloud-connected projects auto-push merges to the remote repo.';
   const handleFieldChange = (field) => (event) => {
     let value = event.target.value;
     /* c8 ignore start -- checkbox inputs are not rendered in this modal */
@@ -117,12 +118,6 @@ const GitSettingsModal = ({
     }
   };
 
-  const handleBackdropClick = (event) => {
-    if (event.target === event.currentTarget) {
-      onClose();
-    }
-  };
-
   const patHelpContent = useMemo(() => {
     const providerLabel = formState.provider === 'gitlab' ? 'GitLab' : 'GitHub';
     const guideUrl = formState.provider === 'gitlab'
@@ -193,36 +188,26 @@ const GitSettingsModal = ({
     return null;
   }
 
-  return (
-    <div
-      className="git-settings-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="git-settings-title"
-      onClick={handleBackdropClick}
-      data-testid="git-settings-modal"
-    >
-      <div className="git-settings-panel">
-        <div className="git-settings-header">
-          <div>
-            <h2 id="git-settings-title">Git Settings</h2>
-            <div className="git-settings-scope-row">
-              <p className="git-settings-subtitle">{scopeDescription}</p>
-              <span className="git-settings-scope" data-testid="git-scope-badge">{scopeLabel}</span>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="git-settings-close"
-            onClick={onClose}
-            aria-label="Close git settings"
-            data-testid="git-close-button"
-          >
-            &times;
-          </button>
-        </div>
+  const headerContent = (
+    <div className="git-settings-scope-row">
+      <span className="git-settings-scope" data-testid="git-scope-badge">{scopeLabel}</span>
+    </div>
+  );
 
-        <form onSubmit={handleSubmit} className="git-settings-form" data-testid="git-settings-form">
+  return (
+    <SettingsModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Git Settings"
+      subtitle={scopeDescription}
+      headerContent={headerContent}
+      testId="git-settings-modal"
+      closeTestId="git-close-button"
+      titleId="git-settings-title"
+      panelClassName="git-settings-panel"
+      closeLabel="Close git settings"
+    >
+      <form onSubmit={handleSubmit} className="git-settings-form" data-testid="git-settings-form">
           <fieldset className="git-settings-fieldset">
             <legend>Workflow Preference</legend>
             <label className="git-settings-radio">
@@ -405,8 +390,7 @@ const GitSettingsModal = ({
               Save preferences
             </button>
           </div>
-        </form>
-      </div>
+      </form>
       <Modal
         isOpen={isPatHelpOpen}
         onClose={() => setPatHelpOpen(false)}
@@ -415,7 +399,7 @@ const GitSettingsModal = ({
         confirmText=""
         cancelText="Close"
       />
-    </div>
+    </SettingsModal>
   );
 };
 

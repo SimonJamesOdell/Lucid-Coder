@@ -1245,6 +1245,37 @@ describe('PreviewTab', () => {
     expect(screen.getByText(/copy selector/i)).toBeInTheDocument();
   });
 
+  test('emits a close-dropdowns event when the preview bridge reports pointer activity', async () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const previewOrigin = new URL(previewRef.current.getPreviewUrl()).origin;
+
+    const iframe = screen.getByTestId('preview-iframe');
+    const iframeWindow = buildIframeWindow();
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow
+    });
+
+    const closeHandler = vi.fn();
+    window.addEventListener('lucidcoder:close-dropdowns', closeHandler);
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'LUCIDCODER_PREVIEW_BRIDGE_POINTER', kind: 'pointerdown' },
+          origin: previewOrigin,
+          source: iframeWindow
+        })
+      );
+    });
+
+    expect(closeHandler).toHaveBeenCalled();
+
+    window.removeEventListener('lucidcoder:close-dropdowns', closeHandler);
+  });
+
   test('closes the custom context menu when clicking outside', async () => {
     const processInfo = buildProcessInfo();
     const { previewRef } = renderPreviewTab({ processInfo });

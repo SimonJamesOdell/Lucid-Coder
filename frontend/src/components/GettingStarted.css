@@ -210,43 +210,6 @@
   margin-top: 1rem;
 }
 
-.test-btn, .save-btn {
-  padding: 0.625rem 1.25rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  border-radius: 6px;
-  border: none;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.test-btn {
-  background: var(--secondary-bg);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  flex: 0 0 auto;
-}
-
-.test-btn:hover:not(:disabled) {
-  border-color: var(--nav-focus-color);
-  background: var(--nav-dropdown-hover-bg);
-}
-
-.save-btn {
-  background: var(--nav-focus-color);
-  color: white;
-  flex: 1;
-}
-
-.save-btn:hover:not(:disabled) {
-  background: #535bf2;
-}
-
-.test-btn:disabled, .save-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* Responsive Design */
 @media (max-width: 768px) {
   .getting-started-panel {

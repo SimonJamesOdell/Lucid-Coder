@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import Dropdown, { DropdownItem, DropdownDivider, DropdownLabel } from '../components/Dropdown';
 
 const renderDropdown = (props = {}, children) => {
@@ -45,6 +45,39 @@ describe('Dropdown', () => {
     fireEvent.mouseDown(document.body);
     expect(screen.queryByText('Danger zone')).toBeNull();
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('closes the menu when focus moves into an iframe', () => {
+    renderDropdown();
+
+    const trigger = screen.getByRole('button', { name: /actions/i });
+    fireEvent.click(trigger);
+    expect(screen.getByText('Danger zone')).toBeInTheDocument();
+
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+
+    fireEvent.focusIn(iframe);
+
+    expect(screen.queryByText('Danger zone')).toBeNull();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    document.body.removeChild(iframe);
+  });
+
+  it('closes the menu when the global close event fires', () => {
+    renderDropdown();
+
+    const trigger = screen.getByRole('button', { name: /actions/i });
+    fireEvent.click(trigger);
+    expect(screen.getByText('Danger zone')).toBeInTheDocument();
+
+    window.dispatchEvent(new Event('lucidcoder:close-dropdowns'));
+
+    return waitFor(() => {
+      expect(screen.queryByText('Danger zone')).toBeNull();
+      expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    });
   });
 
   it('does not open when disabled', () => {

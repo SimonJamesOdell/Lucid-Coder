@@ -20,6 +20,7 @@ export const createBranchWorkflowCommits = (core) => {
     cancelScheduledAutoTests,
     isCssOnlyBranchDiff,
     listBranchChangedPaths,
+    resolveProjectGitSettings,
     ensureGitBranchExists,
     checkoutGitBranch,
     run,
@@ -917,6 +918,21 @@ export const createBranchWorkflowCommits = (core) => {
 
         console.warn(`[BranchWorkflow] Git merge failed for ${branch.name}: ${error.message}`);
         throw withStatusCode(new Error(`Git merge failed: ${error.message}`), 500);
+      }
+
+      try {
+        const gitSettings = await resolveProjectGitSettings(projectId).catch(() => null);
+        const shouldAutoPush = Boolean(
+          gitSettings
+          && gitSettings.workflow === 'cloud'
+          && String(gitSettings.remoteUrl || '').trim()
+        );
+
+        if (shouldAutoPush) {
+          await runProjectGit(context, ['push', 'origin', 'main']);
+        }
+      } catch (error) {
+        console.warn(`[BranchWorkflow] Git push failed for ${branch.name}: ${error.message}`);
       }
     }
 

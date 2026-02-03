@@ -12,9 +12,24 @@ const Dropdown = ({ title, children, disabled = false, className = '' }) => {
       }
     };
 
+    const handleFocusIn = (event) => {
+      const target = event?.target;
+      if (target?.tagName === 'IFRAME') {
+        setIsOpen(false);
+      }
+    };
+
+    const handleCloseDropdowns = () => {
+      setIsOpen(false);
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('focusin', handleFocusIn);
+    window.addEventListener('lucidcoder:close-dropdowns', handleCloseDropdowns);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('focusin', handleFocusIn);
+      window.removeEventListener('lucidcoder:close-dropdowns', handleCloseDropdowns);
     };
   }, []);
 

@@ -139,9 +139,9 @@ describe('ImportProject Component', () => {
       expect(screen.getByRole('tab', { name: 'GitHub / GitLab' })).toBeInTheDocument();
     });
 
-    test('shows back and cancel buttons', () => {
+    test('shows close and cancel buttons', () => {
       render(<ImportProject />);
-      expect(screen.getByRole('button', { name: /back to projects/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Close import' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     });
 
@@ -2257,9 +2257,9 @@ describe('ImportProject Component', () => {
       expect(await screen.findByText('Step 2 of 6')).toBeInTheDocument();
     });
 
-    test('back button triggers navigation', async () => {
+    test('close button triggers navigation', async () => {
       const { user } = renderComponent();
-      await user.click(screen.getByRole('button', { name: /back to projects/i }));
+      await user.click(screen.getByRole('button', { name: 'Close import' }));
 
       expect(mockShowMain).toHaveBeenCalled();
     });

@@ -606,6 +606,7 @@ describe('previewProxy', () => {
     expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU');
     expect(script).toContain('LUCIDCODER_PREVIEW_HELPER_READY');
     expect(script).toContain('LUCIDCODER_PREVIEW_NAVIGATE');
+    expect(script).toContain('LUCIDCODER_PREVIEW_BRIDGE_POINTER');
     expect(script).toContain('window.parent === window');
     expect(script).toContain('parentWindow === window');
   });
@@ -1546,8 +1547,9 @@ describe('previewProxy', () => {
 
     const body = res.end.mock.calls[0][0];
     expect(body).toContain('<!doctype html>');
+    expect(body).toContain('Preview proxy error');
     expect(body).toContain('location.reload');
-    expect(body).toContain('ECONNREFUSED');
+    expect(body).not.toContain('ECONNREFUSED');
     expect(body).not.toContain('<boom>');
   });
 

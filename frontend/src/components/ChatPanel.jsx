@@ -59,7 +59,8 @@ const ChatPanel = ({
     requestEditorFocus,
     syncBranchOverview,
     workingBranches,
-    jobState
+    jobState,
+    projectProcesses
   } = useAppState();
   const inputRef = useRef(null);
   const autoFixInFlightRef = useRef(false);
@@ -116,6 +117,21 @@ const ChatPanel = ({
     && typeof window.matchMedia === 'function'
     ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
     : false;
+
+  const hasBackend = useMemo(() => {
+    const backendCapability = projectProcesses?.capabilities?.backend?.exists;
+    if (backendCapability === false) {
+      return false;
+    }
+    const projectBackend = currentProject?.backend;
+    if (projectBackend === null) {
+      return false;
+    }
+    if (typeof projectBackend?.exists === 'boolean') {
+      return projectBackend.exists;
+    }
+    return true;
+  }, [currentProject?.backend, projectProcesses?.capabilities?.backend?.exists]);
 
   const isMessagesScrolledToBottom = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -635,15 +651,22 @@ const ChatPanel = ({
         setPreviewPanelTab?.('tests', { source: 'automation' });
         setMessages((prev) => [
           ...prev,
-          createMessage('assistant', 'Starting frontend + backend test runs…', { variant: 'status' })
+          createMessage(
+            'assistant',
+            hasBackend ? 'Starting frontend + backend test runs…' : 'Starting frontend tests…',
+            { variant: 'status' }
+          )
         ]);
 
         markTestRunIntent?.('automation');
 
-        const settled = await Promise.allSettled([
-          startAutomationJob('frontend:test', { projectId: currentProject.id }),
-          startAutomationJob('backend:test', { projectId: currentProject.id })
-        ]);
+        const testJobs = [
+          startAutomationJob('frontend:test', { projectId: currentProject.id })
+        ];
+        if (hasBackend) {
+          testJobs.push(startAutomationJob('backend:test', { projectId: currentProject.id }));
+        }
+        const settled = await Promise.allSettled(testJobs);
 
         const firstFailure = settled.find((entry) => entry.status === 'rejected');
         if (firstFailure && firstFailure.status === 'rejected') {
@@ -816,6 +839,7 @@ const ChatPanel = ({
     callAgentWithTimeout,
     createMessage,
     currentProject,
+    hasBackend,
     handleAutopilotControl,
     handleAutopilotMessage,
     handleAgentResult,
@@ -960,16 +984,23 @@ const ChatPanel = ({
         setPreviewPanelTab?.('tests', { source: origin === 'automation' ? 'automation' : 'user' });
         setMessages((prev) => [
           ...prev,
-          createMessage('assistant', 'Re-running frontend + backend tests…', { variant: 'status' })
+          createMessage(
+            'assistant',
+            hasBackend ? 'Re-running frontend + backend tests…' : 'Re-running frontend tests…',
+            { variant: 'status' }
+          )
         ]);
 
         // Ensure TestTab can auto-continue the fix loop.
         markTestRunIntent?.('automation');
 
-        const settled = await Promise.allSettled([
-          startAutomationJob('frontend:test', { projectId: currentProject.id }),
-          startAutomationJob('backend:test', { projectId: currentProject.id })
-        ]);
+        const testJobs = [
+          startAutomationJob('frontend:test', { projectId: currentProject.id })
+        ];
+        if (hasBackend) {
+          testJobs.push(startAutomationJob('backend:test', { projectId: currentProject.id }));
+        }
+        const settled = await Promise.allSettled(testJobs);
 
         const firstFailure = settled.find((entry) => entry.status === 'rejected');
         if (firstFailure && firstFailure.status === 'rejected') {
@@ -996,6 +1027,7 @@ const ChatPanel = ({
     autoFixHalted,
     createMessage,
     currentProject,
+    hasBackend,
     markTestRunIntent,
     requestEditorFocus,
     setPreviewPanelTab,

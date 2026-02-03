@@ -60,7 +60,7 @@ describe('GitSettingsModal', () => {
     );
 
     expect(screen.getByRole('heading', { name: /git settings/i })).toBeInTheDocument();
-    expect(screen.getByText(/Commits stay manual after testing completes\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Cloud-connected projects auto-push merges to the remote repo\./i)).toBeInTheDocument();
     expect(screen.getByTestId('git-scope-badge').textContent).toMatch(/Global Default/i);
   });
 

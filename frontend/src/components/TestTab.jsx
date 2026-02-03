@@ -37,7 +37,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     workingBranches,
     syncBranchOverview,
     markTestRunIntent,
-    testRunIntent
+    testRunIntent,
+    projectProcesses
   } = useAppState();
   const [localError, setLocalError] = useState(null);
   const [isResultModalOpen, setIsResultModalOpen] = useState(false);
@@ -75,60 +76,92 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     setResultModalRequiresExplicitDismiss(false);
   }, []);
 
+  const hasBackend = useMemo(() => {
+    const backendCapability = projectProcesses?.capabilities?.backend?.exists;
+    if (backendCapability === false) {
+      return false;
+    }
+    const projectBackend = project?.backend;
+    if (projectBackend === null) {
+      return false;
+    }
+    if (typeof projectBackend?.exists === 'boolean') {
+      return projectBackend.exists;
+    }
+    return true;
+  }, [project?.backend, projectProcesses?.capabilities?.backend?.exists]);
+
+  const visibleTestConfigs = useMemo(() => (
+    TEST_JOB_TYPES.filter((config) => config.type !== 'backend:test' || hasBackend)
+  ), [hasBackend]);
+
   const testJobs = useMemo(
     () => jobs.filter((job) => job.type?.endsWith(':test')),
     [jobs]
   );
 
   const jobsByType = useMemo(() => {
-    return TEST_JOB_TYPES.reduce((acc, config) => {
+    return visibleTestConfigs.reduce((acc, config) => {
       const latest = testJobs
         .filter((job) => job.type === config.type)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
       acc[config.type] = latest || null;
       return acc;
     }, {});
-  }, [testJobs]);
+  }, [testJobs, visibleTestConfigs]);
 
   const triggerTestFix = useCallback(({ origin = 'user' } = {}) => {
-    const frontendJob = jobsByType['frontend:test'];
-    const backendJob = jobsByType['backend:test'];
-    const plan = buildTestFixPlan({
-      jobs: [
-        { label: 'Frontend tests', kind: 'frontend', job: frontendJob },
-        { label: 'Backend tests', kind: 'backend', job: backendJob }
-      ]
-    });
+    const planJobs = visibleTestConfigs.map((config) => ({
+      label: config.type.startsWith('backend') ? 'Backend tests' : 'Frontend tests',
+      kind: config.type.startsWith('backend') ? 'backend' : 'frontend',
+      job: jobsByType[config.type]
+    }));
+    const plan = buildTestFixPlan({ jobs: planJobs });
 
     if (typeof window !== 'undefined') {
       // Do not route failing-test fixes through the generic agent planner.
       // Instead, emit an event that creates a new goal to fix tests and then re-runs suites.
       window.dispatchEvent(new CustomEvent('lucidcoder:autofix-tests', { detail: { ...plan, origin } }));
     }
-  }, [jobsByType, project]);
+  }, [jobsByType, visibleTestConfigs]);
 
   const activeJobs = useMemo(
-    () => TEST_JOB_TYPES.map((config) => jobsByType[config.type]).filter(isJobActive),
-    [jobsByType]
+    () => visibleTestConfigs.map((config) => jobsByType[config.type]).filter(isJobActive),
+    [jobsByType, visibleTestConfigs]
   );
 
   const allTestsCompleted = useMemo(() => {
-    const frontendJob = jobsByType['frontend:test'];
-    const backendJob = jobsByType['backend:test'];
-    if (!frontendJob || !backendJob) {
+    if (!visibleTestConfigs.length) {
       return false;
     }
-    return isJobFinal(frontendJob) && isJobFinal(backendJob);
-  }, [jobsByType]);
+    return visibleTestConfigs.every((config) => {
+      const job = jobsByType[config.type];
+      return job && isJobFinal(job);
+    });
+  }, [jobsByType, visibleTestConfigs]);
 
   const didTestsPass = useMemo(() => {
     if (!allTestsCompleted) {
       return false;
     }
-    const frontendJob = jobsByType['frontend:test'];
-    const backendJob = jobsByType['backend:test'];
-    return frontendJob?.status === 'succeeded' && backendJob?.status === 'succeeded';
-  }, [allTestsCompleted, jobsByType]);
+    return visibleTestConfigs.every((config) => jobsByType[config.type]?.status === 'succeeded');
+  }, [allTestsCompleted, jobsByType, visibleTestConfigs]);
+
+  const testsPassedMessage = hasBackend
+    ? 'Frontend and backend tests both passed.'
+    : 'Frontend tests passed.';
+  const testsPassedCommitsMessage = hasBackend
+    ? 'Frontend and backend tests both passed. Ready to continue to commits?'
+    : 'Frontend tests passed. Ready to continue to commits?';
+  const testsPassedCommitMessage = hasBackend
+    ? 'Frontend and backend tests both passed. Ready to continue to commit?'
+    : 'Frontend tests passed. Ready to continue to commit?';
+  const testsPassedNoBranchMessage = hasBackend
+    ? 'Frontend and backend tests passed, but there is no active working branch selected for committing. Switch to a feature branch and try again.'
+    : 'Frontend tests passed, but there is no active working branch selected for committing. Switch to a feature branch and try again.';
+  const testsPassedNoStagedMessage = hasBackend
+    ? 'Frontend and backend tests both passed, but this branch has no staged changes. There is nothing to commit.'
+    : 'Frontend tests passed, but this branch has no staged changes. There is nothing to commit.';
 
   const activeWorkingBranch = projectId ? workingBranches?.[projectId] : null;
   const activeBranchName = typeof activeWorkingBranch?.name === 'string' ? activeWorkingBranch.name : '';
@@ -142,6 +175,15 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   }, [activeWorkingBranch?.stagedFiles, projectId, workspaceChanges]);
 
   const activeError = localError || jobState.error;
+  const displayError = useMemo(() => {
+    if (!hasBackend && typeof activeError === 'string') {
+      const normalized = activeError.toLowerCase();
+      if (normalized.includes('backend test runner')) {
+        return null;
+      }
+    }
+    return activeError;
+  }, [activeError, hasBackend]);
 
   const submitProofIfNeeded = useSubmitProof({
     projectId,
@@ -270,7 +312,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         setResultModalTitle('Tests passed');
 
         if (!hasCommitContext) {
-          setResultModalMessage('Frontend and backend tests both passed.');
+          setResultModalMessage(testsPassedMessage);
           setResultModalConfirmText(null);
           setResultModalConfirmAction(null);
           setResultModalProcessing(false);
@@ -279,7 +321,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
           return;
         }
 
-        setResultModalMessage('Frontend and backend tests both passed. Ready to continue to commits?');
+        setResultModalMessage(testsPassedCommitsMessage);
         setResultModalConfirmText('Continue to commits');
         setResultModalConfirmAction(() => () => {
           setIsResultModalOpen(false);
@@ -330,7 +372,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         resetCommitResumeState();
         setResultModalVariant('danger');
         setResultModalTitle('Cannot commit');
-        setResultModalMessage('Frontend and backend tests passed, but there is no active working branch selected for committing. Switch to a feature branch and try again.');
+        setResultModalMessage(testsPassedNoBranchMessage);
         setResultModalConfirmText(null);
         setResultModalConfirmAction(null);
         setResultModalProcessing(false);
@@ -343,7 +385,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         resetCommitResumeState();
         setResultModalVariant('default');
         setResultModalTitle('Nothing to commit');
-        setResultModalMessage('Frontend and backend tests both passed, but this branch has no staged changes. There is nothing to commit.');
+        setResultModalMessage(testsPassedNoStagedMessage);
         setResultModalConfirmText(null);
         setResultModalConfirmAction(null);
         setResultModalProcessing(false);
@@ -385,7 +427,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
 
       setResultModalVariant('default');
       setResultModalTitle('Tests passed');
-      setResultModalMessage('Frontend and backend tests both passed. Ready to continue to commit?');
+      setResultModalMessage(testsPassedCommitMessage);
       setResultModalConfirmText('Continue to commit');
       setResultModalConfirmAction(() => () => {
         setResultModalProcessing(true);
@@ -455,7 +497,9 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
               if (needsProof) {
                 throw buildModalError(
                   'Tests required before commit',
-                  'Run backend tests again before committing this branch so the server can record a passing proof.'
+                  hasBackend
+                    ? 'Run backend tests again before committing this branch so the server can record a passing proof.'
+                    : 'Run frontend tests again before committing this branch so the server can record a passing proof.'
                 );
               }
 
@@ -571,7 +615,13 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     project,
     projectId,
     testRunIntent,
+    testsPassedMessage,
+    testsPassedCommitsMessage,
+    testsPassedCommitMessage,
+    testsPassedNoBranchMessage,
+    testsPassedNoStagedMessage,
     triggerTestFix,
+    hasBackend,
     stagedFiles.length,
     activeBranchName,
     syncBranchOverview,
@@ -580,6 +630,9 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   ]);
 
   const shouldRunTest = useCallback((type) => {
+    if (!hasBackend && type === 'backend:test') {
+      return false;
+    }
     const job = jobsByType[type];
     
     // Always run if there's no previous job or if it failed
@@ -600,7 +653,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     });
     
     return hasNewerChanges;
-  }, [jobsByType, stagedFiles]);
+  }, [hasBackend, jobsByType, stagedFiles]);
 
   const handleRun = useCallback(async (type) => {
     setLocalError(null);
@@ -635,15 +688,15 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       });
 
       // Filter to only run tests that need to be run
-      const testsToRun = TEST_JOB_TYPES.filter((config) => shouldRunTest(config.type));
+      const testsToRun = visibleTestConfigs.filter((config) => shouldRunTest(config.type));
       
       if (testsToRun.length === 0) {
         console.log('All tests previously succeeded with no file changes - skipping test runs');
         return;
       }
       
-      if (testsToRun.length < TEST_JOB_TYPES.length) {
-        console.log(`Running ${testsToRun.length} of ${TEST_JOB_TYPES.length} test suites (others already passed with no changes)`);
+      if (testsToRun.length < visibleTestConfigs.length) {
+        console.log(`Running ${testsToRun.length} of ${visibleTestConfigs.length} test suites (others already passed with no changes)`);
       }
 
       await Promise.all(
@@ -652,7 +705,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     } catch (error) {
       setLocalError(error.message);
     }
-  }, [activeJobs.length, markTestRunIntent, projectId, startAutomationJob, shouldRunTest]);
+  }, [activeJobs.length, markTestRunIntent, projectId, startAutomationJob, shouldRunTest, visibleTestConfigs.length]);
 
   const handleCancel = useCallback(async (job) => {
     if (!job) {
@@ -797,15 +850,15 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         dismissOnEscape={!resultModalRequiresExplicitDismiss}
       />
 
-      {activeError && (
+      {displayError && (
         <div className="test-error-banner" role="alert" data-testid="test-error-banner">
-          {activeError}
+          {displayError}
         </div>
       )}
 
       {canResumeCommitFlow && !isResultModalOpen && (
         <div className="test-success-banner" data-testid="commit-ready-banner">
-          <span>Frontend and backend tests both passed. Ready to continue to commit?</span>
+          <span>{testsPassedCommitMessage}</span>
           <button
             type="button"
             className="commit-ready-button"
@@ -818,7 +871,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       )}
 
       <div className="test-grid">
-        {TEST_JOB_TYPES.map((config) => {
+        {visibleTestConfigs.map((config) => {
           const job = jobsByType[config.type];
           const active = isJobActive(job);
           const durationLabel = formatDurationSeconds(job);

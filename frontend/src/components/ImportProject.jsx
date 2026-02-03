@@ -659,8 +659,20 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
       <div className="import-project-view">
         <div className="import-project-container">
           <div className="import-project-header">
-            <h1>Preparing your project</h1>
-            <p>We’re installing dependencies and getting everything ready.</p>
+            <div className="import-project-header-row">
+              <div>
+                <h1>Preparing your project</h1>
+                <p>We’re installing dependencies and getting everything ready.</p>
+              </div>
+              <button
+                type="button"
+                className="import-project-close"
+                onClick={handleCancel}
+                aria-label="Close import"
+              >
+                &times;
+              </button>
+            </div>
           </div>
 
           <div className="import-project-form">
@@ -686,11 +698,20 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
     <div className="import-project-view">
       <div className="import-project-container">
         <div className="import-project-header">
-          <button onClick={handleCancel} className="back-btn">
-            ← Back to Projects
-          </button>
-          <h1>Import Existing Project</h1>
-          <p>Import an existing project from your local machine or a Git repository.</p>
+          <div className="import-project-header-row">
+            <div>
+              <h1>Import Existing Project</h1>
+              <p>Import an existing project from your local machine or a Git repository.</p>
+            </div>
+            <button
+              type="button"
+              className="import-project-close"
+              onClick={handleCancel}
+              aria-label="Close import"
+            >
+              &times;
+            </button>
+          </div>
         </div>
 
         <div className="import-project-form">
@@ -1214,7 +1235,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
               <button
                 type="button"
                 onClick={handleCancel}
-                className="cancel-btn"
+                className="git-settings-button secondary"
                 disabled={importLoading}
               >
                 Cancel
@@ -1224,7 +1245,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                 <button
                   type="button"
                   onClick={handlePrevStep}
-                  className="secondary-btn"
+                  className="git-settings-button secondary"
                   disabled={importLoading}
                 >
                   Back
@@ -1235,7 +1256,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                 <button
                   type="button"
                   onClick={handleNextStep}
-                  className="import-btn"
+                  className="git-settings-button primary"
                   disabled={importLoading}
                 >
                   Next
@@ -1243,7 +1264,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
               ) : (
                 <button
                   type="button"
-                  className="import-btn"
+                  className="git-settings-button primary"
                   onClick={handleImportProject}
                   disabled={importLoading || !importData.name.trim() || 
                     (activeTab === 'local' && !importData.path.trim()) ||

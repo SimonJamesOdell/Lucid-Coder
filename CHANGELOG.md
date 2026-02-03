@@ -1,3 +1,11 @@
+## 0.4.9 (2026-02-03)
+- Add shared SettingsModal and unify settings UX across Git, LLM, and port configuration dialogs.
+- Refresh Create/Import project layouts and buttons for a consistent modal-style flow, with updated navigation handling.
+- Skip backend-only automation when projects lack backend capability and adjust test copy accordingly.
+- Add preview bridge pointer messaging to close dropdowns on iframe interaction.
+- Auto-push main after cloud merges when remote settings are configured, with backend coverage and fallback handling.
+- Expand frontend/backend test coverage and update version metadata across the repo.
+
 ## 0.4.8 (2026-02-03)
 - Split import flow into compatibility and git configuration steps, with tailored copy for local vs git imports.
 - Prefill git remote URLs from git import inputs and refine git connection defaults and warnings.

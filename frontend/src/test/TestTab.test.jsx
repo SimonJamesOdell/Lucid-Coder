@@ -21,6 +21,7 @@ const buildContext = (overrides = {}) => ({
   syncBranchOverview: vi.fn(),
   markTestRunIntent: vi.fn(),
   testRunIntent: { source: 'user', updatedAt: '2024-01-01T00:00:00.000Z' },
+  projectProcesses: null,
   ...overrides
 });
 
@@ -45,6 +46,38 @@ describe('TestTab', () => {
     render(<TestTab project={baseProject} />);
     expect(screen.getByTestId('test-card-frontend:test')).toBeInTheDocument();
     expect(screen.getByTestId('test-card-backend:test')).toBeInTheDocument();
+  });
+
+  test('hides the backend suite when the project has no backend', async () => {
+    const registerTestActions = vi.fn();
+    const startAutomationJob = vi.fn().mockResolvedValue({});
+
+    useAppState.mockReturnValue(buildContext({
+      startAutomationJob,
+      projectProcesses: { capabilities: { backend: { exists: false } } }
+    }));
+
+    render(
+      <TestTab
+        project={baseProject}
+        registerTestActions={registerTestActions}
+      />
+    );
+
+    expect(screen.getByTestId('test-card-frontend:test')).toBeInTheDocument();
+    expect(screen.queryByTestId('test-card-backend:test')).toBeNull();
+
+    let actions;
+    await waitFor(() => {
+      expect(registerTestActions).toHaveBeenCalled();
+      actions = registerTestActions.mock.calls.at(-1)[0];
+      expect(actions).toBeTruthy();
+    });
+
+    await actions.runAllTests();
+
+    expect(startAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: baseProject.id });
+    expect(startAutomationJob).toHaveBeenCalledTimes(1);
   });
 
   test('does not reopen the result modal when the latest jobs are unchanged', async () => {
@@ -1932,6 +1965,21 @@ describe('TestTab', () => {
     });
 
     expect(screen.getByTestId('test-error-banner')).toHaveTextContent('automation down');
+  });
+
+  test('hides backend runner errors for frontend-only projects', () => {
+    useAppState.mockReturnValue(buildContext({
+      jobState: {
+        isLoading: false,
+        error: 'Backend test runner not configured',
+        jobsByProject: {}
+      },
+      projectProcesses: { capabilities: { backend: { exists: false } } }
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    expect(screen.queryByTestId('test-error-banner')).toBeNull();
   });
 
   test('return-to-commits flow shows a commit failed modal when proof submission fails', async () => {

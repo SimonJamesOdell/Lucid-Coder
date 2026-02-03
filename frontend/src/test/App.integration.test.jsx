@@ -277,7 +277,7 @@ describe('App Component Integration', () => {
         expect(screen.getByText('Set up a new project with AI-powered coding assistance.')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('← Back to Projects'))
+      await user.click(screen.getByRole('button', { name: /close create project/i }))
 
       await waitFor(() => {
         expect(screen.getByText('Select Project')).toBeInTheDocument()
@@ -299,7 +299,7 @@ describe('App Component Integration', () => {
         expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('← Back to Projects'))
+      await user.click(screen.getByRole('button', { name: 'Close import' }))
 
       await waitFor(() => {
         expect(screen.getByText('Select Project')).toBeInTheDocument()

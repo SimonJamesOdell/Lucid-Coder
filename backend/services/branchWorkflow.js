@@ -572,6 +572,7 @@ const commitsApi = createBranchWorkflowCommits({
   listBranchChangedPaths,
   ensureGitBranchExists,
   checkoutGitBranch,
+  resolveProjectGitSettings,
   run,
   get,
   setCurrentBranch,

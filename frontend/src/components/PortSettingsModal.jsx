@@ -1,4 +1,5 @@
 import React, { useLayoutEffect, useState } from 'react';
+import SettingsModal from './SettingsModal';
 import './PortSettingsModal.css';
 
 const defaultSettings = {
@@ -67,99 +68,76 @@ const PortSettingsModal = ({ isOpen, onClose, settings = defaultSettings, onSave
     });
   };
 
-  const handleBackdropClick = (event) => {
-    if (event.target === event.currentTarget) {
-      onClose();
-    }
-  };
-
   return (
-    <div
-      className="port-settings-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="port-settings-title"
-      onClick={handleBackdropClick}
-      data-testid="port-settings-modal"
+    <SettingsModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Default Project Ports"
+      subtitle="Control which port ranges Lucid Coder uses when starting new frontend and backend servers."
+      testId="port-settings-modal"
+      closeTestId="port-settings-close"
+      titleId="port-settings-title"
+      panelClassName="port-settings-panel"
+      closeLabel="Close port settings"
     >
-      <div className="port-settings-panel">
-        <div className="port-settings-header">
-          <div>
-            <h2 id="port-settings-title">Default Project Ports</h2>
-            <p className="port-settings-subtitle">
-              Control which port ranges Lucid Coder uses when starting new frontend and backend servers.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="port-settings-close"
-            onClick={onClose}
-            aria-label="Close port settings"
-            data-testid="port-settings-close"
-          >
-            &times;
-          </button>
+      <form onSubmit={handleSubmit} className="port-settings-form" data-testid="port-settings-form">
+        <div className="port-settings-grid">
+          <label className="port-settings-label">
+            Frontend port base
+            <input
+              type="number"
+              min={MIN_PORT}
+              max={MAX_PORT}
+              value={formState.frontendPortBase}
+              onChange={handleFieldChange('frontendPortBase')}
+              data-testid="port-frontend-input"
+            />
+            <span className="port-settings-hint">
+              First port to try when launching Vite/React dev servers.
+            </span>
+          </label>
+
+          <label className="port-settings-label">
+            Backend port base
+            <input
+              type="number"
+              min={MIN_PORT}
+              max={MAX_PORT}
+              value={formState.backendPortBase}
+              onChange={handleFieldChange('backendPortBase')}
+              data-testid="port-backend-input"
+            />
+            <span className="port-settings-hint">
+              First port to try for Express/FastAPI development servers.
+            </span>
+          </label>
         </div>
 
-        <form onSubmit={handleSubmit} className="port-settings-form" data-testid="port-settings-form">
-          <div className="port-settings-grid">
-            <label className="port-settings-label">
-              Frontend port base
-              <input
-                type="number"
-                min={MIN_PORT}
-                max={MAX_PORT}
-                value={formState.frontendPortBase}
-                onChange={handleFieldChange('frontendPortBase')}
-                data-testid="port-frontend-input"
-              />
-              <span className="port-settings-hint">
-                First port to try when launching Vite/React dev servers.
-              </span>
-            </label>
-
-            <label className="port-settings-label">
-              Backend port base
-              <input
-                type="number"
-                min={MIN_PORT}
-                max={MAX_PORT}
-                value={formState.backendPortBase}
-                onChange={handleFieldChange('backendPortBase')}
-                data-testid="port-backend-input"
-              />
-              <span className="port-settings-hint">
-                First port to try for Express/FastAPI development servers.
-              </span>
-            </label>
+        {error && (
+          <div className="port-settings-error" role="alert" data-testid="port-settings-error">
+            {error}
           </div>
+        )}
 
-          {error && (
-            <div className="port-settings-error" role="alert" data-testid="port-settings-error">
-              {error}
-            </div>
-          )}
-
-          <div className="port-settings-footer">
-            <button
-              type="button"
-              className="port-settings-button secondary"
-              onClick={onClose}
-              data-testid="port-settings-cancel"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="port-settings-button primary"
-              data-testid="port-settings-save"
-            >
-              Save defaults
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div className="port-settings-footer">
+          <button
+            type="button"
+            className="git-settings-button secondary"
+            onClick={onClose}
+            data-testid="port-settings-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="git-settings-button primary"
+            data-testid="port-settings-save"
+          >
+            Save defaults
+          </button>
+        </div>
+      </form>
+    </SettingsModal>
   );
 };
 

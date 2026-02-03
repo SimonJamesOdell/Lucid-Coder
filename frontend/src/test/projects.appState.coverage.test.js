@@ -22,14 +22,16 @@ const makeTrackedFetch = (handlers = {}) =>
   });
 
 describe('appState/projects coverage', () => {
-  it('fetchProjectsFromBackend sets projects on non-ok success payload', async () => {
+  it('fetchProjectsFromBackend sets projects on ok success payload', async () => {
     const trackedFetch = vi.fn(async () => ({
-      ok: false,
-      status: 500,
+      ok: true,
+      status: 200,
       json: async () => ({ success: true, projects: [{ id: 'p1', name: 'Proj' }] })
     }));
     let projects = [];
-    const setProjects = vi.fn((next) => { projects = next; });
+    const setProjects = vi.fn((next) => {
+      projects = typeof next === 'function' ? next(projects) : next;
+    });
 
     await fetchProjectsFromBackend({ trackedFetch, setProjects });
 
@@ -47,7 +49,9 @@ describe('appState/projects coverage', () => {
     };
     Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true });
     let projects = [];
-    const setProjects = vi.fn((next) => { projects = next; });
+    const setProjects = vi.fn((next) => {
+      projects = typeof next === 'function' ? next(projects) : next;
+    });
 
     await fetchProjectsFromBackend({ trackedFetch, setProjects });
 
