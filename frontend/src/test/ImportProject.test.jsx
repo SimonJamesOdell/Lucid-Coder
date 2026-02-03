@@ -2265,6 +2265,22 @@ describe('ImportProject Component', () => {
     });
   });
 
+  test('git import requires compatibility consents before enabling final import', async () => {
+    const { user } = renderComponent();
+    await goToCompatibilityStep(user, { tab: 'git', gitUrl: 'https://github.com/example/repo.git' });
+    await clickNext(user);
+
+    const importButton = screen.getByRole('button', { name: 'Import Project' });
+    expect(importButton).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByText('Allow compatibility updates'));
+    await user.click(screen.getByText('Move frontend files into a frontend folder'));
+    await clickNext(user);
+
+    expect(screen.getByRole('button', { name: 'Import Project' })).toBeEnabled();
+  });
+
   describe('Accessibility', () => {
     test('form has proper labels and placeholders on relevant steps', async () => {
       const { user } = renderComponent();

@@ -1,5 +1,19 @@
 // @ts-check
+const os = require('node:os')
+const path = require('node:path')
 const { defineConfig, devices } = require('@playwright/test')
+
+const repoRoot = __dirname
+const defaultDbPath = path.join(repoRoot, 'backend', 'e2e-lucidcoder.db')
+const defaultProjectsDir = path.join(os.tmpdir(), `lucidcoder-e2e-projects-${Date.now()}`)
+
+if (!process.env.E2E_DB_PATH) {
+  process.env.E2E_DB_PATH = defaultDbPath
+}
+
+if (!process.env.E2E_PROJECTS_DIR) {
+  process.env.E2E_PROJECTS_DIR = defaultProjectsDir
+}
 
 const FRONTEND_URL = process.env.E2E_FRONTEND_URL || 'http://localhost:3000'
 const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://localhost:5000'
@@ -28,7 +42,8 @@ module.exports = defineConfig({
       env: {
         ...process.env,
         PORT: '5000',
-        DATABASE_PATH: 'backend/e2e-lucidcoder.db',
+        DATABASE_PATH: process.env.E2E_DB_PATH,
+        PROJECTS_DIR: process.env.E2E_PROJECTS_DIR,
         E2E_SKIP_SCAFFOLDING: process.env.E2E_SKIP_SCAFFOLDING || '1'
       }
     },

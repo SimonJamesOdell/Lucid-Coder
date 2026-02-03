@@ -5,10 +5,10 @@ This project includes comprehensive testing coverage for both frontend and backe
 
 ## Test Structure
 
-### Backend Tests (`backend/tests/`)
-- **API Tests** (`api.test.js`) - Integration tests for all API endpoints
-- **Database Tests** (`database.test.js`) - Database operations and data integrity
-- **LLM Client Tests** (`llm-client.test.js`) - LLM provider integrations and API calls
+### Backend Tests (`backend/tests/`, `backend/test/`)
+- **Route/API tests** - REST endpoint coverage (including contract-style tests)
+- **Database tests** - Database operations and data integrity
+- **Service/unit tests** - Core orchestration, git, import compatibility, and job handling
 
 ### Frontend Tests (`frontend/src/test/`)
 - **Component Tests** - Individual React component testing
@@ -23,6 +23,9 @@ This project includes comprehensive testing coverage for both frontend and backe
 ```powershell
 # Run all tests
 ./run-tests.ps1
+
+# Faster local loop (frontend + backend unit-only)
+npm run test:quick
 
 # Release sanity checks (recommended before tagging a release)
 npm run release:check
@@ -52,8 +55,18 @@ npm run e2e:install
 # Run E2E smoke tests (starts backend + frontend automatically)
 npm run e2e
 
+# Run the long-batch, cross-browser full suite
+npm run e2e:full
+
 # If you often hit "port already used" failures, use the clean wrapper
 npm run e2e:clean-run
+
+# Clean wrapper for the long-batch full suite
+npm run e2e:full:clean-run
+
+# Repeat clean E2E runs to detect flakes (fails fast)
+npm run e2e:flake-check
+npm run e2e:flake-check:smoke
 
 # Helpful modes
 npm run e2e:ui
@@ -73,6 +86,11 @@ cd backend
 npm test                    # Run all backend tests
 npm run test:watch         # Run tests in watch mode
 npm run test:coverage      # Generate coverage report
+
+# Shardable helpers
+npm run test:unit
+npm run test:parallel
+npm run test:integration-only
 ```
 
 #### Frontend Tests
@@ -111,7 +129,7 @@ npm run test:coverage      # Generate coverage report
 ## Test Technologies
 
 ### Backend Testing Stack
-- **Jest** - Test framework with ES modules support
+- **Vitest** - Test framework (unit/integration/parallel configs)
 - **Supertest** - HTTP assertion library for API testing
 - **SQLite** - In-memory database for isolated testing
 - **Mocks** - Axios mocking for external API calls
@@ -153,10 +171,10 @@ test:
 ```
 
 ### Coverage Thresholds
-- **Statements**: 90%+
-- **Branches**: 85%+  
-- **Functions**: 90%+
-- **Lines**: 90%+
+- **Statements**: 100%
+- **Branches**: 100%
+- **Functions**: 100%
+- **Lines**: 100%
 
 ## Debugging Tests
 

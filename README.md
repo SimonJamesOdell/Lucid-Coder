@@ -1,6 +1,6 @@
 # LucidCoder
 
-Version: 0.4.9
+Version: 0.5.0
 LucidCoder is a fullstack system for orchestrating goal-driven coding workflows. The frontend provides a rich React UI and the backend exposes REST and Socket.IO APIs for projects, goals, agents, and test execution.
 
 This project is a work in progress. Core functionality is in place, but many features and improvements are still planned. If you’re interested, please join in development and share updates, ideas, and contributions so we can evolve it together.
@@ -35,7 +35,9 @@ Default endpoints:
 - npm run backend — run backend only
 - npm run test:backend — backend test suite
 - npm run test:frontend — frontend test suite
-- npm run test:e2e — end-to-end tests via PowerShell
+- npm run test:quick — fast local loop (frontend + backend unit-only)
+- npm run e2e — end-to-end tests (Playwright)
+- npm run e2e:flake-check — repeat clean E2E runs to detect flakes
 
 ## Configuration
 

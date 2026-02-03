@@ -1,11 +1,14 @@
 {
   "name": "lucidcoder-backend",
-  "version": "0.4.9",
+  "version": "0.5.0",
   "description": "Backend for LucidCoder fullstack app",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "nodemon server.js",
+    "test:unit": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.unit.config.js",
+    "test:parallel": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.parallel.config.js",
+    "test:integration-only": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.integration.config.js",
     "test": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.unit.config.js && cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.parallel.config.js && cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.integration.config.js",
     "test:watch": "cross-env DATABASE_PATH=test-lucidcoder.db vitest",
     "test:coverage": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.unit.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/unit && cross-env DATABASE_PATH=test-lucidcoder.db VITEST_COVERAGE=1 VITEST_MAX_WORKERS=6 vitest run --config vitest.parallel.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/parallel && cross-env DATABASE_PATH=test-lucidcoder.db VITEST_COVERAGE=1 VITEST_MAX_WORKERS=6 vitest run --config vitest.integration.config.js --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-tmp/integration && node scripts/merge-coverage.mjs coverage-tmp/unit coverage-tmp/parallel coverage-tmp/integration",

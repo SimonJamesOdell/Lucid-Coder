@@ -1,3 +1,10 @@
+## 0.5.0 (2026-02-03)
+- Add `e2e:flake-check` scripts for quickly detecting Playwright flakes via repeated clean runs.
+- Add backend settings API contract tests (Supertest) to lock down response/error shapes.
+- Harden frontend settings fetch helpers for network failures and non-JSON responses, with new negative-network unit coverage.
+- Expand Playwright E2E coverage across project lifecycle, Files tab, Git tab, Import wizard, Packages tab, Processes, Runs, and error/retry flows.
+- Add a faster local loop via `npm run test:quick` and shardable backend test scripts.
+
 ## 0.4.9 (2026-02-03)
 - Add shared SettingsModal and unify settings UX across Git, LLM, and port configuration dialogs.
 - Refresh Create/Import project layouts and buttons for a consistent modal-style flow, with updated navigation handling.

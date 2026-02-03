@@ -356,6 +356,16 @@ describe('ProjectSelector Component', () => {
       expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     });
 
+    test('surfaces API error messages when response includes details', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get.mockRejectedValueOnce({ response: { data: { error: 'Backend offline' } } });
+
+      render(<ProjectSelector />);
+
+      expect(await screen.findByText('Error Loading Projects')).toBeInTheDocument();
+      expect(screen.getByText('Backend offline')).toBeInTheDocument();
+    });
+
     test('shows retry button on fetch error', async () => {
       useAppState.mockReturnValue(mockAppState());
       axios.get

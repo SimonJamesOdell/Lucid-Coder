@@ -38,8 +38,12 @@ const cleanupTempImports = () => {
 
 module.exports = async function globalTeardown() {
   const repoRoot = process.cwd()
-  const dbPath = path.join(repoRoot, 'backend', 'e2e-lucidcoder.db')
+  const dbPath = process.env.E2E_DB_PATH || path.join(repoRoot, 'backend', 'e2e-lucidcoder.db')
+  const projectsDir = process.env.E2E_PROJECTS_DIR
 
   safeRemoveFile(dbPath)
+  if (projectsDir) {
+    safeRemoveDir(projectsDir)
+  }
   cleanupTempImports()
 }

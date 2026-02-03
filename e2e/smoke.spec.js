@@ -3,24 +3,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://localhost:5000'
-
-const ensureBootstrapped = async ({ request }) => {
-  // Configure an API-key-less provider so the UI can proceed without manual setup.
-  // Backend readiness only checks presence of model + api_url for providers like ollama.
-  const response = await request.post(`${BACKEND_URL}/api/llm/configure`, {
-    data: {
-      provider: 'ollama',
-      model: 'llama3',
-      apiUrl: 'http://localhost:11434/v1'
-    }
-  })
-
-  if (!response.ok()) {
-    const bodyText = await response.text().catch(() => '')
-    throw new Error(`Failed to bootstrap LLM config: ${response.status()} ${bodyText}`)
-  }
-}
+const { ensureBootstrapped } = require('./e2e-utils')
 
 test('app loads and reaches project selection', async ({ page, request }) => {
   await ensureBootstrapped({ request })
@@ -54,7 +37,7 @@ test('can create a project and reach main view', async ({ page, request }) => {
 
   await page.getByLabel('Project Name *').fill(projectName)
   await page.getByLabel('Description').fill('Created by Playwright E2E')
-  await page.getByRole('button', { name: 'Create Project' }).click()
+  await page.getByRole('button', { name: 'Create Project', exact: true }).click()
 
   // CreateProject shows a progress UI briefly and then returns to the main view.
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
@@ -88,7 +71,8 @@ test('can import a project and reach main view', async ({ page, request }) => {
     await page.getByText('Allow compatibility updates').click()
     await page.getByText('Move frontend files into a frontend folder').click()
 
-    await page.getByRole('button', { name: 'Import Project' }).click()
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByRole('button', { name: 'Import Project', exact: true }).click()
 
     await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByText(projectName)).toBeVisible()
@@ -109,7 +93,7 @@ test('closing a project returns to project selector', async ({ page, request }) 
   await expect(page.getByRole('heading', { name: 'Create New Project' })).toBeVisible()
 
   await page.getByLabel('Project Name *').fill(projectName)
-  await page.getByRole('button', { name: 'Create Project' }).click()
+  await page.getByRole('button', { name: 'Create Project', exact: true }).click()
 
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('close-project-button').click()
@@ -130,7 +114,7 @@ test('can delete a project from the selector', async ({ page, request }) => {
   await expect(page.getByRole('heading', { name: 'Create New Project' })).toBeVisible()
 
   await page.getByLabel('Project Name *').fill(projectName)
-  await page.getByRole('button', { name: 'Create Project' }).click()
+  await page.getByRole('button', { name: 'Create Project', exact: true }).click()
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
 
   // Return to selector.

@@ -1,6 +1,6 @@
 {
   "name": "lucidcoder-fullstack",
-  "version": "0.4.9",
+  "version": "0.5.0",
   "description": "A fullstack React + Vite / Node.js + Express application",
   "scripts": {
     "install-all": "npm install && npm --prefix backend install && npm --prefix frontend install",
@@ -12,8 +12,12 @@
     "coverage:e2e": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\coverage-report.ps1",
     "e2e:install": "npx playwright install chromium",
     "e2e": "npx playwright test",
+    "e2e:full": "npx playwright test --config playwright.full.config.js",
     "e2e:clean": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\tools\\e2e-clean.ps1",
     "e2e:clean-run": "npm run e2e:clean && npm run e2e",
+    "e2e:full:clean-run": "npm run e2e:clean && npm run e2e:full",
+    "e2e:flake-check": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\tools\\e2e-flake-check.ps1 -Runs 3 -Config full",
+    "e2e:flake-check:smoke": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\tools\\e2e-flake-check.ps1 -Runs 3 -Config default",
     "e2e:ui": "npx playwright test --ui",
     "e2e:headed": "npx playwright test --headed",
     "e2e:debug": "npx playwright test --debug",
@@ -22,6 +26,7 @@
     "release:prep": "node tools/release-prep.mjs",
     "test:backend": "npm --prefix backend test",
     "test:frontend": "npm --prefix frontend test",
+    "test:quick": "npm run test:frontend && npm --prefix backend run test:unit",
     "test:coverage": "npm run coverage:frontend && npm run coverage:backend",
     "coverage:backend": "npm --prefix backend run test:coverage",
     "coverage:frontend": "npm --prefix frontend run test:coverage",
