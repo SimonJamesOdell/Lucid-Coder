@@ -1,3 +1,6 @@
+## 0.5.0 (2026-02-03)
+- (Fill in release notes)
+
 ## 0.4.9 (2026-02-03)
 - Add shared SettingsModal and unify settings UX across Git, LLM, and port configuration dialogs.
 - Refresh Create/Import project layouts and buttons for a consistent modal-style flow, with updated navigation handling.
