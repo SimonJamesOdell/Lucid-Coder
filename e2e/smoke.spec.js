@@ -54,7 +54,7 @@ test('can create a project and reach main view', async ({ page, request }) => {
 
   await page.getByLabel('Project Name *').fill(projectName)
   await page.getByLabel('Description').fill('Created by Playwright E2E')
-  await page.getByRole('button', { name: 'Create Project' }).click()
+  await page.getByRole('button', { name: 'Create Project', exact: true }).click()
 
   // CreateProject shows a progress UI briefly and then returns to the main view.
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
@@ -88,7 +88,8 @@ test('can import a project and reach main view', async ({ page, request }) => {
     await page.getByText('Allow compatibility updates').click()
     await page.getByText('Move frontend files into a frontend folder').click()
 
-    await page.getByRole('button', { name: 'Import Project' }).click()
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByRole('button', { name: 'Import Project', exact: true }).click()
 
     await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByText(projectName)).toBeVisible()
@@ -109,7 +110,7 @@ test('closing a project returns to project selector', async ({ page, request }) 
   await expect(page.getByRole('heading', { name: 'Create New Project' })).toBeVisible()
 
   await page.getByLabel('Project Name *').fill(projectName)
-  await page.getByRole('button', { name: 'Create Project' }).click()
+  await page.getByRole('button', { name: 'Create Project', exact: true }).click()
 
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('close-project-button').click()
@@ -130,7 +131,7 @@ test('can delete a project from the selector', async ({ page, request }) => {
   await expect(page.getByRole('heading', { name: 'Create New Project' })).toBeVisible()
 
   await page.getByLabel('Project Name *').fill(projectName)
-  await page.getByRole('button', { name: 'Create Project' }).click()
+  await page.getByRole('button', { name: 'Create Project', exact: true }).click()
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
 
   // Return to selector.
