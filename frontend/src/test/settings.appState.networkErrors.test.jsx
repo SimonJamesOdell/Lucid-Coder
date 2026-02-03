@@ -28,6 +28,35 @@ describe('appState/settings negative-network handling', () => {
       .rejects.toThrow('Failed to test git connection');
   });
 
+  it('updateGitSettings surfaces the thrown error message when trackedFetch rejects', async () => {
+    const trackedFetch = vi.fn(async () => {
+      throw new Error('network down');
+    });
+
+    await expect(updateGitSettings({
+      trackedFetch,
+      gitSettings: { workflow: 'local', provider: 'github', defaultBranch: 'main' },
+      setGitSettings: vi.fn(),
+      updates: { workflow: 'cloud' }
+    })).rejects.toThrow('network down');
+  });
+
+  it('updatePortSettings surfaces the thrown message when trackedFetch rejects with an object', async () => {
+    const trackedFetch = vi.fn(async () => {
+      throw { message: 'ports offline' };
+    });
+
+    await expect(updatePortSettings({
+      trackedFetch,
+      portSettings: { frontendPortBase: 6100, backendPortBase: 6500 },
+      setPortSettings: vi.fn(),
+      updates: { frontendPortBase: 6101 },
+      currentProjectId: null,
+      isProjectStopping: () => false,
+      restartProject: vi.fn()
+    })).rejects.toThrow('ports offline');
+  });
+
   it('updateGitSettings throws fallback when response is non-JSON', async () => {
     const trackedFetch = vi.fn(async () => ({
       ok: true,
