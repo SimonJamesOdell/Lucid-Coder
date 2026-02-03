@@ -109,6 +109,11 @@ const goToCompatibilityStep = async (user, options = {}) => {
   await clickNext(user);
 };
 
+const goToGitConfigStep = async (user, options = {}) => {
+  await goToCompatibilityStep(user, options);
+  await clickNext(user);
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal('fetch', vi.fn(mockFetch));
@@ -124,7 +129,7 @@ describe('ImportProject Component', () => {
       render(<ImportProject />);
 
       expect(screen.getByText('Import Existing Project')).toBeInTheDocument();
-      expect(screen.getByText('Step 1 of 5')).toBeInTheDocument();
+      expect(screen.getByText('Step 1 of 6')).toBeInTheDocument();
       expect(screen.getByText('Choose an import source')).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: 'Local Folder' })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: 'GitHub / GitLab' })).toBeInTheDocument();
@@ -198,7 +203,7 @@ describe('ImportProject Component', () => {
 
     await act(async () => {
       testHooks.setStateForTests({
-        currentStep: 4,
+        currentStep: 5,
         activeTab: 'local',
         importData: {
           name: 'Local Project',
@@ -235,6 +240,17 @@ describe('ImportProject Component', () => {
 
       expect(screen.getByLabelText('Git Repository URL *')).toBeInTheDocument();
       expect(screen.getByLabelText('Git Provider')).toBeInTheDocument();
+    });
+
+    test('prefills git remote URL from the git repository URL', async () => {
+      const { user } = renderComponent();
+      const gitUrl = 'https://github.com/test/repo.git';
+
+      await goToGitConfigStep(user, { tab: 'git', name: 'Git Project', gitUrl });
+
+      await user.click(screen.getByRole('radio', { name: /Use custom connection/i }));
+
+      expect(screen.getByLabelText('Remote Repository URL *')).toHaveValue(gitUrl);
     });
 
     test('opens the folder picker when browsing for a path', async () => {
@@ -719,7 +735,7 @@ describe('ImportProject Component', () => {
       await waitFor(() => expect(testHooks).toBeTruthy());
       await act(async () => {
         testHooks.setStateForTests({
-          currentStep: 4,
+          currentStep: 5,
           activeTab: 'local',
           nameTouched: true,
           importData: { name: '', path: 'C:/Projects/demo' },
@@ -729,7 +745,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 6 of 6')).toBeInTheDocument());
 
       await act(async () => {
         await testHooks.triggerImportForTests();
@@ -745,7 +761,7 @@ describe('ImportProject Component', () => {
       await waitFor(() => expect(testHooks).toBeTruthy());
       await act(async () => {
         testHooks.setStateForTests({
-          currentStep: 4,
+          currentStep: 5,
           activeTab: 'local',
           nameTouched: true,
           importData: { name: 'Demo', path: '' },
@@ -755,7 +771,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 6 of 6')).toBeInTheDocument());
 
       await act(async () => {
         await testHooks.triggerImportForTests();
@@ -771,25 +787,20 @@ describe('ImportProject Component', () => {
       await waitFor(() => expect(testHooks).toBeTruthy());
       await act(async () => {
         testHooks.setStateForTests({
-          currentStep: 4,
+          currentStep: 5,
           activeTab: 'git',
           nameTouched: true,
           importData: { name: 'Demo', gitUrl: '' }
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 6 of 6')).toBeInTheDocument());
 
       await act(async () => {
         testHooks.setStateForTests({
           compatibilityConsent: true,
           structureConsent: true
         });
-      });
-
-      await waitFor(() => {
-        expect(screen.getByRole('checkbox', { name: /Allow compatibility updates/i })).toBeChecked();
-        expect(screen.getByRole('checkbox', { name: /Move frontend files into a frontend folder/i })).toBeChecked();
       });
 
       await act(async () => {
@@ -896,7 +907,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 4 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 4 of 6')).toBeInTheDocument());
 
       const detectCalls = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith('/api/fs/detect-tech'));
       expect(detectCalls).toHaveLength(0);
@@ -978,7 +989,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 5 of 6')).toBeInTheDocument());
       expect(screen.getByRole('checkbox', { name: /Allow compatibility updates/i })).toBeChecked();
 
       await act(async () => {
@@ -1005,7 +1016,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 5 of 6')).toBeInTheDocument());
 
       const calls = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith('/api/fs/compatibility'));
       expect(calls).toHaveLength(0);
@@ -1038,7 +1049,7 @@ describe('ImportProject Component', () => {
       await waitFor(() => expect(testHooks).toBeTruthy());
       await act(async () => {
         testHooks.setStateForTests({
-          currentStep: 4,
+          currentStep: 5,
           activeTab: 'git',
           importData: { name: 'Demo', gitUrl: 'https://github.com/test/repo.git' },
           compatibilityConsent: false,
@@ -1046,7 +1057,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 6 of 6')).toBeInTheDocument());
 
       await act(async () => {
         await testHooks.triggerImportForTests();
@@ -1062,7 +1073,7 @@ describe('ImportProject Component', () => {
       await waitFor(() => expect(testHooks).toBeTruthy());
       await act(async () => {
         testHooks.setStateForTests({
-          currentStep: 4,
+          currentStep: 5,
           activeTab: 'git',
           importData: { name: 'Demo', gitUrl: 'https://github.com/test/repo.git' },
           compatibilityConsent: true,
@@ -1070,7 +1081,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 6 of 6')).toBeInTheDocument());
 
       await act(async () => {
         testHooks.setStateForTests({
@@ -1099,7 +1110,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 2 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 2 of 6')).toBeInTheDocument());
 
       await act(async () => {
         testHooks.setStateForTests({
@@ -1125,7 +1136,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 2 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 2 of 6')).toBeInTheDocument());
 
       expect(screen.getByLabelText('Git Provider')).toHaveValue('gitlab');
       expect(screen.getByRole('radio', { name: /SSH/i })).toBeChecked();
@@ -1151,7 +1162,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 4 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 4 of 6')).toBeInTheDocument());
 
       const frontendSelect = screen.getByLabelText('Frontend Framework *');
       const backendSelect = screen.getByLabelText('Backend Framework *');
@@ -1174,7 +1185,7 @@ describe('ImportProject Component', () => {
       await waitFor(() => expect(testHooks).toBeTruthy());
       await act(async () => {
         testHooks.setStateForTests({
-          currentStep: 4,
+          currentStep: 5,
           activeTab: 'local',
           nameTouched: true,
           importData: { name: 'Demo', path: 'C:/Projects/demo' },
@@ -1184,7 +1195,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 6 of 6')).toBeInTheDocument());
 
       let importPromise;
       await act(async () => {
@@ -1285,7 +1296,7 @@ describe('ImportProject Component', () => {
         });
       });
 
-      await waitFor(() => expect(screen.getByText('Step 5 of 5')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Step 5 of 6')).toBeInTheDocument());
       await waitFor(() => expect(screen.getByRole('checkbox', { name: /Allow compatibility updates/i })).toBeChecked());
 
       await act(async () => {
@@ -1476,7 +1487,7 @@ describe('ImportProject Component', () => {
     test('imports project with local method', async () => {
       mockImportProject.mockResolvedValue({ project: { id: 'new-project' }, jobs: [] });
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Folder Project', path: 'C:/Projects/folder' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Folder Project', path: 'C:/Projects/folder' });
 
       const importButton = screen.getByRole('button', { name: 'Import Project' });
       expect(importButton).toBeEnabled();
@@ -1498,12 +1509,11 @@ describe('ImportProject Component', () => {
       const { user } = renderComponent();
       await goToCompatibilityStep(user, { tab: 'git', name: 'Git Project', gitUrl: 'https://github.com/test/repo.git' });
 
-      const importButton = screen.getByRole('button', { name: 'Import Project' });
-      expect(importButton).toBeDisabled();
-
       await user.click(screen.getByRole('checkbox', { name: /Allow compatibility updates/i }));
       await user.click(screen.getByRole('checkbox', { name: /Move frontend files into a frontend folder/i }));
 
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      const importButton = screen.getByRole('button', { name: 'Import Project' });
       expect(importButton).toBeEnabled();
       await user.click(importButton);
 
@@ -1520,7 +1530,7 @@ describe('ImportProject Component', () => {
     test('trims whitespace from inputs', async () => {
       mockImportProject.mockResolvedValue({ project: { id: 'trimmed' }, jobs: [] });
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: '   Trim Project   ', path: '   C:/Trim   ' });
+      await goToGitConfigStep(user, { tab: 'local', name: '   Trim Project   ', path: '   C:/Trim   ' });
 
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
@@ -1533,7 +1543,7 @@ describe('ImportProject Component', () => {
       let resolveImport;
       mockImportProject.mockImplementation(() => new Promise((resolve) => { resolveImport = resolve; }));
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local' });
+      await goToGitConfigStep(user, { tab: 'local' });
 
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
@@ -1566,7 +1576,7 @@ describe('ImportProject Component', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
 
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
@@ -1582,7 +1592,7 @@ describe('ImportProject Component', () => {
       mockImportProject.mockResolvedValue({ project: null, jobs });
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
 
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
@@ -1594,7 +1604,7 @@ describe('ImportProject Component', () => {
       mockImportProject.mockResolvedValue({ project: { id: 'job-project' }, jobs: null });
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
 
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
@@ -1608,7 +1618,7 @@ describe('ImportProject Component', () => {
       mockImportProject.mockRejectedValue(err);
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
 
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
@@ -1676,7 +1686,7 @@ describe('ImportProject Component', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
       expect(await screen.findByText('Jobs unavailable')).toBeInTheDocument();
@@ -1698,7 +1708,7 @@ describe('ImportProject Component', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
       expect(await screen.findByText('Failed to load setup jobs')).toBeInTheDocument();
@@ -1717,7 +1727,7 @@ describe('ImportProject Component', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
       expect(await screen.findByText('Failed to load setup jobs')).toBeInTheDocument();
@@ -1739,7 +1749,7 @@ describe('ImportProject Component', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
       expect(await screen.findByText('Jobs failed')).toBeInTheDocument();
@@ -1761,7 +1771,7 @@ describe('ImportProject Component', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
       await waitFor(() => expect(screen.queryByText('Install deps')).toBeNull());
@@ -1784,7 +1794,7 @@ describe('ImportProject Component', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       const { user } = renderComponent();
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
       await waitFor(() => expect(mockShowMain).toHaveBeenCalled());
@@ -1806,7 +1816,7 @@ describe('ImportProject Component', () => {
 
       const user = userEvent.setup();
       const renderResult = render(<ImportProject />);
-      await goToCompatibilityStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
+      await goToGitConfigStep(user, { tab: 'local', name: 'Job Project', path: 'C:/Projects/job' });
       await user.click(screen.getByRole('button', { name: 'Import Project' }));
 
       renderResult.unmount();
@@ -1834,9 +1844,9 @@ describe('ImportProject Component', () => {
       const { user } = renderComponent();
       await goToDetailsStep(user, { tab: 'local' });
 
-      expect(await screen.findByText('Step 3 of 5')).toBeInTheDocument();
+      expect(await screen.findByText('Step 3 of 6')).toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Back' }));
-      expect(await screen.findByText('Step 2 of 5')).toBeInTheDocument();
+      expect(await screen.findByText('Step 2 of 6')).toBeInTheDocument();
     });
 
     test('back button triggers navigation', async () => {

@@ -1105,29 +1105,39 @@ router.delete('/:id', async (req, res) => {
     
     // Clean up filesystem with retry logic for Windows
     const cleanupTargets = buildCleanupTargets(project);
-    
-    try {
-      const fs = await getFsModule();
 
-      const cleanupFailures = [];
-      for (const target of cleanupTargets) {
-        try {
-          await cleanupDirectoryExecutor(fs, target);
-          console.log(`✅ Project directory cleaned up: ${target}`);
-        } catch (targetError) {
-          cleanupFailures.push({ target, error: targetError });
+    const runCleanup = async () => {
+      try {
+        const fs = await getFsModule();
+
+        const cleanupFailures = [];
+        for (const target of cleanupTargets) {
+          try {
+            await cleanupDirectoryExecutor(fs, target);
+            console.log(`✅ Project directory cleaned up: ${target}`);
+          } catch (targetError) {
+            cleanupFailures.push({ target, error: targetError });
+          }
         }
-      }
 
-      if (cleanupFailures.length > 0) {
-        const firstError = cleanupFailures[0]?.error;
-        const message = firstError?.message || 'cleanup failed';
-        console.warn('⚠️ Warning: Could not clean up project directories:', cleanupTargets, message);
+        if (cleanupFailures.length > 0) {
+          const firstError = cleanupFailures[0]?.error;
+          const message = firstError?.message || 'cleanup failed';
+          console.warn('⚠️ Warning: Could not clean up project directories:', cleanupTargets, message);
+        }
+      } catch (fsError) {
+        console.warn('⚠️ Warning: Could not clean up project directories:', cleanupTargets, fsError.message);
+        // Don't fail the entire operation if filesystem cleanup fails
+        // The project is already deleted from database
       }
-    } catch (fsError) {
-      console.warn('⚠️ Warning: Could not clean up project directories:', cleanupTargets, fsError.message);
-      // Don't fail the entire operation if filesystem cleanup fails
-      // The project is already deleted from database
+    };
+
+    if (process.env.NODE_ENV === 'test') {
+      await runCleanup();
+    } else {
+      setImmediate(() => {
+        void runCleanup();
+      });
     }
     
     res.json({

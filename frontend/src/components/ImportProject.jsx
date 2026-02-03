@@ -58,6 +58,7 @@ export const guessProjectName = (value) => {
 
 const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
   const { importProject, showMain, gitSettings, gitConnectionStatus } = useAppState();
+  const totalSteps = 6;
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState('');
   const [activeTab, setActiveTab] = useState(sanitizeImportTab(initialImportMethod));
@@ -94,6 +95,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
   const importAttemptIdRef = useRef(0);
   const techDetectPathRef = useRef('');
   const compatibilityPathRef = useRef('');
+  const gitRemoteTouchedRef = useRef(false);
   
   // Import form state
   const [importData, setImportData] = useState({
@@ -161,6 +163,24 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
       setImportError('');
     }
   }, [activeTab, currentStep]);
+
+  useEffect(() => {
+    if (activeTab !== 'git') {
+      return;
+    }
+    gitRemoteTouchedRef.current = false;
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'git') {
+      return;
+    }
+    const trimmedGitUrl = importData.gitUrl.trim();
+    if (!trimmedGitUrl || gitRemoteTouchedRef.current) {
+      return;
+    }
+    setGitConnectionRemoteUrl(trimmedGitUrl);
+  }, [activeTab, importData.gitUrl]);
 
   useEffect(() => {
     if (currentStep !== 3) {
@@ -253,7 +273,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
   }, [activeTab, currentStep, importData.path]);
 
   const handleImportProject = async () => {
-    if (currentStep < 4) {
+    if (currentStep < 5) {
       return;
     }
 
@@ -540,7 +560,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
     if (!validateStep(currentStep)) {
       return;
     }
-    setCurrentStep((prev) => Math.min(prev + 1, 4));
+    setCurrentStep((prev) => Math.min(prev + 1, 5));
   };
 
   const handlePrevStep = () => {
@@ -567,6 +587,19 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
   const compatibilityChanges = Array.isArray(compatibilityPlan?.changes) ? compatibilityPlan.changes : [];
   const gitRemoteRequired = gitConnectionMode !== 'local';
   const gitRemoteMissing = gitRemoteRequired && !gitConnectionRemoteUrl.trim();
+  const gitStepTitle = activeTab === 'local' ? 'Configure Git' : 'Configure Git connection';
+  const gitStepDescription = activeTab === 'local'
+    ? 'LucidCoder will initialize Git if needed and can connect the repo to a remote.'
+    : 'Decide whether to keep this clone local or connect it to a cloud workflow.';
+  const gitLocalSubtitle = activeTab === 'local'
+    ? 'Initialize Git locally and keep the repository on this machine.'
+    : 'Keep the cloned repository local only.';
+  const gitGlobalSubtitle = activeTab === 'local'
+    ? 'Reuse your global GitHub/GitLab connection for this repo.'
+    : 'Reuse your global GitHub/GitLab connection for this repo.';
+  const gitCustomSubtitle = activeTab === 'local'
+    ? 'Provide a remote URL and provider for this repo.'
+    : 'Specify a different remote and provider.';
   const setupJobs = setupState.jobs || [];
   const setupProjectId = setupState.projectId;
   const setupError = setupState.error;
@@ -663,7 +696,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
         <div className="import-project-form">
           <form onSubmit={(event) => event.preventDefault()} role="form">
             <div className="form-section">
-              <h3>Step {currentStep + 1} of 5</h3>
+              <h3>Step {currentStep + 1} of {totalSteps}</h3>
               {currentStep === 0 && (
                 <>
                   <h4 className="step-title">Choose an import source</h4>
@@ -1067,9 +1100,16 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                     </label>
                   </div>
 
+                </>
+              )}
+
+              {currentStep === 5 && (
+                <>
+                  <h4 className="step-title">{gitStepTitle}</h4>
+                  <p>{gitStepDescription}</p>
+
                   <div className="form-section">
                     <h3>Git connection</h3>
-                    <p>Choose how this project should connect to Git.</p>
                     <div className="radio-group">
                       <label className={`radio-card ${gitConnectionMode === 'local' ? 'selected' : ''}`}>
                         <input
@@ -1082,7 +1122,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                         />
                         <div>
                           <div className="radio-title">Local only</div>
-                          <div className="radio-subtitle">Keep the project repository on this machine.</div>
+                          <div className="radio-subtitle">{gitLocalSubtitle}</div>
                         </div>
                       </label>
                       <label className={`radio-card ${gitConnectionMode === 'global' ? 'selected' : ''}`}>
@@ -1096,7 +1136,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                         />
                         <div>
                           <div className="radio-title">Use global connection</div>
-                          <div className="radio-subtitle">Reuse your global GitHub/GitLab connection.</div>
+                          <div className="radio-subtitle">{gitGlobalSubtitle}</div>
                         </div>
                       </label>
                       <label className={`radio-card ${gitConnectionMode === 'custom' ? 'selected' : ''}`}>
@@ -1110,7 +1150,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                         />
                         <div>
                           <div className="radio-title">Use custom connection</div>
-                          <div className="radio-subtitle">Specify a different remote and provider.</div>
+                          <div className="radio-subtitle">{gitCustomSubtitle}</div>
                         </div>
                       </label>
                     </div>
@@ -1137,7 +1177,10 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                             type="url"
                             placeholder="https://github.com/username/repository.git"
                             value={gitConnectionRemoteUrl}
-                            onChange={(event) => setGitConnectionRemoteUrl(event.target.value)}
+                            onChange={(event) => {
+                              gitRemoteTouchedRef.current = true;
+                              setGitConnectionRemoteUrl(event.target.value);
+                            }}
                             className="form-input"
                             disabled={importLoading}
                           />
@@ -1188,7 +1231,7 @@ const ImportProject = ({ initialImportMethod = 'local', __testHooks } = {}) => {
                 </button>
               )}
 
-              {currentStep < 4 ? (
+              {currentStep < 5 ? (
                 <button
                   type="button"
                   onClick={handleNextStep}

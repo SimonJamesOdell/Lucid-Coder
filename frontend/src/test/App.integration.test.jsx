@@ -548,6 +548,7 @@ describe('App Component Integration', () => {
       await user.type(screen.getByLabelText('Description'), 'Test imported project')
       await user.click(screen.getByText('Next'))
       await user.click(screen.getByText('Next'))
+      await user.click(screen.getByText('Next'))
       await user.click(screen.getByText('Import Project'))
 
       await waitFor(() => {

@@ -5059,6 +5059,42 @@ describe('Projects API with Scaffolding', () => {
       warnSpy.mockRestore();
     });
 
+    test('returns response without waiting for cleanup outside test env', async () => {
+      const { project } = await createPersistedProject({ name: `delete-async-${Date.now()}` });
+      const projectRoutesModule = await import('../routes/projects.js');
+      const processManager = await import('../routes/projects/processManager.js');
+      const previousEnv = process.env.NODE_ENV;
+
+      let releaseCleanup;
+      const cleanupPromise = new Promise((resolve) => {
+        releaseCleanup = resolve;
+      });
+      const cleanupExecutor = vi.fn(async () => {
+        await cleanupPromise;
+      });
+
+      const terminateSpy = vi.spyOn(processManager, 'terminateRunningProcesses').mockResolvedValue();
+      projectRoutesModule.__projectRoutesInternals.setCleanupDirectoryExecutor(cleanupExecutor);
+      process.env.NODE_ENV = 'production';
+
+      try {
+        const response = await request(app)
+          .delete(`/api/projects/${project.id}`)
+          .set('x-confirm-destructive', 'true');
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(cleanupExecutor).toHaveBeenCalled();
+      } finally {
+        releaseCleanup?.();
+        projectRoutesModule.__projectRoutesInternals.resetCleanupDirectoryExecutor();
+        terminateSpy.mockRestore();
+        process.env.NODE_ENV = previousEnv;
+      }
+    });
+
     test('uses a fallback cleanup warning message when errors omit details (coverage)', async () => {
       const { project } = await createPersistedProject({ name: `delete-fs-fail-empty-${Date.now()}` });
       const projectRoutesModule = await import('../routes/projects.js');
