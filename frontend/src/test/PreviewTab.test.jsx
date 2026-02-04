@@ -591,6 +591,48 @@ describe('PreviewTab', () => {
     }
   });
 
+  test('getDevServerOriginFromWindow coerces non-string window.location.protocol to http:', () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+
+    try {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { protocol: {}, hostname: 'example.com' }
+      });
+
+      const origin = getDevServerOriginFromWindow({ port: 5173 });
+      expect(origin).toBe('http://example.com:5173');
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+    }
+  });
+
+  test('preview proxy origin falls back when window.location is missing origin + protocol', async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+
+    try {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: {
+          hostname: 'localhost',
+          port: '3000'
+        }
+      });
+
+      renderPreviewTab({ processInfo: buildProcessInfo() });
+      const iframe = screen.getByTestId('preview-iframe');
+      await waitFor(() => {
+        expect(iframe.getAttribute('src')).toBe('http://localhost:5000/preview/123');
+      });
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+    }
+  });
+
   test('uses VITE_API_TARGET origin for the preview proxy URL when valid', async () => {
     const restoreTarget = setViteApiTarget('http://127.0.0.1:5100/api');
     try {
@@ -654,6 +696,32 @@ describe('PreviewTab', () => {
       });
     } finally {
       restoreTarget();
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+    }
+  });
+
+  test('falls back to the dev default backend mapping when the window protocol is non-http (e.g. file:)', async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+
+    try {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: {
+          origin: 'null',
+          hostname: '',
+          protocol: 'file:',
+          port: ''
+        }
+      });
+
+      renderPreviewTab({ processInfo: buildProcessInfo() });
+      const iframe = screen.getByTestId('preview-iframe');
+      await waitFor(() => {
+        expect(iframe.getAttribute('src')).toBe('http://localhost:5000/preview/123');
+      });
+    } finally {
       if (originalDescriptor) {
         Object.defineProperty(window, 'location', originalDescriptor);
       }

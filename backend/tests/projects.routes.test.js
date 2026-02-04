@@ -2621,6 +2621,185 @@ describe('Projects API with Scaffolding', () => {
       resetRunningProcessesStore();
     });
 
+    test('terminateRunningProcesses targeted port cleanup does not free non-target ports (regression)', async () => {
+      const projectRoutesModule = await import('../routes/projects.js');
+      const {
+        storeRunningProcesses,
+        resetRunningProcessesStore,
+        terminateRunningProcesses,
+        setExecFileOverride,
+        resetExecFileOverride,
+        setExecCommandOverride,
+        resetExecCommandOverride
+      } = projectRoutesModule.__projectRoutesInternals;
+
+      resetRunningProcessesStore();
+
+      // Simulate a stale/non-running snapshot: state is stopped, but we still have
+      // project port metadata. Targeted termination must not free the other port.
+      const project = {
+        id: 'terminate-port-regression',
+        name: 'terminate-port-regression',
+        frontendPort: 5100,
+        backendPort: 5500,
+        framework: 'react,express'
+      };
+
+      storeRunningProcesses(project.id, {
+        frontend: { port: 5100 },
+        backend: { port: 5500 }
+      }, 'stopped');
+
+      const execCommands = [];
+      setExecCommandOverride(async (command) => {
+        execCommands.push(command);
+        if (command.includes(':5100')) {
+          return 'TCP 0.0.0.0:5100 0.0.0.0:0 LISTENING 11111\n';
+        }
+        if (command.includes(':5500')) {
+          return 'TCP 0.0.0.0:5500 0.0.0.0:0 LISTENING 22222\n';
+        }
+        return '';
+      });
+
+      const execCalls = [];
+      setExecFileOverride((file, args, callback) => {
+        execCalls.push({ file, args });
+        const error = new Error('not found');
+        error.stderr = Buffer.from('not found');
+        callback(error);
+      });
+
+      const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+
+      try {
+        await terminateRunningProcesses(project.id, { project, target: 'backend', forcePorts: true });
+      } finally {
+        platformSpy.mockRestore();
+        resetExecFileOverride();
+        resetExecCommandOverride();
+        resetRunningProcessesStore();
+      }
+
+      expect(execCommands.some((cmd) => cmd.includes(':5100'))).toBe(false);
+      expect(execCommands.some((cmd) => cmd.includes(':5500'))).toBe(true);
+      expect(execCalls).toEqual([
+        { file: 'taskkill', args: ['/PID', '22222', '/T', '/F'] }
+      ]);
+    });
+
+    test('terminateRunningProcesses uses explicit ports list when target port cannot be resolved (coverage)', async () => {
+      const projectRoutesModule = await import('../routes/projects.js');
+      const {
+        storeRunningProcesses,
+        resetRunningProcessesStore,
+        terminateRunningProcesses,
+        setExecFileOverride,
+        resetExecFileOverride,
+        setExecCommandOverride,
+        resetExecCommandOverride
+      } = projectRoutesModule.__projectRoutesInternals;
+
+      resetRunningProcessesStore();
+
+      const project = {
+        id: 'terminate-explicit-ports-coverage',
+        name: 'terminate-explicit-ports-coverage',
+        framework: 'react,express'
+      };
+
+      storeRunningProcesses(project.id, {
+        frontend: { port: 5100 },
+        backend: { port: null }
+      }, 'stopped');
+
+      const execCommands = [];
+      setExecCommandOverride(async (command) => {
+        execCommands.push(command);
+        if (command.includes(':5100')) {
+          return 'TCP 0.0.0.0:5100 0.0.0.0:0 LISTENING 11111\n';
+        }
+        if (command.includes(':5500')) {
+          return 'TCP 0.0.0.0:5500 0.0.0.0:0 LISTENING 22222\n';
+        }
+        return '';
+      });
+
+      const execCalls = [];
+      setExecFileOverride((file, args, callback) => {
+        execCalls.push({ file, args });
+        const error = new Error('not found');
+        error.stderr = Buffer.from('not found');
+        callback(error);
+      });
+
+      const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+
+      try {
+        await terminateRunningProcesses(project.id, {
+          project,
+          target: 'backend',
+          forcePorts: true,
+          ports: [5500]
+        });
+      } finally {
+        platformSpy.mockRestore();
+        resetExecFileOverride();
+        resetExecCommandOverride();
+        resetRunningProcessesStore();
+      }
+
+      expect(execCommands.some((cmd) => cmd.includes(':5100'))).toBe(false);
+      expect(execCommands.some((cmd) => cmd.includes(':5500'))).toBe(true);
+      expect(execCalls).toEqual([
+        { file: 'taskkill', args: ['/PID', '22222', '/T', '/F'] }
+      ]);
+    });
+
+    test('terminateRunningProcesses backend target does not attempt port cleanup when only frontend pid is live (regression)', async () => {
+      const projectRoutesModule = await import('../routes/projects.js');
+      const {
+        storeRunningProcesses,
+        resetRunningProcessesStore,
+        terminateRunningProcesses,
+        setExecCommandOverride,
+        resetExecCommandOverride
+      } = projectRoutesModule.__projectRoutesInternals;
+
+      resetRunningProcessesStore();
+
+      const project = {
+        id: 'terminate-no-cleanup-frontend-live',
+        name: 'terminate-no-cleanup-frontend-live',
+        // Intentionally set a backendPort that could overlap with a frontend (e.g. nextjs on 3000).
+        backendPort: 3000,
+        framework: 'nextjs,express'
+      };
+
+      // Frontend pid is definitely live (current test runner), backend is missing.
+      storeRunningProcesses(project.id, {
+        frontend: { pid: process.pid, port: 3000 },
+        backend: null
+      }, 'running');
+
+      const execCommands = [];
+      setExecCommandOverride(async (command) => {
+        execCommands.push(command);
+        return '';
+      });
+
+      try {
+        await terminateRunningProcesses(project.id, { project, target: 'backend' });
+      } finally {
+        resetExecCommandOverride();
+        resetRunningProcessesStore();
+      }
+
+      // No netstat/lsof calls should occur; targeted restarts should not free ports just because
+      // the *other* process is alive.
+      expect(execCommands.length).toBe(0);
+    });
+
     test('terminateRunningProcesses covers both remaining-key branches', async () => {
       const { project } = await createPersistedProject({ name: `terminate-remaining-key-${Date.now()}` });
       const projectRoutesModule = await import('../routes/projects.js');
@@ -4772,6 +4951,294 @@ describe('Projects API with Scaffolding', () => {
       expect(scaffoldingService.startProject).toHaveBeenCalledWith(expect.stringContaining(project.name), expect.any(Object));
     });
 
+    test('windows backend target restart recovers frontend when it is tree-killed (regression)', async () => {
+      const { project } = await createPersistedProject({ name: `restart-win32-recovery-${Date.now()}` });
+
+      const projectRoutesModule = await import('../routes/projects.js');
+      const {
+        storeRunningProcesses,
+        resetRunningProcessesStore,
+        setPlatformOverride,
+        resetPlatformOverride,
+        setExecFileOverride,
+        resetExecFileOverride
+      } = projectRoutesModule.__projectRoutesInternals;
+
+      const databaseModule = await import('../database.js');
+      const updatePortsSpy = vi.spyOn(databaseModule, 'updateProjectPorts');
+
+      resetRunningProcessesStore();
+      setPlatformOverride('win32');
+
+      // Simulate frontend being live, then being dead after backend restart.
+      const frontendPid = 45678;
+      storeRunningProcesses(project.id, {
+        frontend: { pid: frontendPid, port: 5100 },
+        backend: { pid: 56789, port: 5500 }
+      }, 'running');
+
+      // Prevent taskkill from running for real.
+      setExecFileOverride((file, args, cb) => cb(null, '', ''));
+
+      let killZeroCallCount = 0;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (signal === 0 && pid === frontendPid) {
+          killZeroCallCount += 1;
+          if (killZeroCallCount >= 2) {
+            const err = new Error('ESRCH');
+            // @ts-expect-error vitest stub
+            err.code = 'ESRCH';
+            throw err;
+          }
+          return true;
+        }
+        return true;
+      });
+
+      const scaffoldingService = await import('../services/projectScaffolding.js');
+      vi.mocked(scaffoldingService.startProject)
+        .mockResolvedValueOnce({
+          success: true,
+          processes: { backend: { pid: 90001, port: 5501 } }
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          processes: { frontend: { pid: 90002, port: 5101 } }
+        });
+
+      try {
+        const response = await request(app)
+          .post(`/api/projects/${project.id}/restart?target=backend`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(response.body.processes.frontend.pid).toBe(90002);
+        expect(response.body.processes.backend.pid).toBe(90001);
+        expect(vi.mocked(scaffoldingService.startProject)).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(scaffoldingService.startProject).mock.calls[0][1]).toEqual(expect.objectContaining({ target: 'backend' }));
+        expect(vi.mocked(scaffoldingService.startProject).mock.calls[1][1]).toEqual(expect.objectContaining({ target: 'frontend' }));
+
+        expect(updatePortsSpy).toHaveBeenCalledWith(project.id, expect.objectContaining({
+          backendPort: 5501,
+          frontendPort: 5101
+        }));
+      } finally {
+        killSpy.mockRestore();
+        updatePortsSpy.mockRestore();
+        resetExecFileOverride();
+        resetPlatformOverride();
+        resetRunningProcessesStore();
+      }
+    });
+
+    test('windows backend target restart skips recovered frontend port update when recovered port is zero', async () => {
+      const { project } = await createPersistedProject({ name: `restart-win32-recovery-port0-${Date.now()}` });
+
+      const projectRoutesModule = await import('../routes/projects.js');
+      const {
+        storeRunningProcesses,
+        resetRunningProcessesStore,
+        setPlatformOverride,
+        resetPlatformOverride,
+        setExecFileOverride,
+        resetExecFileOverride
+      } = projectRoutesModule.__projectRoutesInternals;
+
+      const databaseModule = await import('../database.js');
+      const updatePortsSpy = vi.spyOn(databaseModule, 'updateProjectPorts');
+
+      resetRunningProcessesStore();
+      setPlatformOverride('win32');
+
+      const frontendPid = 45679;
+      storeRunningProcesses(project.id, {
+        frontend: { pid: frontendPid, port: 5100 },
+        backend: { pid: 56790, port: 5500 }
+      }, 'running');
+
+      setExecFileOverride((file, args, cb) => cb(null, '', ''));
+
+      let killZeroCallCount = 0;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (signal === 0 && pid === frontendPid) {
+          killZeroCallCount += 1;
+          if (killZeroCallCount >= 2) {
+            const err = new Error('ESRCH');
+            // @ts-expect-error vitest stub
+            err.code = 'ESRCH';
+            throw err;
+          }
+          return true;
+        }
+        return true;
+      });
+
+      const scaffoldingService = await import('../services/projectScaffolding.js');
+      vi.mocked(scaffoldingService.startProject)
+        .mockResolvedValueOnce({
+          success: true,
+          processes: { backend: { pid: 91001, port: 5502 } }
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          processes: { frontend: { pid: 91002, port: 0 } }
+        });
+
+      try {
+        const response = await request(app)
+          .post(`/api/projects/${project.id}/restart?target=backend`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(updatePortsSpy).toHaveBeenCalledWith(project.id, expect.objectContaining({
+          backendPort: 5502
+        }));
+        expect(updatePortsSpy).not.toHaveBeenCalledWith(project.id, expect.objectContaining({
+          frontendPort: expect.any(Number)
+        }));
+      } finally {
+        killSpy.mockRestore();
+        updatePortsSpy.mockRestore();
+        resetExecFileOverride();
+        resetPlatformOverride();
+        resetRunningProcessesStore();
+      }
+    });
+
+    test('windows backend target restart skips frontend recovery when frontend remains live', async () => {
+      const { project } = await createPersistedProject({ name: `restart-win32-no-recovery-${Date.now()}` });
+
+      const projectRoutesModule = await import('../routes/projects.js');
+      const {
+        storeRunningProcesses,
+        resetRunningProcessesStore,
+        setPlatformOverride,
+        resetPlatformOverride,
+        setExecFileOverride,
+        resetExecFileOverride
+      } = projectRoutesModule.__projectRoutesInternals;
+
+      const databaseModule = await import('../database.js');
+      const updatePortsSpy = vi.spyOn(databaseModule, 'updateProjectPorts');
+
+      resetRunningProcessesStore();
+      setPlatformOverride('win32');
+
+      const frontendPid = 45680;
+      storeRunningProcesses(project.id, {
+        frontend: { pid: frontendPid, port: 5100 },
+        backend: { pid: 56791, port: 5500 }
+      }, 'running');
+
+      setExecFileOverride((file, args, cb) => cb(null, '', ''));
+
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+      const scaffoldingService = await import('../services/projectScaffolding.js');
+      vi.mocked(scaffoldingService.startProject).mockResolvedValueOnce({
+        success: true,
+        processes: { backend: { pid: 92001, port: 5503 } }
+      });
+
+      try {
+        const response = await request(app)
+          .post(`/api/projects/${project.id}/restart?target=backend`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(vi.mocked(scaffoldingService.startProject)).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(scaffoldingService.startProject).mock.calls[0][1]).toEqual(expect.objectContaining({ target: 'backend' }));
+
+        expect(updatePortsSpy).toHaveBeenCalledWith(project.id, expect.objectContaining({
+          backendPort: 5503
+        }));
+      } finally {
+        killSpy.mockRestore();
+        updatePortsSpy.mockRestore();
+        resetExecFileOverride();
+        resetPlatformOverride();
+        resetRunningProcessesStore();
+      }
+    });
+
+    test('windows backend target restart does not apply frontend recovery when recovery fails', async () => {
+      const { project } = await createPersistedProject({ name: `restart-win32-recovery-fail-${Date.now()}` });
+
+      const projectRoutesModule = await import('../routes/projects.js');
+      const {
+        storeRunningProcesses,
+        resetRunningProcessesStore,
+        setPlatformOverride,
+        resetPlatformOverride,
+        setExecFileOverride,
+        resetExecFileOverride
+      } = projectRoutesModule.__projectRoutesInternals;
+
+      const databaseModule = await import('../database.js');
+      const updatePortsSpy = vi.spyOn(databaseModule, 'updateProjectPorts');
+
+      resetRunningProcessesStore();
+      setPlatformOverride('win32');
+
+      const frontendPid = 45681;
+      storeRunningProcesses(project.id, {
+        frontend: { pid: frontendPid, port: 0 },
+        backend: { pid: 56792, port: 5500 }
+      }, 'running');
+
+      setExecFileOverride((file, args, cb) => cb(null, '', ''));
+
+      let killZeroCallCount = 0;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (signal === 0 && pid === frontendPid) {
+          killZeroCallCount += 1;
+          if (killZeroCallCount >= 2) {
+            const err = new Error('ESRCH');
+            // @ts-expect-error vitest stub
+            err.code = 'ESRCH';
+            throw err;
+          }
+          return true;
+        }
+        return true;
+      });
+
+      const scaffoldingService = await import('../services/projectScaffolding.js');
+      vi.mocked(scaffoldingService.startProject)
+        .mockResolvedValueOnce({
+          success: true,
+          processes: { backend: { pid: 93001, port: 5504 } }
+        })
+        .mockResolvedValueOnce({
+          success: false
+        });
+
+      try {
+        const response = await request(app)
+          .post(`/api/projects/${project.id}/restart?target=backend`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(response.body.processes.frontend.pid).toBe(frontendPid);
+        expect(vi.mocked(scaffoldingService.startProject)).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(scaffoldingService.startProject).mock.calls[0][1]).toEqual(expect.objectContaining({ target: 'backend' }));
+        expect(vi.mocked(scaffoldingService.startProject).mock.calls[1][1]).toEqual(expect.objectContaining({ target: 'frontend' }));
+
+        expect(updatePortsSpy).toHaveBeenCalledWith(project.id, expect.objectContaining({
+          backendPort: 5504
+        }));
+        expect(updatePortsSpy).not.toHaveBeenCalledWith(project.id, expect.objectContaining({
+          frontendPort: expect.any(Number)
+        }));
+      } finally {
+        killSpy.mockRestore();
+        updatePortsSpy.mockRestore();
+        resetExecFileOverride();
+        resetPlatformOverride();
+        resetRunningProcessesStore();
+      }
+    });
+
     test('surfaces restart errors when startProject fails', async () => {
       const { project } = await createPersistedProject({ name: `restart-error-${Date.now()}` });
       const scaffoldingService = await import('../services/projectScaffolding.js');
@@ -4985,6 +5452,34 @@ describe('Projects API with Scaffolding', () => {
 
       const entry = processManager.getRunningProcessEntry(project.id);
       expect(entry.state).toBe('stopped');
+
+      updatePortsSpy.mockRestore();
+    });
+
+    test('target restart skips port update when started port is zero', async () => {
+      const { project } = await createPersistedProject({ name: `restart-target-zero-port-${Date.now()}` });
+
+      const processManager = await import('../routes/projects/processManager.js');
+      processManager.runningProcesses.clear();
+
+      const scaffoldingService = await import('../services/projectScaffolding.js');
+      vi.mocked(scaffoldingService.startProject).mockResolvedValueOnce({
+        success: true,
+        processes: {
+          frontend: { pid: process.pid, port: 0 },
+          backend: null
+        }
+      });
+
+      const databaseModule = await import('../database.js');
+      const updatePortsSpy = vi.spyOn(databaseModule, 'updateProjectPorts');
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/restart?target=frontend`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(updatePortsSpy).toHaveBeenCalledWith(project.id, {});
 
       updatePortsSpy.mockRestore();
     });

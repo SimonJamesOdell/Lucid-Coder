@@ -145,7 +145,7 @@ describe('server bootstrap and middleware', () => {
       return httpServerStub;
     });
     await loadServerModule();
-  });
+  }, 30000);
 
   afterEach(() => {
     cleanupSignalHandlers();

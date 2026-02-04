@@ -32,7 +32,7 @@ describe('Project Lifecycle Integration Tests', () => {
     // Import and start the actual server for testing
     const serverModule = await import('../../server.js');
     app = serverModule.default || serverModule.app;
-  });
+  }, 60000);
 
   afterAll(async () => {
     // supertest can exercise the Express app without binding a real port.

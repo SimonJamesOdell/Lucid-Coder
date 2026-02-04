@@ -38,6 +38,7 @@ vi.mock('../routes/projects/processManager.js', () => {
     ensurePortsFreed: vi.fn(),
     extractProcessPorts: vi.fn(() => ({ frontendPort: null, backendPort: null })),
     getProjectPortHints: vi.fn(() => defaultPorts),
+    getPlatformImpl: vi.fn(() => 'linux'),
     getRunningProcessEntry: vi.fn(() => ({
       processes: null,
       state: 'idle',
@@ -619,5 +620,298 @@ describe('routes/processes', () => {
       error: 'Failed to restart project'
     });
     expect(res.body.details?.message).toBe('Failed to restart project');
+  });
+
+  it('logs a warning when windows backend restart triggers frontend recovery that throws', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    processManager.getPlatformImpl.mockReturnValue('win32');
+    processManager.hasLiveProcess.mockImplementation((processInfo) => Boolean(processInfo?.pid));
+
+    processManager.getRunningProcessEntry
+      .mockReturnValueOnce({
+        processes: { frontend: { pid: 111, port: 5173 }, backend: { pid: 222, port: 3000 } },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      })
+      .mockReturnValueOnce({
+        processes: { frontend: null, backend: null },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      });
+
+    startProject
+      .mockResolvedValueOnce({ success: true, processes: { backend: { pid: 333, port: 6002 } } })
+      .mockRejectedValueOnce(new Error('frontend recovery boom'));
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Warn', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=backend')
+      .expect(200);
+
+    expect(startProject).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it('logs windows frontend recovery warning with error object fallback when message is blank (coverage)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    processManager.getPlatformImpl.mockReturnValue('win32');
+    processManager.hasLiveProcess.mockImplementation((processInfo) => Boolean(processInfo?.pid));
+
+    processManager.getRunningProcessEntry
+      .mockReturnValueOnce({
+        processes: { frontend: { pid: 111, port: 5173 }, backend: { pid: 222, port: 3000 } },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      })
+      .mockReturnValueOnce({
+        processes: { frontend: null, backend: null },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      });
+
+    const recoveryError = new Error('');
+    recoveryError.message = '';
+
+    startProject
+      .mockResolvedValueOnce({ success: true, processes: { backend: { pid: 333, port: 6002 } } })
+      .mockRejectedValueOnce(recoveryError);
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Warn Blank Message', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=backend')
+      .expect(200);
+
+    expect(warnSpy).toHaveBeenCalledWith('[restart] frontend recovery failed', recoveryError);
+
+    warnSpy.mockRestore();
+  });
+
+  it('updates frontend port when restarting target=frontend succeeds', async () => {
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    startProject.mockResolvedValueOnce({
+      success: true,
+      processes: {
+        frontend: { pid: 111, port: 6123 }
+      }
+    });
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Frontend', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=frontend')
+      .expect(200);
+
+    expect(db.updateProjectPorts).toHaveBeenCalledWith('123', { frontendPort: 6123 });
+  });
+
+  it('does not update frontend port when restarting target=frontend returns no port', async () => {
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    startProject.mockResolvedValueOnce({
+      success: true,
+      processes: {
+        frontend: { pid: 111, port: null }
+      }
+    });
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Frontend Missing Port', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=frontend')
+      .expect(200);
+
+    expect(db.updateProjectPorts).toHaveBeenCalledWith('123', {});
+  });
+
+  it('records recovered frontend port when windows backend restart recovers frontend successfully', async () => {
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    processManager.getPlatformImpl.mockReturnValue('win32');
+    processManager.hasLiveProcess.mockImplementation((processInfo) => Boolean(processInfo?.pid));
+
+    processManager.getRunningProcessEntry
+      .mockReturnValueOnce({
+        processes: { frontend: { pid: 111, port: 5173 }, backend: { pid: 222, port: 3000 } },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      })
+      .mockReturnValueOnce({
+        processes: { frontend: null, backend: null },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      });
+
+    startProject
+      .mockResolvedValueOnce({ success: true, processes: { backend: { pid: 333, port: 6002 } } })
+      .mockResolvedValueOnce({ success: true, processes: { frontend: { pid: 444, port: 6001 } } });
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Backend', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=backend')
+      .expect(200);
+
+    expect(db.updateProjectPorts).toHaveBeenCalledWith('123', { backendPort: 6002, frontendPort: 6001 });
+  });
+
+  it('passes null port hints to windows frontend recovery when port base overrides force reassignment (coverage)', async () => {
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    processManager.getPlatformImpl.mockReturnValue('win32');
+    processManager.hasLiveProcess.mockImplementation((processInfo) => Boolean(processInfo?.pid));
+    processManager.buildPortOverrideOptions.mockReturnValue({
+      frontendPortBase: 9999,
+      backendPortBase: 9998
+    });
+
+    processManager.getRunningProcessEntry
+      .mockReturnValueOnce({
+        processes: { frontend: { pid: 111, port: 5173 }, backend: { pid: 222, port: 3000 } },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      })
+      .mockReturnValueOnce({
+        processes: { frontend: null, backend: null },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      });
+
+    startProject
+      .mockResolvedValueOnce({ success: true, processes: { backend: { pid: 333, port: 6002 } } })
+      .mockResolvedValueOnce({ success: true, processes: { frontend: { pid: 444, port: 6001 } } });
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Backend Overrides', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=backend')
+      .expect(200);
+
+    expect(startProject).toHaveBeenCalledTimes(2);
+    expect(startProject.mock.calls[1][1]).toEqual(expect.objectContaining({
+      target: 'frontend',
+      frontendPort: null,
+      backendPort: null,
+      frontendPortBase: 9999,
+      backendPortBase: 9998
+    }));
+    expect(db.updateProjectPorts).toHaveBeenCalledWith('123', { backendPort: 6002, frontendPort: 6001 });
+  });
+
+  it('skips windows frontend recovery when startProject resolves to null (coverage)', async () => {
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    processManager.getPlatformImpl.mockReturnValue('win32');
+    processManager.hasLiveProcess.mockImplementation((processInfo) => Boolean(processInfo?.pid));
+
+    processManager.getRunningProcessEntry
+      .mockReturnValueOnce({
+        processes: { frontend: { pid: 111, port: 5173 }, backend: { pid: 222, port: 3000 } },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      })
+      .mockReturnValueOnce({
+        processes: { frontend: null, backend: null },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      });
+
+    startProject
+      .mockResolvedValueOnce({ success: true, processes: { backend: { pid: 333, port: 6002 } } })
+      .mockResolvedValueOnce(null);
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Backend Null Recovery', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=backend')
+      .expect(200);
+
+    expect(startProject).toHaveBeenCalledTimes(2);
+    expect(db.updateProjectPorts).toHaveBeenCalledWith('123', { backendPort: 6002 });
+  });
+
+  it('treats successful windows frontend recovery without a frontend snapshot as null (coverage)', async () => {
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    processManager.getPlatformImpl.mockReturnValue('win32');
+    processManager.hasLiveProcess.mockImplementation((processInfo) => Boolean(processInfo?.pid));
+
+    processManager.getRunningProcessEntry
+      .mockReturnValueOnce({
+        processes: { frontend: { pid: 111, port: 5173 }, backend: { pid: 222, port: 3000 } },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      })
+      .mockReturnValueOnce({
+        processes: { frontend: null, backend: null },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      });
+
+    startProject
+      .mockResolvedValueOnce({ success: true, processes: { backend: { pid: 333, port: 6002 } } })
+      .mockResolvedValueOnce({ success: true, processes: {} });
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Backend Missing Recovery Snapshot', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=backend')
+      .expect(200);
+
+    expect(startProject).toHaveBeenCalledTimes(2);
+    expect(db.updateProjectPorts).toHaveBeenCalledWith('123', { backendPort: 6002 });
+  });
+
+  it('skips recovered frontend port update when recovery succeeds without a port', async () => {
+    const { startProject } = await import('../services/projectScaffolding.js');
+
+    processManager.getPlatformImpl.mockReturnValue('win32');
+    processManager.hasLiveProcess.mockImplementation((processInfo) => Boolean(processInfo?.pid));
+
+    processManager.getRunningProcessEntry
+      .mockReturnValueOnce({
+        processes: { frontend: { pid: 111, port: 5173 }, backend: { pid: 222, port: 3000 } },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      })
+      .mockReturnValueOnce({
+        processes: { frontend: null, backend: null },
+        state: 'running',
+        snapshotVisible: true,
+        launchType: 'manual'
+      });
+
+    startProject
+      .mockResolvedValueOnce({ success: true, processes: { backend: { pid: 333, port: 6002 } } })
+      .mockResolvedValueOnce({ success: true, processes: { frontend: { pid: 444, port: null } } });
+
+    db.getProject.mockResolvedValue({ id: '123', name: 'Restart Backend Missing Frontend Port', path: tempDir });
+
+    await request(app)
+      .post('/api/projects/123/restart?target=backend')
+      .expect(200);
+
+    expect(db.updateProjectPorts).toHaveBeenCalledWith('123', { backendPort: 6002 });
   });
 });

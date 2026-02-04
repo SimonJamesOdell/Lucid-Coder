@@ -17,6 +17,7 @@ import {
   ensurePortsFreed,
   extractProcessPorts,
   getProjectPortHints,
+  getPlatformImpl,
   getRunningProcessEntry,
   getStoredProjectPorts,
   hasLiveProcess,
@@ -507,6 +508,12 @@ export function registerProjectProcessRoutes(router) {
         });
       }
 
+      const isWindows = getPlatformImpl() === 'win32';
+      const shouldRecoverFrontendOnWindows = isWindows && target === 'backend';
+      const { processes: preRestartProcesses } = getRunningProcessEntry(id);
+      const frontendWasLiveBeforeRestart =
+        shouldRecoverFrontendOnWindows && hasLiveProcess(preRestartProcesses?.frontend);
+
       if (target) {
         await terminateRunningProcesses(id, { project, target, waitForRelease: true });
       } else {
@@ -540,6 +547,24 @@ export function registerProjectProcessRoutes(router) {
           };
           nextProcesses[target] = startResult.processes?.[target] || null;
 
+          if (frontendWasLiveBeforeRestart && !hasLiveProcess(nextProcesses.frontend)) {
+            try {
+              const frontendRecovery = await startProject(project.path, {
+                frontendPort: forceFrontendReassignment ? null : portHints.frontend,
+                backendPort: forceBackendReassignment ? null : portHints.backend,
+                target: 'frontend',
+                ...portOverrides
+              });
+
+              if (frontendRecovery?.success) {
+                nextProcesses.frontend = frontendRecovery.processes?.frontend || null;
+              }
+            } catch (recoveryError) {
+              // Best-effort recovery only.
+              console.warn('[restart] frontend recovery failed', recoveryError?.message || recoveryError);
+            }
+          }
+
           const hasAnyLive = hasLiveProcess(nextProcesses.frontend) || hasLiveProcess(nextProcesses.backend);
           storeRunningProcesses(id, nextProcesses, hasAnyLive ? 'running' : 'stopped', { launchType: 'manual' });
 
@@ -551,6 +576,11 @@ export function registerProjectProcessRoutes(router) {
             } else {
               nextPorts.backendPort = startedPort;
             }
+          }
+
+          const recoveredFrontendPort = nextProcesses.frontend?.port;
+          if (frontendWasLiveBeforeRestart && Number.isInteger(recoveredFrontendPort) && recoveredFrontendPort > 0) {
+            nextPorts.frontendPort = recoveredFrontendPort;
           }
           await updateProjectPorts(project.id, nextPorts);
 

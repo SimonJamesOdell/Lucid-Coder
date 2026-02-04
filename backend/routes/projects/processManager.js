@@ -653,10 +653,15 @@ export const terminateRunningProcesses = async (projectId, options = {}) => {
   const { key, processes, state: entryState } = getRunningProcessEntry(projectId);
   const project = await resolveTerminationProject(projectId, options.project);
   const requestedTarget = options.target === 'frontend' || options.target === 'backend' ? options.target : null;
-  const knownPids = [processes?.frontend?.pid, processes?.backend?.pid]
-    .map((pid) => (Number.isInteger(pid) ? pid : Number(pid)))
-    .filter((pid) => Number.isInteger(pid));
+  const targetProcess = requestedTarget ? processes?.[requestedTarget] : null;
+  const targetPid = normalizePortCandidate(targetProcess?.pid);
+  const knownPids = requestedTarget
+    ? (targetPid ? [targetPid] : [])
+    : [processes?.frontend?.pid, processes?.backend?.pid]
+        .map((pid) => (Number.isInteger(pid) ? pid : Number(pid)))
+        .filter((pid) => Number.isInteger(pid));
   const hasLiveProcesses = knownPids.some((pid) => isPidActive(pid));
+  const targetWasLive = requestedTarget ? hasLiveProcesses : false;
   const dropEntry = options.dropEntry === true;
   const hasProcesses = Boolean(processes?.frontend || processes?.backend);
   const isActiveEntry = entryState === 'running' && hasProcesses;
@@ -700,17 +705,26 @@ export const terminateRunningProcesses = async (projectId, options = {}) => {
   }
 
   const forcePortCleanup = options.forcePorts === true;
-  const shouldReleasePorts = forcePortCleanup || hasLiveProcesses || (isActiveEntry && Boolean(requestedTarget));
-  const targetPort =
-    requestedTarget && isActiveEntry
-      ? (Number.isInteger(processes?.[requestedTarget]?.port)
-        ? processes[requestedTarget].port
-        : Number(processes?.[requestedTarget]?.port))
-      : null;
-  const derivedPorts =
-    requestedTarget && isActiveEntry
-      ? (Number.isInteger(targetPort) ? [targetPort] : [])
-      : (options.ports ?? deriveProjectPorts(project));
+
+  // For targeted restarts, only trust the live snapshot port (not project metadata).
+  // Project metadata can be stale/wrong and can overlap with the other target (e.g. nextjs frontend on 3000).
+  const resolvedTargetPort = requestedTarget
+    ? (normalizePortCandidate(targetProcess?.port) ?? null)
+    : null;
+
+  // Important: when a target is specified, never fall back to freeing *both* project ports.
+  // Otherwise a backend restart can kill the frontend by freeing the frontend dev-server port.
+  const derivedPorts = (() => {
+    if (requestedTarget) {
+      return resolvedTargetPort ? [resolvedTargetPort] : Array.isArray(options.ports) ? options.ports : [];
+    }
+    return options.ports ?? deriveProjectPorts(project);
+  })();
+
+  const shouldReleasePorts =
+    forcePortCleanup ||
+    (requestedTarget ? targetWasLive : (hasLiveProcesses || isActiveEntry));
+
   const portsToFree = shouldReleasePorts ? derivedPorts : [];
 
   if (shouldReleasePorts && portsToFree.length) {

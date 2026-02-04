@@ -1,6 +1,7 @@
 ## 0.5.2 (2026-02-04)
 - Split Create New Project into a two-step wizard (Project Details → Git Setup) with Next/Back navigation, while preserving local/global/custom git workflows and remote create/connect options.
 - Fix Preview tab blank page regressions by making backend-origin resolution SSR-safe, adding `VITE_API_TARGET` support, and proxying `/preview` to the backend in Vite dev.
+- Fix targeted backend restarts so they don’t inadvertently terminate the frontend dev server (port-cleanup regression), with added backend route coverage.
 - Harden Branch tab test runs so branch overview state does not regress when refresh data is missing.
 - Improve ChatPanel error messages by surfacing backend LLM readiness errors (including “LLM is not configured” reason) and standardizing client-side fallbacks.
 - Enhance the configured LLM banner to show provider/model details when available.

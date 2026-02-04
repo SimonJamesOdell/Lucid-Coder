@@ -25,6 +25,19 @@ export const normalizeHostname = (value) => {
   return trimmed;
 };
 
+const normalizeBrowserProtocol = (value) => {
+  if (typeof value !== 'string') {
+    return 'http:';
+  }
+
+  const trimmed = value.trim();
+  if (trimmed === 'http:' || trimmed === 'https:') {
+    return trimmed;
+  }
+
+  return 'http:';
+};
+
 export const getDevServerOriginFromWindow = ({ port, hostnameOverride } = {}) => {
   if (typeof window === 'undefined') {
     return null;
@@ -34,7 +47,7 @@ export const getDevServerOriginFromWindow = ({ port, hostnameOverride } = {}) =>
     return null;
   }
 
-  const protocol = window.location?.protocol || 'http:';
+  const protocol = normalizeBrowserProtocol(window.location?.protocol || 'http:');
   const hostname = normalizeHostname(hostnameOverride || window.location?.hostname || 'localhost');
   return `${protocol}//${hostname}:${port}`;
 };
@@ -108,9 +121,15 @@ const PreviewTab = forwardRef(
       return '';
     }
 
-    const origin = window.location?.origin || '';
+    if (!window.location) {
+      return '';
+    }
+
+    const rawOrigin = window.location?.origin || '';
+    const origin = rawOrigin === 'null' ? '' : rawOrigin;
     const hostname = window.location?.hostname || 'localhost';
-    const protocol = window.location?.protocol || 'http:';
+    const rawProtocol = window.location?.protocol || 'http:';
+    const protocol = normalizeBrowserProtocol(rawProtocol);
     const port = window.location?.port || '';
 
     const resolvedHostname = normalizeHostname(hostnameOverride || hostname);
@@ -122,6 +141,13 @@ const PreviewTab = forwardRef(
 
     // Dev default: the LucidCoder frontend runs on 3000 and the backend runs on 5000.
     if ((port === '3000' || port === '5173') && resolvedHostname) {
+      return `${protocol}//${resolvedHostname}:5000`;
+    }
+
+    // Packaged / webview environments can report non-http protocols (e.g. file:)
+    // or the literal origin string "null". In those cases, fall back to the dev
+    // default backend mapping so preview doesn't become about:blank.
+    if ((rawProtocol !== protocol || !origin) && resolvedHostname) {
       return `${protocol}//${resolvedHostname}:5000`;
     }
 
