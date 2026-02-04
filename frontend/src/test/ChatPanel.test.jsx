@@ -2757,6 +2757,170 @@ describe('ChatPanel', () => {
         expect(errorElement).toHaveTextContent('unavailable right now');
       });
     });
+
+    it('surfaces backend "LLM is not configured" errors with the readiness reason', async () => {
+      goalsApi.agentRequest.mockRejectedValue({
+        message: 'Request failed with status code 503',
+        response: {
+          status: 503,
+          data: {
+            success: false,
+            error: 'LLM is not configured',
+            reason: 'Missing API key'
+          }
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = screen.getByTestId('chat-input');
+      const sendButton = screen.getByTestId('chat-send-button');
+
+      await userEvent.type(input, 'Test message');
+      await userEvent.click(sendButton);
+
+      await waitFor(() => {
+        const errorElement = screen.getByTestId('chat-error');
+        expect(errorElement).toHaveTextContent(/not configured/i);
+        expect(errorElement).toHaveTextContent('Missing API key');
+      });
+    });
+
+    it('surfaces backend "LLM is not configured" errors without adding empty reason suffix', async () => {
+      goalsApi.agentRequest.mockRejectedValue({
+        message: 'Request failed with status code 503',
+        response: {
+          status: 503,
+          data: {
+            success: false,
+            error: 'LLM is not configured'
+          }
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = screen.getByTestId('chat-input');
+      const sendButton = screen.getByTestId('chat-send-button');
+
+      await userEvent.type(input, 'Test message');
+      await userEvent.click(sendButton);
+
+      await waitFor(() => {
+        const errorElement = screen.getByTestId('chat-error');
+        expect(errorElement).toHaveTextContent(/not configured/i);
+        expect(errorElement.textContent).not.toContain('()');
+        expect(errorElement.textContent).not.toContain('(');
+      });
+    });
+
+    it('surfaces non-LLM backend error payloads (includes reason when present)', async () => {
+      goalsApi.agentRequest.mockRejectedValue({
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: {
+            success: false,
+            error: 'Backend refused request',
+            reason: 'Validation failed'
+          }
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = screen.getByTestId('chat-input');
+      const sendButton = screen.getByTestId('chat-send-button');
+
+      await userEvent.type(input, 'Test message');
+      await userEvent.click(sendButton);
+
+      await waitFor(() => {
+        const errorElement = screen.getByTestId('chat-error');
+        expect(errorElement).toHaveTextContent('Backend refused request');
+        expect(errorElement).toHaveTextContent('Validation failed');
+      });
+    });
+
+    it('surfaces non-LLM backend error payloads without reason suffix when reason is missing', async () => {
+      goalsApi.agentRequest.mockRejectedValue({
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: {
+            success: false,
+            error: 'Backend refused request'
+          }
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = screen.getByTestId('chat-input');
+      const sendButton = screen.getByTestId('chat-send-button');
+
+      await userEvent.type(input, 'Test message');
+      await userEvent.click(sendButton);
+
+      await waitFor(() => {
+        const errorElement = screen.getByTestId('chat-error');
+        expect(errorElement).toHaveTextContent('Backend refused request');
+        expect(errorElement.textContent).not.toContain('(');
+      });
+    });
+
+    it('handles backend error payloads even when error.message is not a string', async () => {
+      goalsApi.agentRequest.mockRejectedValue({
+        message: { not: 'a string' },
+        response: {
+          status: 400,
+          data: {
+            success: false,
+            error: 'Backend refused request'
+          }
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = screen.getByTestId('chat-input');
+      const sendButton = screen.getByTestId('chat-send-button');
+
+      await userEvent.type(input, 'Test message');
+      await userEvent.click(sendButton);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-error')).toHaveTextContent('Backend refused request');
+      });
+    });
+
+    it('does not duplicate the backend reason when it is already included in the error string', async () => {
+      goalsApi.agentRequest.mockRejectedValue({
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: {
+            success: false,
+            error: 'Backend refused request (Validation failed)',
+            reason: 'Validation failed'
+          }
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = screen.getByTestId('chat-input');
+      const sendButton = screen.getByTestId('chat-send-button');
+
+      await userEvent.type(input, 'Test message');
+      await userEvent.click(sendButton);
+
+      await waitFor(() => {
+        const errorElement = screen.getByTestId('chat-error');
+        expect(errorElement).toHaveTextContent('Backend refused request (Validation failed)');
+        expect(errorElement.textContent).not.toContain('Validation failed) (Validation failed');
+      });
+    });
   });
 
   describe('Input Focus Behavior', () => {

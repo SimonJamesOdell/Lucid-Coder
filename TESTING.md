@@ -75,10 +75,23 @@ npm run e2e:debug
 ```
 
 Notes:
-- E2E uses a dedicated SQLite DB at `backend/e2e-lucidcoder.db` (deleted before each run).
+- E2E uses a dedicated SQLite DB at `backend/e2e-lucidcoder.db` (deleted before each run). Override via `E2E_DB_PATH`.
 - E2E defaults to frontend `http://localhost:3100` and backend `http://localhost:5100` to avoid colliding with dev servers.
-- If you already have E2E servers running, Playwright will reuse them automatically (opt out with `E2E_NO_REUSE_SERVER=1`).
-- You can also explicitly point to running servers via `E2E_FRONTEND_URL` / `E2E_BACKEND_URL`.
+- Server reuse is **opt-in only**: set `E2E_REUSE_SERVER=1` to reuse already-running E2E servers.
+- You can explicitly point to running servers via `E2E_FRONTEND_URL` / `E2E_BACKEND_URL`.
+
+### E2E isolation (important)
+Playwright E2E tests create real projects, goals, and settings in the backend database. To prevent polluting your local dev database:
+
+- E2E runs the backend with `DATABASE_PATH` set to `E2E_DB_PATH` (defaults to `backend/e2e-lucidcoder.db`).
+- E2E runs the frontend with a proxy target pointing at the E2E backend (port 5100).
+- The E2E bootstrap refuses to write LLM config unless backend diagnostics confirm the backend is using the expected E2E DB path.
+
+If you want to reuse servers (faster local loop):
+```powershell
+$env:E2E_REUSE_SERVER = '1'
+npm run e2e
+```
 
 ### Individual Test Suites
 
@@ -186,6 +199,27 @@ test:
 3. **Async Operations** - waitFor() used for async state updates
 4. **Mock Cleanup** - Mocks reset between tests
 
+Update:
+- E2E ports are `5100` (backend) and `3100` (frontend).
+- If you see E2E projects/settings showing up in your normal app, double-check you did not run E2E against a non-E2E backend (or reuse a server pointing at your real DB).
+
+## Cleaning up accidental E2E projects
+If E2E projects ended up in your local DB (they typically have names starting with `E2E `), you can safely remove them with:
+
+```powershell
+# Dry run (shows what would be deleted)
+node backend/scripts/purge-e2e-projects.mjs
+
+# Apply deletions
+node backend/scripts/purge-e2e-projects.mjs --apply
+```
+
+To target a specific DB file, set `DATABASE_PATH`:
+```powershell
+$env:DATABASE_PATH = "$env:LOCALAPPDATA\LucidCoder\lucidcoder.db"
+node backend/scripts/purge-e2e-projects.mjs --apply
+```
+
 ### Debug Commands
 ```bash
 # Backend debugging
@@ -253,5 +287,5 @@ describe('New Component', () => {
 ---
 
 **Total Test Count**: 100+ tests across all suites  
-**Coverage Target**: 90%+ across all metrics  
+**Coverage Target**: 100% across all metrics  
 **Test Execution Time**: ~30 seconds full suite

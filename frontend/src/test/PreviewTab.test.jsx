@@ -54,6 +54,39 @@ const renderPreviewTab = (props = {}) => {
   return { previewRef, props: mergedProps, ...renderResult };
 };
 
+const setViteApiTarget = (value) => {
+  const env = import.meta?.env;
+  if (!env) {
+    return () => {};
+  }
+
+  const original = env.VITE_API_TARGET;
+
+  try {
+    Object.defineProperty(env, 'VITE_API_TARGET', { configurable: true, value });
+  } catch {
+    try {
+      // eslint-disable-next-line no-param-reassign
+      env.VITE_API_TARGET = value;
+    } catch {
+      return () => {};
+    }
+  }
+
+  return () => {
+    try {
+      Object.defineProperty(env, 'VITE_API_TARGET', { configurable: true, value: original });
+    } catch {
+      try {
+        // eslint-disable-next-line no-param-reassign
+        env.VITE_API_TARGET = original;
+      } catch {
+        // ignore
+      }
+    }
+  };
+};
+
 describe('PreviewTab', () => {
   let originalIframeSrcDescriptor;
   let originalIframeSetAttribute;
@@ -552,6 +585,75 @@ describe('PreviewTab', () => {
       const origin = getDevServerOriginFromWindow({ port: 5173 });
       expect(origin).toBe('http://localhost:5173');
     } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+    }
+  });
+
+  test('uses VITE_API_TARGET origin for the preview proxy URL when valid', async () => {
+    const restoreTarget = setViteApiTarget('http://127.0.0.1:5100/api');
+    try {
+      renderPreviewTab({ processInfo: buildProcessInfo() });
+      const iframe = screen.getByTestId('preview-iframe');
+      await waitFor(() => {
+        expect(iframe.getAttribute('src')).toBe('http://127.0.0.1:5100/preview/123');
+      });
+    } finally {
+      restoreTarget();
+    }
+  });
+
+  test('ignores invalid VITE_API_TARGET values and falls back to dev default backend mapping', async () => {
+    const restoreTarget = setViteApiTarget('not a url');
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+
+    try {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: {
+          origin: 'http://localhost:3000',
+          hostname: 'localhost',
+          protocol: 'http:',
+          port: '3000'
+        }
+      });
+
+      renderPreviewTab({ processInfo: buildProcessInfo() });
+      const iframe = screen.getByTestId('preview-iframe');
+      await waitFor(() => {
+        expect(iframe.getAttribute('src')).toBe('http://localhost:5000/preview/123');
+      });
+    } finally {
+      restoreTarget();
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+    }
+  });
+
+  test('treats whitespace-only VITE_API_TARGET values as unset and falls back to the dev default backend mapping', async () => {
+    const restoreTarget = setViteApiTarget('   ');
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+
+    try {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: {
+          origin: 'http://localhost:3000',
+          hostname: 'localhost',
+          protocol: 'http:',
+          port: '3000'
+        }
+      });
+
+      renderPreviewTab({ processInfo: buildProcessInfo() });
+      const iframe = screen.getByTestId('preview-iframe');
+      await waitFor(() => {
+        expect(iframe.getAttribute('src')).toBe('http://localhost:5000/preview/123');
+      });
+    } finally {
+      restoreTarget();
       if (originalDescriptor) {
         Object.defineProperty(window, 'location', originalDescriptor);
       }

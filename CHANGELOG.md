@@ -1,3 +1,11 @@
+## 0.5.2 (2026-02-04)
+- Split Create New Project into a two-step wizard (Project Details → Git Setup) with Next/Back navigation, while preserving local/global/custom git workflows and remote create/connect options.
+- Fix Preview tab blank page regressions by making backend-origin resolution SSR-safe, adding `VITE_API_TARGET` support, and proxying `/preview` to the backend in Vite dev.
+- Harden Branch tab test runs so branch overview state does not regress when refresh data is missing.
+- Improve ChatPanel error messages by surfacing backend LLM readiness errors (including “LLM is not configured” reason) and standardizing client-side fallbacks.
+- Enhance the configured LLM banner to show provider/model details when available.
+- Make Playwright E2E runs safer and more isolated (dedicated ports/DB, opt-in server reuse, backend diagnostics guard), and add a script to purge accidentally-created E2E projects.
+
 ## 0.5.1 (2026-02-04)
 - Require selecting a Git workflow when creating a new project, with support for local-only or cloud workflows (use global settings or a custom provider + PAT).
 - Add optional cloud remote setup on creation: create a new repository or connect an existing repository URL.

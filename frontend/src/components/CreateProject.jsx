@@ -107,6 +107,8 @@ const CreateProject = () => {
   const lastProgressUpdateAtRef = useRef(0);
   const pollSuppressedRef = useRef(false);
   const pollSuppressionTimeoutRef = useRef(null);
+
+  const [setupStep, setSetupStep] = useState('details');
   
   // New project form state
   const [newProject, setNewProject] = useState({
@@ -398,6 +400,17 @@ const CreateProject = () => {
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
+
+    if (setupStep === 'details') {
+      if (!newProject.name.trim()) {
+        setCreateError('Project name is required');
+        return;
+      }
+
+      setCreateError('');
+      setSetupStep('git');
+      return;
+    }
     
     if (!newProject.name.trim()) {
       setCreateError('Project name is required');
@@ -566,6 +579,7 @@ const CreateProject = () => {
     setProgressKey(null);
     setProgress(null);
     setProcesses(null);
+    setSetupStep('details');
     setNewProject({
       name: '',
       description: '',
@@ -587,6 +601,11 @@ const CreateProject = () => {
     setGitRepoOwner('');
     setGitRepoVisibility('private');
     showMain();
+  };
+
+  const handleBackToDetails = () => {
+    setCreateError('');
+    setSetupStep('details');
   };
 
   const getFrontendFrameworks = () => {
@@ -656,307 +675,314 @@ const CreateProject = () => {
 
         <div className="create-project-form" style={{ display: isProgressBlocking ? 'none' : 'block' }}>
           <form onSubmit={handleCreateProject} role="form">
-            <div className="form-section">
-              <h3>Project Details</h3>
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="project-name">Project Name *</label>
-                  <input
-                    id="project-name"
-                    type="text"
-                    placeholder="Enter project name"
-                    value={newProject.name}
-                    onChange={(e) => {
-                      setNewProject(prev => ({ ...prev, name: e.target.value }));
-                      // Clear error when name changes
-                      if (createError) {
-                        setCreateError('');
-                      }
-                    }}
-                    className="form-input"
-                    disabled={createLoading}
-                    autoFocus
-                  />
-                </div>
-                
-                <div className="form-group">
-                  <label htmlFor="project-description">Description</label>
-                  <input
-                    id="project-description"
-                    type="text"
-                    placeholder="Brief description of your project"
-                    value={newProject.description}
-                    onChange={(e) => setNewProject(prev => ({ ...prev, description: e.target.value }))}
-                    className="form-input"
-                    disabled={createLoading}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="form-section">
-              <h3>Git Setup</h3>
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="git-workflow-select">Git Workflow *</label>
-                  <select
-                    id="git-workflow-select"
-                    value={gitWorkflowMode}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      setGitWorkflowMode(next);
-                      setGitCloudMode('');
-                      if (createError) {
-                        setCreateError('');
-                      }
-                    }}
-                    className="form-select"
-                    disabled={createLoading}
-                  >
-                    <option value="">Select a workflow</option>
-                    <option value="local">Local only</option>
-                    <option value="global">Cloud (use global git settings)</option>
-                    <option value="custom">Cloud (custom connection)</option>
-                  </select>
+            {setupStep === 'details' && (
+              <>
+                <div className="form-section">
+                  <h3>Project Details</h3>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label htmlFor="project-name">Project Name *</label>
+                      <input
+                        id="project-name"
+                        type="text"
+                        placeholder="Enter project name"
+                        value={newProject.name}
+                        onChange={(e) => {
+                          setNewProject(prev => ({ ...prev, name: e.target.value }));
+                          // Clear error when name changes
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-input"
+                        disabled={createLoading}
+                        autoFocus
+                      />
+                    </div>
+                    
+                    <div className="form-group">
+                      <label htmlFor="project-description">Description</label>
+                      <input
+                        id="project-description"
+                        type="text"
+                        placeholder="Brief description of your project"
+                        value={newProject.description}
+                        onChange={(e) => setNewProject(prev => ({ ...prev, description: e.target.value }))}
+                        className="form-input"
+                        disabled={createLoading}
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && (
+                <div className="form-section">
+                  <h3>Frontend Technology</h3>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label htmlFor="frontend-language-select">Frontend Language *</label>
+                      <select
+                        id="frontend-language-select"
+                        value={newProject.frontend.language}
+                        onChange={(e) => setNewProject(prev => ({ 
+                          ...prev, 
+                          frontend: {
+                            language: e.target.value,
+                            framework: frontendFrameworks[e.target.value]?.[0] || 'react'
+                          }
+                        }))}
+                        className="form-select"
+                        disabled={createLoading}
+                      >
+                        {frontendLanguages.map(lang => (
+                          <option key={lang} value={lang}>
+                            {lang.charAt(0).toUpperCase() + lang.slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="frontend-framework-select">Frontend Framework *</label>
+                      <select
+                        id="frontend-framework-select"
+                        value={newProject.frontend.framework}
+                        onChange={(e) => setNewProject(prev => ({ 
+                          ...prev, 
+                          frontend: { ...prev.frontend, framework: e.target.value }
+                        }))}
+                        className="form-select"
+                        disabled={createLoading}
+                      >
+                        {getFrontendFrameworks().map(framework => (
+                          <option key={framework} value={framework}>
+                            {framework.charAt(0).toUpperCase() + framework.slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="form-section">
+                  <h3>Backend Technology</h3>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label htmlFor="backend-language-select">Backend Language *</label>
+                      <select
+                        id="backend-language-select"
+                        value={newProject.backend.language}
+                        onChange={(e) => setNewProject(prev => ({ 
+                          ...prev, 
+                          backend: {
+                            language: e.target.value,
+                            framework: backendFrameworks[e.target.value]?.[0] || 'express'
+                          }
+                        }))}
+                        className="form-select"
+                        disabled={createLoading}
+                      >
+                        {backendLanguages.map(lang => (
+                          <option key={lang} value={lang}>
+                            {lang.charAt(0).toUpperCase() + lang.slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="backend-framework-select">Backend Framework *</label>
+                      <select
+                        id="backend-framework-select"
+                        value={newProject.backend.framework}
+                        onChange={(e) => setNewProject(prev => ({ 
+                          ...prev, 
+                          backend: { ...prev.backend, framework: e.target.value }
+                        }))}
+                        className="form-select"
+                        disabled={createLoading}
+                      >
+                        {getBackendFrameworks().map(framework => (
+                          <option key={framework} value={framework}>
+                            {framework.charAt(0).toUpperCase() + framework.slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {setupStep === 'git' && (
+              <div className="form-section">
+                <h3>Git Setup</h3>
+                <div className="form-row">
                   <div className="form-group">
-                    <label htmlFor="git-remote-setup-select">Remote Setup *</label>
+                    <label htmlFor="git-workflow-select">Git Workflow *</label>
                     <select
-                      id="git-remote-setup-select"
-                      value={gitCloudMode}
+                      id="git-workflow-select"
+                      value={gitWorkflowMode}
                       onChange={(e) => {
-                        setGitCloudMode(e.target.value);
+                        const next = e.target.value;
+                        setGitWorkflowMode(next);
+                        setGitCloudMode('');
                         if (createError) {
                           setCreateError('');
                         }
                       }}
                       className="form-select"
                       disabled={createLoading}
+                      autoFocus
                     >
-                      <option value="">Select an option</option>
-                      <option value="create">Create a new repo</option>
-                      <option value="connect">Connect an existing repo (URL)</option>
+                      <option value="">Select a workflow</option>
+                      <option value="local">Local only</option>
+                      <option value="global">Cloud (use global git settings)</option>
+                      <option value="custom">Cloud (custom connection)</option>
                     </select>
+                  </div>
+
+                  {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && (
+                    <div className="form-group">
+                      <label htmlFor="git-remote-setup-select">Remote Setup *</label>
+                      <select
+                        id="git-remote-setup-select"
+                        value={gitCloudMode}
+                        onChange={(e) => {
+                          setGitCloudMode(e.target.value);
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-select"
+                        disabled={createLoading}
+                      >
+                        <option value="">Select an option</option>
+                        <option value="create">Create a new repo</option>
+                        <option value="connect">Connect an existing repo (URL)</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {gitWorkflowMode === 'custom' && (
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label htmlFor="git-provider-select">Git Provider *</label>
+                      <select
+                        id="git-provider-select"
+                        value={gitProvider}
+                        onChange={(e) => {
+                          setGitProvider(e.target.value);
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-select"
+                        disabled={createLoading}
+                      >
+                        <option value="github">GitHub</option>
+                        <option value="gitlab">GitLab</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="git-token-input">Personal Access Token *</label>
+                      <input
+                        id="git-token-input"
+                        type="password"
+                        placeholder="Enter PAT"
+                        value={gitToken}
+                        onChange={(e) => {
+                          setGitToken(e.target.value);
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-input"
+                        disabled={createLoading}
+                        autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'connect' && (
+                  <div className="form-row">
+                    <div className="form-group" style={{ width: '100%' }}>
+                      <label htmlFor="git-remote-url-input">Repository URL *</label>
+                      <input
+                        id="git-remote-url-input"
+                        type="text"
+                        placeholder="https://github.com/org/repo.git"
+                        value={gitRemoteUrl}
+                        onChange={(e) => {
+                          setGitRemoteUrl(e.target.value);
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-input"
+                        disabled={createLoading}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'create' && (
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label htmlFor="git-repo-name">Repository Name</label>
+                      <input
+                        id="git-repo-name"
+                        type="text"
+                        placeholder={newProject.name.trim() ? `Default: ${newProject.name.trim()}` : 'Repository name'}
+                        value={gitRepoName}
+                        onChange={(e) => {
+                          setGitRepoName(e.target.value);
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-input"
+                        disabled={createLoading}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="git-repo-owner">Owner / Org</label>
+                      <input
+                        id="git-repo-owner"
+                        type="text"
+                        placeholder="Optional"
+                        value={gitRepoOwner}
+                        onChange={(e) => {
+                          setGitRepoOwner(e.target.value);
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-input"
+                        disabled={createLoading}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="git-repo-visibility">Visibility</label>
+                      <select
+                        id="git-repo-visibility"
+                        value={gitRepoVisibility}
+                        onChange={(e) => setGitRepoVisibility(e.target.value)}
+                        className="form-select"
+                        disabled={createLoading}
+                      >
+                        <option value="private">Private</option>
+                        <option value="public">Public</option>
+                      </select>
+                    </div>
                   </div>
                 )}
               </div>
-
-              {gitWorkflowMode === 'custom' && (
-                <div className="form-row">
-                  <div className="form-group">
-                    <label htmlFor="git-provider-select">Git Provider *</label>
-                    <select
-                      id="git-provider-select"
-                      value={gitProvider}
-                      onChange={(e) => {
-                        setGitProvider(e.target.value);
-                        if (createError) {
-                          setCreateError('');
-                        }
-                      }}
-                      className="form-select"
-                      disabled={createLoading}
-                    >
-                      <option value="github">GitHub</option>
-                      <option value="gitlab">GitLab</option>
-                    </select>
-                  </div>
-
-                  <div className="form-group">
-                    <label htmlFor="git-token-input">Personal Access Token *</label>
-                    <input
-                      id="git-token-input"
-                      type="password"
-                      placeholder="Enter PAT"
-                      value={gitToken}
-                      onChange={(e) => {
-                        setGitToken(e.target.value);
-                        if (createError) {
-                          setCreateError('');
-                        }
-                      }}
-                      className="form-input"
-                      disabled={createLoading}
-                      autoComplete="off"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'connect' && (
-                <div className="form-row">
-                  <div className="form-group" style={{ width: '100%' }}>
-                    <label htmlFor="git-remote-url-input">Repository URL *</label>
-                    <input
-                      id="git-remote-url-input"
-                      type="text"
-                      placeholder="https://github.com/org/repo.git"
-                      value={gitRemoteUrl}
-                      onChange={(e) => {
-                        setGitRemoteUrl(e.target.value);
-                        if (createError) {
-                          setCreateError('');
-                        }
-                      }}
-                      className="form-input"
-                      disabled={createLoading}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'create' && (
-                <div className="form-row">
-                  <div className="form-group">
-                    <label htmlFor="git-repo-name">Repository Name</label>
-                    <input
-                      id="git-repo-name"
-                      type="text"
-                      placeholder={newProject.name.trim() ? `Default: ${newProject.name.trim()}` : 'Repository name'}
-                      value={gitRepoName}
-                      onChange={(e) => {
-                        setGitRepoName(e.target.value);
-                        if (createError) {
-                          setCreateError('');
-                        }
-                      }}
-                      className="form-input"
-                      disabled={createLoading}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label htmlFor="git-repo-owner">Owner / Org</label>
-                    <input
-                      id="git-repo-owner"
-                      type="text"
-                      placeholder="Optional"
-                      value={gitRepoOwner}
-                      onChange={(e) => {
-                        setGitRepoOwner(e.target.value);
-                        if (createError) {
-                          setCreateError('');
-                        }
-                      }}
-                      className="form-input"
-                      disabled={createLoading}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label htmlFor="git-repo-visibility">Visibility</label>
-                    <select
-                      id="git-repo-visibility"
-                      value={gitRepoVisibility}
-                      onChange={(e) => setGitRepoVisibility(e.target.value)}
-                      className="form-select"
-                      disabled={createLoading}
-                    >
-                      <option value="private">Private</option>
-                      <option value="public">Public</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="form-section">
-              <h3>Frontend Technology</h3>
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="frontend-language-select">Frontend Language *</label>
-                  <select
-                    id="frontend-language-select"
-                    value={newProject.frontend.language}
-                    onChange={(e) => setNewProject(prev => ({ 
-                      ...prev, 
-                      frontend: {
-                        language: e.target.value,
-                        framework: frontendFrameworks[e.target.value]?.[0] || 'react'
-                      }
-                    }))}
-                    className="form-select"
-                    disabled={createLoading}
-                  >
-                    {frontendLanguages.map(lang => (
-                      <option key={lang} value={lang}>
-                        {lang.charAt(0).toUpperCase() + lang.slice(1)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="frontend-framework-select">Frontend Framework *</label>
-                  <select
-                    id="frontend-framework-select"
-                    value={newProject.frontend.framework}
-                    onChange={(e) => setNewProject(prev => ({ 
-                      ...prev, 
-                      frontend: { ...prev.frontend, framework: e.target.value }
-                    }))}
-                    className="form-select"
-                    disabled={createLoading}
-                  >
-                    {getFrontendFrameworks().map(framework => (
-                      <option key={framework} value={framework}>
-                        {framework.charAt(0).toUpperCase() + framework.slice(1)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div className="form-section">
-              <h3>Backend Technology</h3>
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="backend-language-select">Backend Language *</label>
-                  <select
-                    id="backend-language-select"
-                    value={newProject.backend.language}
-                    onChange={(e) => setNewProject(prev => ({ 
-                      ...prev, 
-                      backend: {
-                        language: e.target.value,
-                        framework: backendFrameworks[e.target.value]?.[0] || 'express'
-                      }
-                    }))}
-                    className="form-select"
-                    disabled={createLoading}
-                  >
-                    {backendLanguages.map(lang => (
-                      <option key={lang} value={lang}>
-                        {lang.charAt(0).toUpperCase() + lang.slice(1)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="backend-framework-select">Backend Framework *</label>
-                  <select
-                    id="backend-framework-select"
-                    value={newProject.backend.framework}
-                    onChange={(e) => setNewProject(prev => ({ 
-                      ...prev, 
-                      backend: { ...prev.backend, framework: e.target.value }
-                    }))}
-                    className="form-select"
-                    disabled={createLoading}
-                  >
-                    {getBackendFrameworks().map(framework => (
-                      <option key={framework} value={framework}>
-                        {framework.charAt(0).toUpperCase() + framework.slice(1)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
+            )}
 
             {createError && (
               <div className="error-message">
@@ -973,13 +999,26 @@ const CreateProject = () => {
               >
                 Cancel
               </button>
+
+              {setupStep === 'git' && (
+                <button
+                  type="button"
+                  onClick={handleBackToDetails}
+                  className="git-settings-button secondary"
+                  disabled={createLoading}
+                >
+                  Back
+                </button>
+              )}
               
               <button
                 type="submit"
                 className="git-settings-button primary"
                 disabled={createLoading}
               >
-                {createLoading ? 'Creating Project...' : 'Create Project'}
+                {setupStep === 'details'
+                  ? 'Next'
+                  : (createLoading ? 'Creating Project...' : 'Create Project')}
               </button>
             </div>
           </form>

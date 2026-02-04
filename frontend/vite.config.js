@@ -11,6 +11,11 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       proxy: {
+        '/preview': {
+          target: apiTarget,
+          changeOrigin: true,
+          xfwd: true
+        },
         '/api': {
           target: apiTarget,
           changeOrigin: true

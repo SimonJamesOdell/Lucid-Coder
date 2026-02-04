@@ -147,6 +147,14 @@ const formatCheckedAt = (value) => {
   return date.toLocaleString();
 };
 
+const formatProviderLabel = (providerId) => {
+  if (!providerId) {
+    return null;
+  }
+  const provider = getProviderById(providerId);
+  return provider?.name || String(providerId);
+};
+
 const GettingStarted = ({ allowConfigured = false, onConfigured = null }) => {
   const {
     isLLMConfigured,
@@ -326,12 +334,21 @@ const GettingStarted = ({ allowConfigured = false, onConfigured = null }) => {
 
   const showConfiguredBanner = Boolean(llmStatus?.ready);
   const checkedAtLabel = formatCheckedAt(llmStatus?.checkedAt);
+  const configuredProvider = formatProviderLabel(llmConfig?.provider);
+  const configuredModel = llmConfig?.model ? String(llmConfig.model) : null;
 
   return (
     <div className="getting-started-panel">
       {showConfiguredBanner && (
         <div className="llm-configured-banner" data-testid="llm-configured-banner">
           <div className="llm-configured-title">✅ LLM configured</div>
+          {(configuredProvider || configuredModel) && (
+            <div className="llm-configured-details" data-testid="llm-configured-details">
+              {configuredProvider ? `Provider: ${configuredProvider}` : null}
+              {configuredProvider && configuredModel ? ' · ' : null}
+              {configuredModel ? `Model: ${configuredModel}` : null}
+            </div>
+          )}
           <div className="llm-configured-time" data-testid="llm-configured-time">
             Last checked: {checkedAtLabel}
           </div>
