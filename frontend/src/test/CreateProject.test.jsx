@@ -11,6 +11,15 @@ const mockFetchProjects = vi.fn();
 const mockCreateProjectRemoteRepository = vi.fn();
 const mockUpdateProjectGitSettings = vi.fn();
 
+const defaultGitSettings = {
+  provider: 'github',
+  username: 'global-user',
+  defaultBranch: 'main',
+  tokenPresent: true
+};
+
+let mockGitSettings = { ...defaultGitSettings };
+
 const socketInstances = [];
 let socketConfig = {
   connectError: true,
@@ -151,12 +160,7 @@ vi.mock('../context/AppStateContext', () => ({
     selectProject: mockSelectProject,
     showMain: mockShowMain,
     fetchProjects: mockFetchProjects,
-    gitSettings: {
-      provider: 'github',
-      username: 'global-user',
-      defaultBranch: 'main',
-      tokenPresent: true
-    },
+    gitSettings: mockGitSettings,
     createProjectRemoteRepository: mockCreateProjectRemoteRepository,
     updateProjectGitSettings: mockUpdateProjectGitSettings
   })
@@ -230,6 +234,7 @@ beforeEach(() => {
   vi.useRealTimers();
   MockEventSource.instances = [];
   global.EventSource = MockEventSource;
+  mockGitSettings = { ...defaultGitSettings };
   socketInstances.length = 0;
   socketConfig = {
     connectError: true,
@@ -490,6 +495,18 @@ describe('CreateProject Component', () => {
       expect(screen.getByLabelText('Description')).toHaveValue('New description');
     });
 
+    test('shows repository name placeholder when project name is blank', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
+
+      const repoNameInput = screen.getByLabelText('Repository Name');
+      expect(repoNameInput).toHaveAttribute('placeholder', 'Repository name');
+    });
+
     test('updates frontend language selection and resets framework', async () => {
       const { user } = renderComponent();
 
@@ -587,6 +604,93 @@ describe('CreateProject Component', () => {
           })
         );
       });
+    });
+
+    test('connects existing repo when global git settings need fallbacks', async () => {
+      mockGitSettings = {
+        ...defaultGitSettings,
+        provider: '',
+        username: null,
+        defaultBranch: '   '
+      };
+
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-fallbacks', name: 'My Project' } }));
+      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      await waitFor(() => {
+        expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
+      });
+
+      const updates = mockUpdateProjectGitSettings.mock.calls[0][1];
+      expect(updates.provider).toBe('github');
+      expect(updates.defaultBranch).toBe('main');
+      expect('username' in updates).toBe(false);
+    });
+
+    test('defaults to main branch when global defaultBranch is blank', async () => {
+      mockGitSettings = {
+        ...defaultGitSettings,
+        defaultBranch: ''
+      };
+
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-defaultbranch-empty', name: 'My Project' } }));
+      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      await waitFor(() => {
+        expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
+      });
+
+      const updates = mockUpdateProjectGitSettings.mock.calls[0][1];
+      expect(updates.defaultBranch).toBe('main');
+    });
+
+    test('falls back to github provider when custom provider is blank', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-custom-blank-provider', name: 'My Project' } }));
+      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+
+      fireEvent.change(screen.getByLabelText('Git Provider *'), { target: { value: '' } });
+
+      await user.type(screen.getByLabelText('Personal Access Token *'), 'test-token');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      await waitFor(() => {
+        expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
+      });
+
+      const updates = mockUpdateProjectGitSettings.mock.calls[0][1];
+      expect(updates.provider).toBe('github');
     });
 
     test('connects existing repo when using custom cloud workflow (includes token)', async () => {

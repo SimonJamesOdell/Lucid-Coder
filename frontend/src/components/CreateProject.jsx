@@ -474,13 +474,17 @@ const CreateProject = () => {
 
         if (isCloudWorkflow && projectData?.id) {
           setProgress((prev) => {
-            const snapshot = prev && typeof prev === 'object' ? prev : null;
-            return {
-              steps: snapshot?.steps?.length ? snapshot.steps : buildProgressSteps(true),
-              completion: snapshot?.completion ?? 100,
-              status: 'in-progress',
-              statusMessage: 'Setting up Git workflow...'
-            };
+            return Object.assign(
+              {
+                steps: buildProgressSteps(true),
+                completion: 100
+              },
+              prev,
+              {
+                status: 'in-progress',
+                statusMessage: 'Setting up Git workflow...'
+              }
+            );
           });
 
           const providerFromGlobal = (gitSettings?.provider || 'github').toLowerCase();
