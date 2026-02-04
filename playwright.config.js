@@ -21,8 +21,10 @@ const FRONTEND_URL = process.env.E2E_FRONTEND_URL || 'http://localhost:3100'
 const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://localhost:5100'
 // Local dev convenience: if servers are already running on the expected ports,
 // reuse them instead of failing with a "port is already used" error.
-// Opt out via E2E_NO_REUSE_SERVER=1.
-const REUSE_EXISTING_SERVER = !process.env.CI && process.env.E2E_NO_REUSE_SERVER !== '1'
+// IMPORTANT: this is now opt-in to avoid accidentally reusing a non-E2E backend
+// that points at a user's real database/settings.
+// Opt in via E2E_REUSE_SERVER=1.
+const REUSE_EXISTING_SERVER = !process.env.CI && process.env.E2E_REUSE_SERVER === '1'
 
 module.exports = defineConfig({
   testDir: './e2e',

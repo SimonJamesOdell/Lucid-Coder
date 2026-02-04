@@ -466,6 +466,7 @@ const useBranchTabState = ({
         `/api/projects/${projectId}/branches/${encodeURIComponent(branchName)}/tests`
       );
       const payload = response.data;
+      const payloadOverview = payload?.overview || null;
       const status = payload?.testRun?.status || payload?.status || payload?.lastTestStatus;
       const navigateToCommitsOnPass = options.navigateToCommitsOnPass === true;
       if (isPassingTestStatus(status)) {
@@ -476,8 +477,8 @@ const useBranchTabState = ({
       } else if (status) {
         markBranchInvalidated(branchName);
       }
-      const overview = await fetchBranches();
-      result = { ...payload, overview };
+      const fetchedOverview = await fetchBranches();
+      result = { ...payload, overview: fetchedOverview || payloadOverview };
     } catch (err) {
       console.error('Error running tests:', err);
       const message = err.response?.data?.error || 'Failed to run tests';

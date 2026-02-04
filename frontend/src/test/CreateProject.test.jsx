@@ -200,17 +200,34 @@ const fillDescription = async (user, value = 'A sample project') => {
 };
 
 const submitForm = async (user) => {
+  const form = within(screen.getByRole('form'));
+  const nextButton = form.queryByRole('button', { name: /next/i });
+  if (nextButton) {
+    await user.click(nextButton);
+  }
+
   const workflowSelect = screen.queryByLabelText('Git Workflow *');
-  if (workflowSelect && !workflowSelect.value) {
+  if (!workflowSelect) {
+    return;
+  }
+
+  if (!workflowSelect.value) {
     await user.selectOptions(workflowSelect, 'local');
   }
-  await user.click(
-    within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-  );
+
+  await user.click(form.getByRole('button', { name: /create project/i }));
 };
+
+const getNextButton = () =>
+  within(screen.getByRole('form')).getByRole('button', { name: /next/i });
 
 const getCreateProjectButton = () =>
   within(screen.getByRole('form')).getByRole('button', { name: /create project/i });
+
+const goToGitStep = async (user, name = 'My Project') => {
+  await fillProjectName(user, name);
+  await user.click(getNextButton());
+};
 
 const createSuccessResponse = (overrides = {}) => ({
   data: {
@@ -266,16 +283,15 @@ describe('CreateProject Component', () => {
       expect(screen.getByLabelText('Frontend Framework *')).toBeInTheDocument();
       expect(screen.getByLabelText('Backend Language *')).toBeInTheDocument();
       expect(screen.getByLabelText('Backend Framework *')).toBeInTheDocument();
-      expect(screen.getByLabelText('Git Workflow *')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-      expect(getCreateProjectButton()).toBeInTheDocument();
+      expect(getNextButton()).toBeInTheDocument();
+      expect(screen.queryByLabelText('Git Workflow *')).not.toBeInTheDocument();
     });
 
     test('has proper form sections', () => {
       render(<CreateProject />);
 
       expect(screen.getByText('Project Details')).toBeInTheDocument();
-      expect(screen.getByText('Git Setup')).toBeInTheDocument();
       expect(screen.getByText('Frontend Technology')).toBeInTheDocument();
       expect(screen.getByText('Backend Technology')).toBeInTheDocument();
     });
@@ -307,11 +323,9 @@ describe('CreateProject Component', () => {
       const { user } = renderComponent();
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       expect(screen.getByText(/git workflow selection is required/i)).toBeInTheDocument();
       expect(mockAxios.post).not.toHaveBeenCalled();
@@ -321,12 +335,10 @@ describe('CreateProject Component', () => {
       const { user } = renderComponent();
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       expect(screen.getByText(/remote setup selection is required/i)).toBeInTheDocument();
       expect(mockAxios.post).not.toHaveBeenCalled();
@@ -336,13 +348,11 @@ describe('CreateProject Component', () => {
       const { user } = renderComponent();
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       expect(screen.getByText(/repository url is required/i)).toBeInTheDocument();
       expect(mockAxios.post).not.toHaveBeenCalled();
@@ -352,13 +362,11 @@ describe('CreateProject Component', () => {
       const { user } = renderComponent();
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       expect(screen.getByText(/personal access token is required/i)).toBeInTheDocument();
       expect(mockAxios.post).not.toHaveBeenCalled();
@@ -368,7 +376,7 @@ describe('CreateProject Component', () => {
       const { user } = renderComponent();
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
 
       await user.click(getCreateProjectButton());
       expect(screen.getByText(/git workflow selection is required/i)).toBeInTheDocument();
@@ -397,7 +405,7 @@ describe('CreateProject Component', () => {
       const { user } = renderComponent();
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
 
@@ -449,6 +457,46 @@ describe('CreateProject Component', () => {
       expect(mockAxios.post).not.toHaveBeenCalled();
     });
 
+    test('clears required-name error when project name changes', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await user.click(getNextButton());
+
+      expect(screen.getByText('Project name is required')).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Project Name *'), 'My Project');
+      await waitFor(() => {
+        expect(screen.queryByText('Project name is required')).not.toBeInTheDocument();
+      });
+    });
+
+    test('shows required-name error when name becomes empty before git step submit', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+
+      const form = screen.getByRole('form');
+      const nextButton = getNextButton();
+      const projectNameInput = screen.getByLabelText('Project Name *');
+
+      await act(async () => {
+        fireEvent.change(projectNameInput, { target: { value: 'Temp' } });
+        fireEvent.click(nextButton);
+        fireEvent.change(projectNameInput, { target: { value: '' } });
+      });
+
+      expect(await screen.findByLabelText('Git Workflow *')).toBeInTheDocument();
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+
+      await act(async () => {
+        fireEvent.submit(form);
+      });
+
+      expect(await screen.findByText('Project name is required')).toBeInTheDocument();
+      expect(mockAxios.post).not.toHaveBeenCalled();
+    });
+
     test('shows error when project name is only whitespace', async () => {
       const { user } = renderComponent();
 
@@ -463,7 +511,7 @@ describe('CreateProject Component', () => {
     test('submit button is enabled to allow validation', () => {
       render(<CreateProject />);
 
-      expect(getCreateProjectButton()).not.toBeDisabled();
+      expect(getNextButton()).not.toBeDisabled();
     });
 
     test('submit button is enabled when name is provided', async () => {
@@ -472,7 +520,7 @@ describe('CreateProject Component', () => {
       render(<CreateProject />);
       await fillProjectName(user);
 
-      expect(getCreateProjectButton()).not.toBeDisabled();
+      expect(getNextButton()).not.toBeDisabled();
     });
   });
 
@@ -495,10 +543,33 @@ describe('CreateProject Component', () => {
       expect(screen.getByLabelText('Description')).toHaveValue('New description');
     });
 
-    test('shows repository name placeholder when project name is blank', async () => {
+    test('shows repository name placeholder based on project name', async () => {
       const { user } = renderComponent();
 
       render(<CreateProject />);
+
+      await goToGitStep(user, 'My Project');
+
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
+
+      const repoNameInput = screen.getByLabelText('Repository Name');
+      expect(repoNameInput).toHaveAttribute('placeholder', 'Default: My Project');
+    });
+
+    test('falls back to the generic repository name placeholder when project name is blank during git step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+
+      // Enter a name to advance, then clear it during the transition to exercise
+      // the defensive placeholder fallback while still on the git step.
+      const projectNameInput = screen.getByLabelText('Project Name *');
+      await act(async () => {
+        fireEvent.change(projectNameInput, { target: { value: 'Temp' } });
+        fireEvent.click(getNextButton());
+        fireEvent.change(projectNameInput, { target: { value: '' } });
+      });
 
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
@@ -584,14 +655,12 @@ describe('CreateProject Component', () => {
       mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
       await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       await waitFor(() => {
         expect(mockUpdateProjectGitSettings).toHaveBeenCalledWith(
@@ -619,14 +688,12 @@ describe('CreateProject Component', () => {
       mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
       await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       await waitFor(() => {
         expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
@@ -649,14 +716,12 @@ describe('CreateProject Component', () => {
       mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
       await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       await waitFor(() => {
         expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
@@ -672,7 +737,7 @@ describe('CreateProject Component', () => {
       mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
 
@@ -681,9 +746,7 @@ describe('CreateProject Component', () => {
       await user.type(screen.getByLabelText('Personal Access Token *'), 'test-token');
       await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       await waitFor(() => {
         expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
@@ -699,16 +762,14 @@ describe('CreateProject Component', () => {
       mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
       await user.selectOptions(screen.getByLabelText('Git Provider *'), 'gitlab');
       await user.type(screen.getByLabelText('Personal Access Token *'), 'glpat-test');
       await user.type(screen.getByLabelText('Repository URL *'), 'https://gitlab.com/octocat/my-project.git');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       await waitFor(() => {
         expect(mockUpdateProjectGitSettings).toHaveBeenCalledWith(
@@ -730,15 +791,13 @@ describe('CreateProject Component', () => {
       mockCreateProjectRemoteRepository.mockResolvedValueOnce({ success: true });
 
       render(<CreateProject />);
-      await fillProjectName(user, 'My Project');
+      await goToGitStep(user, 'My Project');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
       await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
       await user.selectOptions(screen.getByLabelText('Git Provider *'), 'gitlab');
       await user.type(screen.getByLabelText('Personal Access Token *'), 'glpat-test');
 
-      await user.click(
-        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
-      );
+      await user.click(getCreateProjectButton());
 
       await waitFor(() => {
         expect(mockCreateProjectRemoteRepository).toHaveBeenCalledWith(
@@ -1005,9 +1064,9 @@ describe('CreateProject Component', () => {
       await submitForm(user);
 
       await waitFor(() => {
-        expect(screen.getByLabelText('Project Name *')).toBeDisabled();
-        expect(screen.getByLabelText('Frontend Language *')).toBeDisabled();
-        expect(screen.getByLabelText('Backend Language *')).toBeDisabled();
+        // During creation the form is hidden, which prevents further edits.
+        expect(screen.queryByLabelText('Project Name *')).not.toBeInTheDocument();
+        expect(screen.getByText('Contacting backend server...')).toBeInTheDocument();
       });
 
       resolveRequest({ data: { success: false } });
@@ -1159,9 +1218,8 @@ describe('CreateProject Component', () => {
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Polling Error' }
       });
-      fireEvent.change(screen.getByLabelText('Git Workflow *'), {
-        target: { value: 'local' }
-      });
+      fireEvent.click(getNextButton());
+      fireEvent.change(screen.getByLabelText('Git Workflow *'), { target: { value: 'local' } });
       fireEvent.click(getCreateProjectButton());
 
       await act(async () => {
@@ -1203,9 +1261,8 @@ describe('CreateProject Component', () => {
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Polling Project' }
       });
-      fireEvent.change(screen.getByLabelText('Git Workflow *'), {
-        target: { value: 'local' }
-      });
+      fireEvent.click(getNextButton());
+      fireEvent.change(screen.getByLabelText('Git Workflow *'), { target: { value: 'local' } });
       fireEvent.click(getCreateProjectButton());
 
       await act(async () => {
@@ -1255,9 +1312,8 @@ describe('CreateProject Component', () => {
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Timestamp Guard' }
       });
-      fireEvent.change(screen.getByLabelText('Git Workflow *'), {
-        target: { value: 'local' }
-      });
+      fireEvent.click(getNextButton());
+      fireEvent.change(screen.getByLabelText('Git Workflow *'), { target: { value: 'local' } });
       fireEvent.click(getCreateProjectButton());
 
       await act(async () => {
@@ -1931,6 +1987,7 @@ describe('CreateProject Component', () => {
       await submitForm(user);
       await waitFor(() => expect(screen.getByText('Project name already exists')).toBeInTheDocument());
 
+      await user.click(within(screen.getByRole('form')).getByRole('button', { name: /back/i }));
       await fillProjectName(user, 'New Name');
 
       expect(screen.queryByText('Project name already exists')).not.toBeInTheDocument();

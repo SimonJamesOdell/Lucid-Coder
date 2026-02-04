@@ -86,6 +86,14 @@ describe('GettingStarted Component', () => {
   test('shows configured banner when LLM is ready', () => {
     setAppState({
       isLLMConfigured: true,
+      llmConfig: {
+        provider: 'groq',
+        model: 'openai/gpt-oss-120b',
+        apiUrl: 'https://api.groq.com/openai/v1',
+        configured: true,
+        requiresApiKey: true,
+        hasApiKey: true
+      },
       llmStatus: {
         configured: true,
         ready: true,
@@ -100,6 +108,8 @@ describe('GettingStarted Component', () => {
 
     expect(screen.getByTestId('llm-configured-banner')).toBeInTheDocument();
     expect(screen.getByText(/LLM configured/i)).toBeInTheDocument();
+    expect(screen.getByTestId('llm-configured-details')).toHaveTextContent('Provider: Groq');
+    expect(screen.getByTestId('llm-configured-details')).toHaveTextContent('Model: openai/gpt-oss-120b');
     expect(screen.getByTestId('llm-configured-time')).toHaveTextContent(/Last checked:/i);
     expect(screen.queryByLabelText('Provider')).toBeNull();
   });
@@ -120,6 +130,134 @@ describe('GettingStarted Component', () => {
     render(<GettingStarted allowConfigured />);
 
     expect(screen.getByTestId('llm-configured-time')).toHaveTextContent('Last checked: just now');
+  });
+
+  test('omits provider/model details when llmConfig is missing', () => {
+    setAppState({
+      isLLMConfigured: true,
+      llmConfig: null,
+      llmStatus: {
+        configured: true,
+        ready: true,
+        reason: null,
+        requiresApiKey: true,
+        hasApiKey: true,
+        checkedAt: '2026-01-31T12:00:00.000Z'
+      }
+    });
+
+    render(<GettingStarted allowConfigured />);
+
+    expect(screen.getByTestId('llm-configured-banner')).toBeInTheDocument();
+    expect(screen.queryByTestId('llm-configured-details')).toBeNull();
+  });
+
+  test('falls back to the raw provider id when provider metadata is unknown', () => {
+    setAppState({
+      isLLMConfigured: true,
+      llmConfig: {
+        provider: 'mystery-provider',
+        model: 'mystery-model',
+        apiUrl: 'https://example.invalid',
+        configured: true,
+        requiresApiKey: true,
+        hasApiKey: true
+      },
+      llmStatus: {
+        configured: true,
+        ready: true,
+        reason: null,
+        requiresApiKey: true,
+        hasApiKey: true,
+        checkedAt: '2026-01-31T12:00:00.000Z'
+      }
+    });
+
+    render(<GettingStarted allowConfigured />);
+
+    expect(screen.getByTestId('llm-configured-details')).toHaveTextContent('Provider: mystery-provider');
+    expect(screen.getByTestId('llm-configured-details')).toHaveTextContent('Model: mystery-model');
+  });
+
+  test('renders provider-only details when model is missing', () => {
+    setAppState({
+      isLLMConfigured: true,
+      llmConfig: {
+        provider: 'groq',
+        model: '',
+        apiUrl: 'https://api.groq.com/openai/v1',
+        configured: true,
+        requiresApiKey: true,
+        hasApiKey: true
+      },
+      llmStatus: {
+        configured: true,
+        ready: true,
+        reason: null,
+        requiresApiKey: true,
+        hasApiKey: true,
+        checkedAt: '2026-01-31T12:00:00.000Z'
+      }
+    });
+
+    render(<GettingStarted allowConfigured />);
+
+    const details = screen.getByTestId('llm-configured-details');
+    expect(details).toHaveTextContent('Provider: Groq');
+    expect(details.textContent).not.toContain('Model:');
+    expect(details.textContent).not.toContain('·');
+  });
+
+  test('renders model-only details when provider is missing', () => {
+    setAppState({
+      isLLMConfigured: true,
+      llmConfig: {
+        model: 'openai/gpt-oss-120b',
+        apiUrl: 'https://api.groq.com/openai/v1',
+        configured: true,
+        requiresApiKey: true,
+        hasApiKey: true
+      },
+      llmStatus: {
+        configured: true,
+        ready: true,
+        reason: null,
+        requiresApiKey: true,
+        hasApiKey: true,
+        checkedAt: '2026-01-31T12:00:00.000Z'
+      }
+    });
+
+    render(<GettingStarted allowConfigured />);
+
+    const details = screen.getByTestId('llm-configured-details');
+    expect(details).toHaveTextContent('Model: openai/gpt-oss-120b');
+    expect(details.textContent).not.toContain('Provider:');
+    expect(details.textContent).not.toContain('·');
+  });
+
+  test('does not render provider/model details when llmConfig has no provider/model values', () => {
+    setAppState({
+      isLLMConfigured: true,
+      llmConfig: {
+        apiUrl: 'https://api.groq.com/openai/v1',
+        configured: true,
+        requiresApiKey: true,
+        hasApiKey: true
+      },
+      llmStatus: {
+        configured: true,
+        ready: true,
+        reason: null,
+        requiresApiKey: true,
+        hasApiKey: true,
+        checkedAt: '2026-01-31T12:00:00.000Z'
+      }
+    });
+
+    render(<GettingStarted allowConfigured />);
+
+    expect(screen.queryByTestId('llm-configured-details')).toBeNull();
   });
 
   test('shows configuration form after clicking change configuration', async () => {

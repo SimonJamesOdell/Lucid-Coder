@@ -140,8 +140,9 @@ describe('Integration Tests', () => {
 
     await user.type(screen.getByLabelText('Project Name *'), 'Integration App');
     await user.type(screen.getByLabelText('Description'), 'End-to-end flow');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
-    fireEvent.submit(screen.getByRole('form'));
+    await user.click(screen.getByRole('button', { name: 'Create Project' }));
     await waitFor(() => expect(mockAxios.post).toHaveBeenCalledWith(
       '/api/projects',
       expect.objectContaining({
@@ -259,8 +260,9 @@ describe('Integration Tests', () => {
 
     await user.type(screen.getByLabelText('Project Name *'), 'Failing Project');
     await user.type(screen.getByLabelText('Description'), 'Should fail');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
-    fireEvent.submit(screen.getByRole('form'));
+    await user.click(screen.getByRole('button', { name: 'Create Project' }));
 
     const failureMessage = await screen.findByText((text) => text.includes('Project creation failed'));
     expect(failureMessage).toBeInTheDocument();

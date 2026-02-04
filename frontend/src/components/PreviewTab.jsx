@@ -39,6 +39,23 @@ export const getDevServerOriginFromWindow = ({ port, hostnameOverride } = {}) =>
   return `${protocol}//${hostname}:${port}`;
 };
 
+
+const getBackendOriginFromEnv = () => {
+  try {
+    const raw = import.meta?.env?.VITE_API_TARGET;
+    if (typeof raw !== 'string') {
+      return null;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return null;
+    }
+    return new URL(trimmed).origin;
+  } catch {
+    return null;
+  }
+};
+
 const PreviewTab = forwardRef(
   (
     {
@@ -97,6 +114,11 @@ const PreviewTab = forwardRef(
     const port = window.location?.port || '';
 
     const resolvedHostname = normalizeHostname(hostnameOverride || hostname);
+
+    const envOrigin = getBackendOriginFromEnv();
+    if (envOrigin) {
+      return envOrigin;
+    }
 
     // Dev default: the LucidCoder frontend runs on 3000 and the backend runs on 5000.
     if ((port === '3000' || port === '5173') && resolvedHostname) {
