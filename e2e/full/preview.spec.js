@@ -14,6 +14,7 @@ test('preview reload and context menu close', async ({ page, request }) => {
 
   await page.getByLabel('Project Name *').fill(projectName)
   await page.getByLabel('Description').fill('Preview flow test')
+  await page.getByLabel('Git Workflow *').selectOption('local')
   await page.getByRole('button', { name: 'Create Project', exact: true }).click()
 
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 60_000 })

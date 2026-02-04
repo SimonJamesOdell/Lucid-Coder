@@ -76,7 +76,9 @@ npm run e2e:debug
 
 Notes:
 - E2E uses a dedicated SQLite DB at `backend/e2e-lucidcoder.db` (deleted before each run).
-- If you already have servers running, you can set `E2E_FRONTEND_URL` / `E2E_BACKEND_URL` to reuse them.
+- E2E defaults to frontend `http://localhost:3100` and backend `http://localhost:5100` to avoid colliding with dev servers.
+- If you already have E2E servers running, Playwright will reuse them automatically (opt out with `E2E_NO_REUSE_SERVER=1`).
+- You can also explicitly point to running servers via `E2E_FRONTEND_URL` / `E2E_BACKEND_URL`.
 
 ### Individual Test Suites
 

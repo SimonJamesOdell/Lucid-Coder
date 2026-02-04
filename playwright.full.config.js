@@ -15,9 +15,14 @@ if (!process.env.E2E_PROJECTS_DIR) {
   process.env.E2E_PROJECTS_DIR = defaultProjectsDir
 }
 
-const FRONTEND_URL = process.env.E2E_FRONTEND_URL || 'http://localhost:3000'
-const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://localhost:5000'
-const REUSE_EXISTING_SERVER = Boolean(process.env.E2E_REUSE_SERVER) && !process.env.CI
+// Use dedicated default ports for E2E to avoid colliding with the normal dev
+// servers (commonly 3000/5000) and to make reuseExistingServer safe.
+const FRONTEND_URL = process.env.E2E_FRONTEND_URL || 'http://localhost:3100'
+const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://localhost:5100'
+// Local dev convenience: if servers are already running on the expected ports,
+// reuse them instead of failing with a "port is already used" error.
+// Opt out via E2E_NO_REUSE_SERVER=1.
+const REUSE_EXISTING_SERVER = !process.env.CI && process.env.E2E_NO_REUSE_SERVER !== '1'
 
 module.exports = defineConfig({
   testDir: './e2e/full',
@@ -44,19 +49,21 @@ module.exports = defineConfig({
       timeout: 120_000,
       env: {
         ...process.env,
-        PORT: '5000',
+        PORT: '5100',
         DATABASE_PATH: process.env.E2E_DB_PATH,
         PROJECTS_DIR: process.env.E2E_PROJECTS_DIR,
         E2E_SKIP_SCAFFOLDING: process.env.E2E_SKIP_SCAFFOLDING || '0'
       }
     },
     {
-      command: 'npm --prefix frontend run start -- --port 3000 --strictPort',
+      command: 'npm --prefix frontend run start -- --port 3100 --strictPort',
       url: FRONTEND_URL,
       reuseExistingServer: REUSE_EXISTING_SERVER,
       timeout: 120_000,
       env: {
-        ...process.env
+        ...process.env,
+        E2E_BACKEND_URL: BACKEND_URL,
+        VITE_API_TARGET: BACKEND_URL
       }
     }
   ],

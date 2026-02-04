@@ -13,7 +13,8 @@
   background: var(--background-primary, #0c0c0c);
   border: 1px solid var(--border-color, #333);
   border-radius: 0.75rem;
-  width: min(720px, 100%);
+  --settings-modal-panel-width: 960px;
+  width: min(var(--settings-modal-panel-width), 100%);
   max-height: calc(100vh - 6rem);
   overflow-y: auto;
   box-shadow: 0 25px 80px rgba(0, 0, 0, 0.45);

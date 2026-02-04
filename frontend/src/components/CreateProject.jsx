@@ -86,7 +86,15 @@ const generateProgressKey = () => {
 const POLL_SUPPRESSION_WINDOW_MS = 1500;
 
 const CreateProject = () => {
-  const { createProject, selectProject, showMain, fetchProjects } = useAppState();
+  const {
+    createProject,
+    selectProject,
+    showMain,
+    fetchProjects,
+    gitSettings,
+    createProjectRemoteRepository,
+    updateProjectGitSettings
+  } = useAppState();
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState('');
   const [progress, setProgress] = useState(null);
@@ -113,6 +121,15 @@ const CreateProject = () => {
       framework: 'express'
     }
   });
+
+  const [gitWorkflowMode, setGitWorkflowMode] = useState('');
+  const [gitCloudMode, setGitCloudMode] = useState('');
+  const [gitProvider, setGitProvider] = useState('github');
+  const [gitToken, setGitToken] = useState('');
+  const [gitRemoteUrl, setGitRemoteUrl] = useState('');
+  const [gitRepoName, setGitRepoName] = useState('');
+  const [gitRepoOwner, setGitRepoOwner] = useState('');
+  const [gitRepoVisibility, setGitRepoVisibility] = useState('private');
 
   const frontendLanguages = ['javascript', 'typescript'];
   const backendLanguages = ['javascript', 'typescript', 'python', 'java', 'csharp', 'go', 'rust', 'php', 'ruby', 'swift'];
@@ -387,6 +404,28 @@ const CreateProject = () => {
       return;
     }
 
+    if (!gitWorkflowMode) {
+      setCreateError('Git workflow selection is required');
+      return;
+    }
+
+    const isCloudWorkflow = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
+
+    if (isCloudWorkflow && !gitCloudMode) {
+      setCreateError('Remote setup selection is required for cloud workflows');
+      return;
+    }
+
+    if (isCloudWorkflow && gitCloudMode === 'connect' && !gitRemoteUrl.trim()) {
+      setCreateError('Repository URL is required to connect an existing repo');
+      return;
+    }
+
+    if (gitWorkflowMode === 'custom' && !gitToken.trim()) {
+      setCreateError('Personal access token is required for a custom cloud connection');
+      return;
+    }
+
     // Hide header immediately before any async operations
     const newProgressKey = generateProgressKey();
     setProgressKey(newProgressKey);
@@ -418,6 +457,8 @@ const CreateProject = () => {
       });
       
       if (response.data && response.data.success) {
+        const projectData = response.data.project;
+
         // Prefer progress streaming for UI updates. If the backend returns a final
         // snapshot (or streaming is unavailable), apply it.
         if (response.data.progress && !isEmptyProgressSnapshot(response.data.progress)) {
@@ -430,6 +471,61 @@ const CreateProject = () => {
             statusMessage: response.data.message || 'Project created successfully'
           });
         }
+
+        if (isCloudWorkflow && projectData?.id) {
+          setProgress((prev) => {
+            const snapshot = prev && typeof prev === 'object' ? prev : null;
+            return {
+              steps: snapshot?.steps?.length ? snapshot.steps : buildProgressSteps(true),
+              completion: snapshot?.completion ?? 100,
+              status: 'in-progress',
+              statusMessage: 'Setting up Git workflow...'
+            };
+          });
+
+          const providerFromGlobal = (gitSettings?.provider || 'github').toLowerCase();
+          const normalizedProvider = (gitWorkflowMode === 'custom' ? gitProvider : providerFromGlobal) || 'github';
+          const defaultBranch = (gitSettings?.defaultBranch || 'main').trim() || 'main';
+          const username = typeof gitSettings?.username === 'string' ? gitSettings.username.trim() : '';
+
+          if (gitCloudMode === 'create') {
+            const options = {
+              provider: normalizedProvider,
+              name: (gitRepoName.trim() || newProject.name.trim()),
+              owner: gitRepoOwner.trim(),
+              visibility: gitRepoVisibility,
+              description: newProject.description.trim()
+            };
+
+            if (username) {
+              options.username = username;
+            }
+
+            if (gitWorkflowMode === 'custom') {
+              options.token = gitToken.trim();
+            }
+
+            await createProjectRemoteRepository(projectData.id, options);
+          } else if (gitCloudMode === 'connect') {
+            const updates = {
+              workflow: 'cloud',
+              provider: normalizedProvider,
+              remoteUrl: gitRemoteUrl.trim(),
+              defaultBranch
+            };
+
+            if (username) {
+              updates.username = username;
+            }
+
+            if (gitWorkflowMode === 'custom') {
+              updates.token = gitToken.trim();
+            }
+
+            await updateProjectGitSettings(projectData.id, updates);
+          }
+        }
+
         setProgressKey(null);
         
         // Store process information
@@ -442,7 +538,6 @@ const CreateProject = () => {
         }
         
         // Auto-select the newly created project
-        const projectData = response.data.project;
         selectProject(projectData);
         
         // Show success for a moment before navigating
@@ -479,6 +574,14 @@ const CreateProject = () => {
         framework: 'express'
       }
     });
+    setGitWorkflowMode('');
+    setGitCloudMode('');
+    setGitProvider('github');
+    setGitToken('');
+    setGitRemoteUrl('');
+    setGitRepoName('');
+    setGitRepoOwner('');
+    setGitRepoVisibility('private');
     showMain();
   };
 
@@ -585,6 +688,174 @@ const CreateProject = () => {
                   />
                 </div>
               </div>
+            </div>
+
+            <div className="form-section">
+              <h3>Git Setup</h3>
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="git-workflow-select">Git Workflow *</label>
+                  <select
+                    id="git-workflow-select"
+                    value={gitWorkflowMode}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setGitWorkflowMode(next);
+                      setGitCloudMode('');
+                      if (createError) {
+                        setCreateError('');
+                      }
+                    }}
+                    className="form-select"
+                    disabled={createLoading}
+                  >
+                    <option value="">Select a workflow</option>
+                    <option value="local">Local only</option>
+                    <option value="global">Cloud (use global git settings)</option>
+                    <option value="custom">Cloud (custom connection)</option>
+                  </select>
+                </div>
+
+                {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && (
+                  <div className="form-group">
+                    <label htmlFor="git-remote-setup-select">Remote Setup *</label>
+                    <select
+                      id="git-remote-setup-select"
+                      value={gitCloudMode}
+                      onChange={(e) => {
+                        setGitCloudMode(e.target.value);
+                        if (createError) {
+                          setCreateError('');
+                        }
+                      }}
+                      className="form-select"
+                      disabled={createLoading}
+                    >
+                      <option value="">Select an option</option>
+                      <option value="create">Create a new repo</option>
+                      <option value="connect">Connect an existing repo (URL)</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {gitWorkflowMode === 'custom' && (
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="git-provider-select">Git Provider *</label>
+                    <select
+                      id="git-provider-select"
+                      value={gitProvider}
+                      onChange={(e) => {
+                        setGitProvider(e.target.value);
+                        if (createError) {
+                          setCreateError('');
+                        }
+                      }}
+                      className="form-select"
+                      disabled={createLoading}
+                    >
+                      <option value="github">GitHub</option>
+                      <option value="gitlab">GitLab</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="git-token-input">Personal Access Token *</label>
+                    <input
+                      id="git-token-input"
+                      type="password"
+                      placeholder="Enter PAT"
+                      value={gitToken}
+                      onChange={(e) => {
+                        setGitToken(e.target.value);
+                        if (createError) {
+                          setCreateError('');
+                        }
+                      }}
+                      className="form-input"
+                      disabled={createLoading}
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'connect' && (
+                <div className="form-row">
+                  <div className="form-group" style={{ width: '100%' }}>
+                    <label htmlFor="git-remote-url-input">Repository URL *</label>
+                    <input
+                      id="git-remote-url-input"
+                      type="text"
+                      placeholder="https://github.com/org/repo.git"
+                      value={gitRemoteUrl}
+                      onChange={(e) => {
+                        setGitRemoteUrl(e.target.value);
+                        if (createError) {
+                          setCreateError('');
+                        }
+                      }}
+                      className="form-input"
+                      disabled={createLoading}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'create' && (
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="git-repo-name">Repository Name</label>
+                    <input
+                      id="git-repo-name"
+                      type="text"
+                      placeholder={newProject.name.trim() ? `Default: ${newProject.name.trim()}` : 'Repository name'}
+                      value={gitRepoName}
+                      onChange={(e) => {
+                        setGitRepoName(e.target.value);
+                        if (createError) {
+                          setCreateError('');
+                        }
+                      }}
+                      className="form-input"
+                      disabled={createLoading}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="git-repo-owner">Owner / Org</label>
+                    <input
+                      id="git-repo-owner"
+                      type="text"
+                      placeholder="Optional"
+                      value={gitRepoOwner}
+                      onChange={(e) => {
+                        setGitRepoOwner(e.target.value);
+                        if (createError) {
+                          setCreateError('');
+                        }
+                      }}
+                      className="form-input"
+                      disabled={createLoading}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="git-repo-visibility">Visibility</label>
+                    <select
+                      id="git-repo-visibility"
+                      value={gitRepoVisibility}
+                      onChange={(e) => setGitRepoVisibility(e.target.value)}
+                      className="form-select"
+                      disabled={createLoading}
+                    >
+                      <option value="private">Private</option>
+                      <option value="public">Public</option>
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="form-section">

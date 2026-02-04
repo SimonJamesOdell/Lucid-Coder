@@ -6114,6 +6114,35 @@ describe('Projects API with Scaffolding', () => {
       tokenSpy.mockRestore();
     });
 
+    test('does not persist stored token into project settings when payload omits token', async () => {
+      const { project } = await createPersistedProject();
+      const remoteService = await import('../services/remoteRepoService.js');
+      vi.mocked(remoteService.createRemoteRepository).mockResolvedValueOnce({
+        provider: 'github',
+        id: '321',
+        name: 'demo',
+        owner: 'octocat',
+        remoteUrl: 'https://github.com/octocat/demo.git',
+        defaultBranch: 'main'
+      });
+
+      const databaseModule = await import('../database.js');
+      const tokenSpy = vi.spyOn(databaseModule, 'getGitSettingsToken').mockResolvedValueOnce('stored-token');
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/git/remotes`)
+        .send({ provider: 'github', name: 'demo' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+
+      const stored = await getProjectGitSettings(project.id);
+      expect(stored.remoteUrl).toBe('https://github.com/octocat/demo.git');
+      expect(stored.tokenPresent).toBe(false);
+
+      tokenSpy.mockRestore();
+    });
+
     test('returns initialization error when initial push fails', async () => {
       const { project } = await createPersistedProject();
       const remoteService = await import('../services/remoteRepoService.js');

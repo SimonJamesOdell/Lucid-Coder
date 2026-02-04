@@ -8,6 +8,8 @@ const mockCreateProject = vi.fn();
 const mockSelectProject = vi.fn();
 const mockShowMain = vi.fn();
 const mockFetchProjects = vi.fn();
+const mockCreateProjectRemoteRepository = vi.fn();
+const mockUpdateProjectGitSettings = vi.fn();
 
 const socketInstances = [];
 let socketConfig = {
@@ -148,7 +150,15 @@ vi.mock('../context/AppStateContext', () => ({
     createProject: mockCreateProject,
     selectProject: mockSelectProject,
     showMain: mockShowMain,
-    fetchProjects: mockFetchProjects
+    fetchProjects: mockFetchProjects,
+    gitSettings: {
+      provider: 'github',
+      username: 'global-user',
+      defaultBranch: 'main',
+      tokenPresent: true
+    },
+    createProjectRemoteRepository: mockCreateProjectRemoteRepository,
+    updateProjectGitSettings: mockUpdateProjectGitSettings
   })
 }));
 
@@ -186,6 +196,10 @@ const fillDescription = async (user, value = 'A sample project') => {
 };
 
 const submitForm = async (user) => {
+  const workflowSelect = screen.queryByLabelText('Git Workflow *');
+  if (workflowSelect && !workflowSelect.value) {
+    await user.selectOptions(workflowSelect, 'local');
+  }
   await user.click(
     within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
   );
@@ -247,6 +261,7 @@ describe('CreateProject Component', () => {
       expect(screen.getByLabelText('Frontend Framework *')).toBeInTheDocument();
       expect(screen.getByLabelText('Backend Language *')).toBeInTheDocument();
       expect(screen.getByLabelText('Backend Framework *')).toBeInTheDocument();
+      expect(screen.getByLabelText('Git Workflow *')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
       expect(getCreateProjectButton()).toBeInTheDocument();
     });
@@ -255,6 +270,7 @@ describe('CreateProject Component', () => {
       render(<CreateProject />);
 
       expect(screen.getByText('Project Details')).toBeInTheDocument();
+      expect(screen.getByText('Git Setup')).toBeInTheDocument();
       expect(screen.getByText('Frontend Technology')).toBeInTheDocument();
       expect(screen.getByText('Backend Technology')).toBeInTheDocument();
     });
@@ -282,6 +298,142 @@ describe('CreateProject Component', () => {
   });
 
   describe('Form Validation', () => {
+    test('shows error when git workflow is not selected', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      expect(screen.getByText(/git workflow selection is required/i)).toBeInTheDocument();
+      expect(mockAxios.post).not.toHaveBeenCalled();
+    });
+
+    test('shows error when cloud remote setup is not selected', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      expect(screen.getByText(/remote setup selection is required/i)).toBeInTheDocument();
+      expect(mockAxios.post).not.toHaveBeenCalled();
+    });
+
+    test('shows error when connecting cloud repo without URL', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      expect(screen.getByText(/repository url is required/i)).toBeInTheDocument();
+      expect(mockAxios.post).not.toHaveBeenCalled();
+    });
+
+    test('shows error when custom cloud workflow omits PAT', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      expect(screen.getByText(/personal access token is required/i)).toBeInTheDocument();
+      expect(mockAxios.post).not.toHaveBeenCalled();
+    });
+
+    test('clears git setup validation errors as the user selects options and types', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+
+      await user.click(getCreateProjectButton());
+      expect(screen.getByText(/git workflow selection is required/i)).toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      expect(screen.queryByText(/git workflow selection is required/i)).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Remote Setup *')).toBeInTheDocument();
+
+      await user.click(getCreateProjectButton());
+      expect(screen.getByText(/remote setup selection is required/i)).toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      expect(screen.queryByText(/remote setup selection is required/i)).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Repository URL *')).toBeInTheDocument();
+
+      await user.click(getCreateProjectButton());
+      expect(screen.getByText(/repository url is required/i)).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://example.com/org/repo.git');
+      await waitFor(() => {
+        expect(screen.queryByText(/repository url is required/i)).not.toBeInTheDocument();
+      });
+    });
+
+    test('clears custom workflow errors and covers repo create metadata edits', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
+
+      await user.click(getCreateProjectButton());
+      expect(screen.getByText(/personal access token is required/i)).toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText('Git Provider *'), 'gitlab');
+      await waitFor(() => {
+        expect(screen.queryByText(/personal access token is required/i)).not.toBeInTheDocument();
+      });
+
+      await user.click(getCreateProjectButton());
+      expect(screen.getByText(/personal access token is required/i)).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Personal Access Token *'), 'glpat-test');
+      await waitFor(() => {
+        expect(screen.queryByText(/personal access token is required/i)).not.toBeInTheDocument();
+      });
+
+      mockAxios.post.mockRejectedValueOnce(new Error('boom'));
+      await user.click(getCreateProjectButton());
+      expect(await screen.findByText('boom')).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Repository Name'), 'RepoName');
+      await waitFor(() => {
+        expect(screen.queryByText('boom')).not.toBeInTheDocument();
+      });
+
+      mockAxios.post.mockRejectedValueOnce(new Error('boom'));
+      await user.click(getCreateProjectButton());
+      expect(await screen.findByText('boom')).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Owner / Org'), 'octocat');
+      await waitFor(() => {
+        expect(screen.queryByText('boom')).not.toBeInTheDocument();
+      });
+
+      await user.selectOptions(screen.getByLabelText('Visibility'), 'public');
+      expect(screen.getByLabelText('Visibility')).toHaveValue('public');
+    });
+
     test('shows error when project name is empty', async () => {
       const { user } = renderComponent();
 
@@ -382,6 +534,8 @@ describe('CreateProject Component', () => {
     test('creates project with valid data and makes correct API calls', async () => {
       const { user } = renderComponent();
       mockAxios.post.mockResolvedValue(createSuccessResponse());
+      mockUpdateProjectGitSettings.mockResolvedValue({});
+      mockCreateProjectRemoteRepository.mockResolvedValue({});
 
       render(<CreateProject />);
       await fillProjectName(user, 'My Project');
@@ -405,6 +559,92 @@ describe('CreateProject Component', () => {
 
       expect(mockSelectProject).toHaveBeenCalledWith(expect.objectContaining({ name: 'My Project' }));
       expect(mockFetchProjects).toHaveBeenCalled();
+    });
+
+    test('connects existing repo when using global cloud workflow', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-global', name: 'My Project' } }));
+      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      await waitFor(() => {
+        expect(mockUpdateProjectGitSettings).toHaveBeenCalledWith(
+          'proj-cloud-global',
+          expect.objectContaining({
+            workflow: 'cloud',
+            provider: 'github',
+            remoteUrl: 'https://github.com/octocat/my-project.git',
+            defaultBranch: 'main'
+          })
+        );
+      });
+    });
+
+    test('connects existing repo when using custom cloud workflow (includes token)', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-custom-connect', name: 'My Project' } }));
+      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      await user.selectOptions(screen.getByLabelText('Git Provider *'), 'gitlab');
+      await user.type(screen.getByLabelText('Personal Access Token *'), 'glpat-test');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://gitlab.com/octocat/my-project.git');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      await waitFor(() => {
+        expect(mockUpdateProjectGitSettings).toHaveBeenCalledWith(
+          'proj-cloud-custom-connect',
+          expect.objectContaining({
+            workflow: 'cloud',
+            provider: 'gitlab',
+            remoteUrl: 'https://gitlab.com/octocat/my-project.git',
+            defaultBranch: 'main',
+            token: 'glpat-test'
+          })
+        );
+      });
+    });
+
+    test('creates a remote repo when using custom cloud workflow', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-custom', name: 'My Project' } }));
+      mockCreateProjectRemoteRepository.mockResolvedValueOnce({ success: true });
+
+      render(<CreateProject />);
+      await fillProjectName(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'create');
+      await user.selectOptions(screen.getByLabelText('Git Provider *'), 'gitlab');
+      await user.type(screen.getByLabelText('Personal Access Token *'), 'glpat-test');
+
+      await user.click(
+        within(screen.getByRole('form')).getByRole('button', { name: /create project/i })
+      );
+
+      await waitFor(() => {
+        expect(mockCreateProjectRemoteRepository).toHaveBeenCalledWith(
+          'proj-cloud-custom',
+          expect.objectContaining({
+            provider: 'gitlab',
+            token: 'glpat-test'
+          })
+        );
+      });
     });
 
     test('tolerates socket disconnect errors when closing progress stream', async () => {
@@ -815,6 +1055,9 @@ describe('CreateProject Component', () => {
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Polling Error' }
       });
+      fireEvent.change(screen.getByLabelText('Git Workflow *'), {
+        target: { value: 'local' }
+      });
       fireEvent.click(getCreateProjectButton());
 
       await act(async () => {
@@ -855,6 +1098,9 @@ describe('CreateProject Component', () => {
 
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Polling Project' }
+      });
+      fireEvent.change(screen.getByLabelText('Git Workflow *'), {
+        target: { value: 'local' }
       });
       fireEvent.click(getCreateProjectButton());
 
@@ -904,6 +1150,9 @@ describe('CreateProject Component', () => {
       render(<CreateProject />);
       fireEvent.change(screen.getByLabelText('Project Name *'), {
         target: { value: 'Timestamp Guard' }
+      });
+      fireEvent.change(screen.getByLabelText('Git Workflow *'), {
+        target: { value: 'local' }
       });
       fireEvent.click(getCreateProjectButton());
 

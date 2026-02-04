@@ -1,3 +1,7 @@
+.git-settings-panel {
+  --settings-modal-panel-width: 960px;
+}
+
 .git-settings-scope-row {
   display: flex;
   gap: 0.75rem;

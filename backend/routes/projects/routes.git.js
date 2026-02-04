@@ -316,7 +316,8 @@ export function registerProjectGitRoutes(router) {
       return res.status(400).json({ success: false, error: 'Repository name is required' });
     }
 
-    let token = (payload.token || '').trim();
+    const tokenFromPayload = typeof payload.token === 'string' ? payload.token.trim() : '';
+    let token = tokenFromPayload;
     if (!token) {
       token = (await getGitSettingsToken()) || '';
     }
@@ -350,9 +351,11 @@ export function registerProjectGitRoutes(router) {
           workflow: 'cloud',
           provider,
           remoteUrl: repository.remoteUrl,
-          defaultBranch: branchName,
-          token
+          defaultBranch: branchName
         };
+        if (tokenFromPayload) {
+          settingsPayload.token = tokenFromPayload;
+        }
         if (payload.username) {
           settingsPayload.username = String(payload.username).trim();
         }

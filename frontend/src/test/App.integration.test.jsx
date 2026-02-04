@@ -379,6 +379,7 @@ describe('App Component Integration', () => {
 
       await user.type(screen.getByLabelText('Project Name *'), 'Test Project')
       await user.type(screen.getByLabelText('Description'), 'Test description')
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
 
       await user.click(screen.getByText('Create Project'))
 
@@ -431,6 +432,7 @@ describe('App Component Integration', () => {
 
       await user.type(screen.getByLabelText('Project Name *'), 'Duplicate Project')
       await user.type(screen.getByLabelText('Description'), 'Test description')
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
 
       axios.post.mockRejectedValueOnce({
         response: {
@@ -462,6 +464,7 @@ describe('App Component Integration', () => {
 
       await user.type(screen.getByLabelText('Project Name *'), 'Flaky Project')
       await user.type(screen.getByLabelText('Description'), 'Flaky description')
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
 
       axios.post.mockRejectedValueOnce(new Error('Network error'))
 

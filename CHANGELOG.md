@@ -1,3 +1,12 @@
+## 0.5.1 (2026-02-04)
+- Require selecting a Git workflow when creating a new project, with support for local-only or cloud workflows (use global settings or a custom provider + PAT).
+- Add optional cloud remote setup on creation: create a new repository or connect an existing repository URL.
+- Ensure backend remote creation can use the stored global token without persisting it into per-project settings unless the client explicitly supplies a token.
+- Update Playwright E2E coverage for the new required Git workflow selection in create-project flows.
+- Improve E2E ergonomics/stability by defaulting to dedicated ports (3100/5100), reusing existing E2E servers in local dev, and making Vite proxy targets configurable.
+- Add placeholder “Tools” modals (Clean Up / Refactor / Add Tests / Audit Security) to replace alert-based stubs.
+- Simplify the LLM usage summary UI and align unit tests and responsive layout.
+
 ## 0.5.0 (2026-02-03)
 - Add `e2e:flake-check` scripts for quickly detecting Playwright flakes via repeated clean runs.
 - Add backend settings API contract tests (Supertest) to lock down response/error shapes.
