@@ -90,10 +90,14 @@ export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
         {
           role: 'system',
           content:
-            'Return ONLY valid JSON with a single key "branch". Example: {"branch":"added-navigation-bar"}. ' +
-            'The value must be a concise change description using a verb like "added", "changed", "fixed", or "updated" (two to five words), lowercase, hyphen-separated, max 40 chars. ' +
-            'Do NOT mention rules/constraints, do NOT output examples, and do NOT echo any numbers from the prompt (invalid: {"branch":"2-5"}). ' +
-            'Each hyphen-separated word must contain at least one letter a-z.'
+            'You generate a git branch name for the user request. ' +
+            'Return ONLY a single JSON object with one key: {"branch":"..."}. No extra keys, no prose, no code fences. ' +
+            'The branch value must be a short, human-meaningful change description (not meta text), written in lowercase kebab-case. ' +
+            'It MUST start with one verb: added, changed, fixed, updated, refactored, removed. ' +
+            'It MUST contain at least two words and at most five words total. ' +
+            'Each word MUST contain at least one letter a-z (no numeric-only words; no ranges; no constraint text). ' +
+            'Prefer using words/nouns that appear in the user request (plus minimal glue words like "modal"/"color" if needed). ' +
+            'Do NOT use meta/instructional words like: rules, json, schema, key, chars, words, tokens, prompt, requirement, branch.'
         },
         { role: 'user', content: `User request: "${prompt}"` }
       ];
@@ -103,11 +107,16 @@ export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
       {
         role: 'system',
         content:
-          'Return ONLY valid JSON with a single key "branch". ' +
-          'The value must be a concise change description using a verb like "added", "changed", "fixed", or "updated". ' +
-          'Examples: {"branch":"added-navigation-bar"}, {"branch":"changed-background-color"}, {"branch":"refactoring-simplification"}. ' +
-          'Rules: two to five words, lowercase, words separated by hyphens, max 40 chars. ' +
-          'Do NOT output the rules themselves (invalid: {"branch":"2-5"}). Each word must contain at least one letter a-z.'
+          'You generate a git branch name for the user request. ' +
+          'Return ONLY a single JSON object with one key: {"branch":"..."}. No extra keys, no prose, no code fences. ' +
+          'The branch value must be a short, human-meaningful change description, written in lowercase kebab-case. ' +
+          'Start with one verb: added, changed, fixed, updated, refactored, removed. ' +
+          'Use at least two words and at most five words total. Each word must contain at least one letter a-z.' +
+          ' Prefer using words/nouns from the user request; avoid meta words like rules/json/schema/prompt/requirement/branch.' +
+          '\n\nExamples (format only):' +
+          '\nUser request: "Turn the background blue" -> {"branch":"changed-background-blue"}' +
+          '\nUser request: "Fix the settings modal width" -> {"branch":"fixed-settings-modal-width"}' +
+          '\nUser request: "Remove dedup panels" -> {"branch":"removed-dedup-panels"}'
       },
       { role: 'user', content: `User request: "${prompt}"` }
     ];

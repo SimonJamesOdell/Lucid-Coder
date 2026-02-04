@@ -37,6 +37,7 @@ test('can create a project and reach main view', async ({ page, request }) => {
 
   await page.getByLabel('Project Name *').fill(projectName)
   await page.getByLabel('Description').fill('Created by Playwright E2E')
+  await page.getByLabel('Git Workflow *').selectOption('local')
   await page.getByRole('button', { name: 'Create Project', exact: true }).click()
 
   // CreateProject shows a progress UI briefly and then returns to the main view.
@@ -93,6 +94,7 @@ test('closing a project returns to project selector', async ({ page, request }) 
   await expect(page.getByRole('heading', { name: 'Create New Project' })).toBeVisible()
 
   await page.getByLabel('Project Name *').fill(projectName)
+  await page.getByLabel('Git Workflow *').selectOption('local')
   await page.getByRole('button', { name: 'Create Project', exact: true }).click()
 
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
@@ -114,6 +116,7 @@ test('can delete a project from the selector', async ({ page, request }) => {
   await expect(page.getByRole('heading', { name: 'Create New Project' })).toBeVisible()
 
   await page.getByLabel('Project Name *').fill(projectName)
+  await page.getByLabel('Git Workflow *').selectOption('local')
   await page.getByRole('button', { name: 'Create Project', exact: true }).click()
   await expect(page.getByTestId('close-project-button')).toBeVisible({ timeout: 30_000 })
 

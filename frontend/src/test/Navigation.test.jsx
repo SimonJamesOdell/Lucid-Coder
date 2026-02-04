@@ -425,29 +425,44 @@ describe('Navigation Component', () => {
     expect(screen.getByText('Audit Security')).toBeInTheDocument();
   });
 
-  test('tool actions show placeholder alerts when triggered', async () => {
+  test('tool actions open and close their modals', async () => {
     const { user } = renderNavigation();
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
 
     await user.click(screen.getByRole('button', { name: /Tools/ }));
     await user.click(screen.getByText('Clean Up'));
 
+    expect(await screen.findByTestId('tool-cleanup-modal')).toBeInTheDocument();
+    await user.click(screen.getByTestId('tool-cleanup-close'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('tool-cleanup-modal')).not.toBeInTheDocument();
+    });
+
     await user.click(screen.getByRole('button', { name: /Tools/ }));
     await user.click(screen.getByText('Refactor'));
+
+    expect(await screen.findByTestId('tool-refactor-modal')).toBeInTheDocument();
+    await user.click(screen.getByTestId('tool-refactor-close'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('tool-refactor-modal')).not.toBeInTheDocument();
+    });
 
     await user.click(screen.getByRole('button', { name: /Tools/ }));
     await user.click(screen.getByText('Add Tests'));
 
+    expect(await screen.findByTestId('tool-add-tests-modal')).toBeInTheDocument();
+    await user.click(screen.getByTestId('tool-add-tests-close'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('tool-add-tests-modal')).not.toBeInTheDocument();
+    });
+
     await user.click(screen.getByRole('button', { name: /Tools/ }));
     await user.click(screen.getByText('Audit Security'));
 
-    expect(alertSpy).toHaveBeenCalledTimes(4);
-    expect(alertSpy).toHaveBeenNthCalledWith(1, 'Clean Up tool would execute here');
-    expect(alertSpy).toHaveBeenNthCalledWith(2, 'Refactor tool would execute here');
-    expect(alertSpy).toHaveBeenNthCalledWith(3, 'Add Tests tool would execute here');
-    expect(alertSpy).toHaveBeenNthCalledWith(4, 'Audit Security tool would execute here');
-
-    alertSpy.mockRestore();
+    expect(await screen.findByTestId('tool-audit-security-modal')).toBeInTheDocument();
+    await user.click(screen.getByTestId('tool-audit-security-close'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('tool-audit-security-modal')).not.toBeInTheDocument();
+    });
   });
 
   test('create project triggers the create project view', async () => {

@@ -1,5 +1,5 @@
 .port-settings-panel {
-  width: min(520px, 100%);
+  --settings-modal-panel-width: 960px;
 }
 
 .port-settings-form {

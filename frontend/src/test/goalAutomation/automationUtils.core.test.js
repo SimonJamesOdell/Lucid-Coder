@@ -110,6 +110,28 @@ describe('requestBranchNameFromLLM', () => {
       consoleSpy.mockRestore();
     }
   });
+
+  it('uses an example-based prompt that avoids numeric-range parroting', async () => {
+    const payloads = [];
+    axios.post.mockImplementation((url, payload) => {
+      payloads.push(payload);
+      throw new Error('offline');
+    });
+
+    const result = await requestBranchNameFromLLM({
+      prompt: 'Turn the background of the project blue',
+      fallbackName: 'fallback-name'
+    });
+
+    expect(result).toBe('fallback-name');
+    expect(payloads.length).toBeGreaterThanOrEqual(1);
+
+    const systemContent = payloads[0]?.messages?.[0]?.content || '';
+    expect(systemContent).toContain('Return ONLY a single JSON object');
+    expect(systemContent).toContain('changed-background-blue');
+    expect(systemContent).toContain('Prefer using words');
+    expect(systemContent).not.toMatch(/\b2-5\b/);
+  });
 });
 
 describe('parseTextFromLLMResponse', () => {

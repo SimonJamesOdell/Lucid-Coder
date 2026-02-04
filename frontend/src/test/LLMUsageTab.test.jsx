@@ -291,8 +291,8 @@ describe('LLMUsageTab', () => {
 
     expect(await screen.findByTestId('llm-usage-requested')).toHaveTextContent('10');
     expect(screen.getByTestId('llm-usage-outbound')).toHaveTextContent('4');
-    expect(screen.getByTestId('llm-usage-dedup-inflight')).toHaveTextContent('3');
-    expect(screen.getByTestId('llm-usage-dedup-recent')).toHaveTextContent('2');
+    expect(screen.queryByTestId('llm-usage-dedup-inflight')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('llm-usage-dedup-recent')).not.toBeInTheDocument();
 
     expect(screen.getByTestId('llm-usage-phase-table')).toBeInTheDocument();
     expect(screen.getByText('classification')).toBeInTheDocument();

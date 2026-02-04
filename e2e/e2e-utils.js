@@ -1,4 +1,4 @@
-const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://localhost:5000'
+const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://localhost:5100'
 
 const ensureBootstrapped = async ({ request }) => {
   // Configure an API-key-less provider so the UI can proceed without manual setup.

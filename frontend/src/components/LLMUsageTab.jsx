@@ -155,9 +155,7 @@ const LLMUsageTab = () => {
   const summary = useMemo(
     () => ({
       requested: getKindCount(counters, 'requested'),
-      outbound: getKindCount(counters, 'outbound'),
-      dedupInflight: getKindCount(counters, 'dedup_inflight'),
-      dedupRecent: getKindCount(counters, 'dedup_recent')
+      outbound: getKindCount(counters, 'outbound')
     }),
     [counters]
   );
@@ -183,7 +181,7 @@ const LLMUsageTab = () => {
         <div>
           <h2>LLM Usage</h2>
           <div className="llm-usage-subtitle">
-            Tracks requested calls vs outbound API calls, plus dedup hits.
+            Tracks requested calls vs outbound API calls.
           </div>
         </div>
 
@@ -271,22 +269,6 @@ const LLMUsageTab = () => {
             {summary.outbound}
           </div>
           <div className="llm-usage-card-note">Actual provider requests</div>
-        </div>
-
-        <div className="llm-usage-card">
-          <div className="llm-usage-card-title">Dedup (in-flight)</div>
-          <div className="llm-usage-card-value" data-testid="llm-usage-dedup-inflight">
-            {summary.dedupInflight}
-          </div>
-          <div className="llm-usage-card-note">Concurrent identical calls merged</div>
-        </div>
-
-        <div className="llm-usage-card">
-          <div className="llm-usage-card-title">Dedup (recent)</div>
-          <div className="llm-usage-card-value" data-testid="llm-usage-dedup-recent">
-            {summary.dedupRecent}
-          </div>
-          <div className="llm-usage-card-note">Cached identical calls reused</div>
         </div>
       </div>
 

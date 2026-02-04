@@ -1,5 +1,5 @@
 param(
-  [int[]]$Ports = @(3000, 5000)
+  [int[]]$Ports = @(3100, 5100)
 )
 
 $ErrorActionPreference = 'Stop'

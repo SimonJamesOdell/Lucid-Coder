@@ -1,5 +1,5 @@
 .llm-config-panel {
-  width: min(960px, 100%);
+  --settings-modal-panel-width: 960px;
 }
 
 .llm-config-body {

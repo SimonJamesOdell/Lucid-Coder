@@ -6,6 +6,10 @@ import moonIcon from '../assets/icon-theme-moon.svg';
 import GitSettingsModal from './GitSettingsModal';
 import PortSettingsModal from './PortSettingsModal';
 import LLMConfigModal from './LLMConfigModal';
+import CleanUpToolModal from './CleanUpToolModal';
+import RefactorToolModal from './RefactorToolModal';
+import AddTestsToolModal from './AddTestsToolModal';
+import AuditSecurityToolModal from './AuditSecurityToolModal';
 import './Navigation.css';
 
 const Navigation = ({ versionLabel = null }) => {
@@ -35,6 +39,10 @@ const Navigation = ({ versionLabel = null }) => {
   const [isGitSettingsOpen, setGitSettingsOpen] = useState(false);
   const [isPortSettingsOpen, setPortSettingsOpen] = useState(false);
   const [isLLMConfigOpen, setLLMConfigOpen] = useState(false);
+  const [isCleanUpToolOpen, setCleanUpToolOpen] = useState(false);
+  const [isRefactorToolOpen, setRefactorToolOpen] = useState(false);
+  const [isAddTestsToolOpen, setAddTestsToolOpen] = useState(false);
+  const [isAuditSecurityToolOpen, setAuditSecurityToolOpen] = useState(false);
 
   const handleCreateProject = async () => {
     if (currentProject?.id && typeof closeProject === 'function') {
@@ -118,9 +126,15 @@ const Navigation = ({ versionLabel = null }) => {
     }
   };
 
-  const handleToolAction = (toolName) => {
-    alert(`${toolName} tool would execute here`);
-  };
+  const handleOpenCleanUpTool = () => setCleanUpToolOpen(true);
+  const handleOpenRefactorTool = () => setRefactorToolOpen(true);
+  const handleOpenAddTestsTool = () => setAddTestsToolOpen(true);
+  const handleOpenAuditSecurityTool = () => setAuditSecurityToolOpen(true);
+
+  const handleCloseCleanUpTool = () => setCleanUpToolOpen(false);
+  const handleCloseRefactorTool = () => setRefactorToolOpen(false);
+  const handleCloseAddTestsTool = () => setAddTestsToolOpen(false);
+  const handleCloseAuditSecurityTool = () => setAuditSecurityToolOpen(false);
 
   const handleOpenLlmUsage = () => {
     if (typeof setPreviewPanelTab === 'function') {
@@ -148,21 +162,22 @@ const Navigation = ({ versionLabel = null }) => {
           disabled={!canUseProjects}
           className="nav-dropdown"
         >
-          {projects.length === 0 ? (
-            <DropdownLabel>No projects available</DropdownLabel>
-          ) : (
+          <DropdownLabel>Select Project</DropdownLabel>
+
+          {projects && projects.length > 0 ? (
             <>
-              <DropdownLabel>Select Project:</DropdownLabel>
-              {projects.map(project => (
-                <DropdownItem 
+              {projects.map((project) => (
+                <DropdownItem
                   key={project.id}
-                  onClick={() => selectProject(project)}
                   className={currentProject?.id === project.id ? 'active' : ''}
+                  onClick={() => selectProject(project)}
                 >
                   {project.name}
                 </DropdownItem>
               ))}
             </>
+          ) : (
+            <DropdownLabel>No projects available</DropdownLabel>
           )}
           
           <DropdownDivider />
@@ -199,19 +214,19 @@ const Navigation = ({ versionLabel = null }) => {
           disabled={!canUseTools}
           className="nav-dropdown"
         >
-          <DropdownItem onClick={() => handleToolAction('Clean Up')}>
+          <DropdownItem onClick={handleOpenCleanUpTool}>
             Clean Up
           </DropdownItem>
           
-          <DropdownItem onClick={() => handleToolAction('Refactor')}>
+          <DropdownItem onClick={handleOpenRefactorTool}>
             Refactor
           </DropdownItem>
           
-          <DropdownItem onClick={() => handleToolAction('Add Tests')}>
+          <DropdownItem onClick={handleOpenAddTestsTool}>
             Add Tests
           </DropdownItem>
           
-          <DropdownItem onClick={() => handleToolAction('Audit Security')}>
+          <DropdownItem onClick={handleOpenAuditSecurityTool}>
             Audit Security
           </DropdownItem>
         </Dropdown>
@@ -295,6 +310,11 @@ const Navigation = ({ versionLabel = null }) => {
       />
 
       <LLMConfigModal isOpen={isLLMConfigOpen} onClose={handleCloseLLMConfig} />
+
+      <CleanUpToolModal isOpen={isCleanUpToolOpen} onClose={handleCloseCleanUpTool} />
+      <RefactorToolModal isOpen={isRefactorToolOpen} onClose={handleCloseRefactorTool} />
+      <AddTestsToolModal isOpen={isAddTestsToolOpen} onClose={handleCloseAddTestsTool} />
+      <AuditSecurityToolModal isOpen={isAuditSecurityToolOpen} onClose={handleCloseAuditSecurityTool} />
     </nav>
   );
 };
