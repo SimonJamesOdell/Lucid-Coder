@@ -1,6 +1,3 @@
-const DONE_QUESTION = 'What should "done" look like? Please provide acceptance criteria.';
-const EXPECTED_ACTUAL_QUESTION = 'What is the expected behavior, and what is currently happening?';
-
 const extractAcceptanceCriteria = (prompt = '') => {
   const lines = prompt.split(/\r?\n/);
   let sectionStart = -1;
@@ -52,53 +49,27 @@ const normalizeClarifyingQuestions = (questions = []) => {
   return Array.from(new Set(cleaned));
 };
 
-const looksUnderspecified = (prompt) => {
-  const normalized = prompt.trim().toLowerCase();
-  if (!normalized) return true;
-
-  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
-  if (wordCount <= 2) return true;
-
-  if (/^(build|make|create)\b/.test(normalized) && /\b(something|anything|stuff|thing)\b/.test(normalized)) {
-    return true;
-  }
-
-  return false;
-};
-
-const looksLikeBugFix = (prompt) => /\b(fix|bug|broken|error|issue|crash)\b/i.test(prompt);
-
-const hasExpectedActualContext = (prompt) =>
-  /\b(expected|actual|currently|steps to reproduce|repro)\b/i.test(prompt);
-
-const extractClarifyingQuestions = ({ prompt, acceptanceCriteria = [] }) => {
-  if (acceptanceCriteria.length > 0) return [];
-
-  const questions = [];
-  if (looksUnderspecified(prompt) || looksLikeBugFix(prompt)) {
-    questions.push(DONE_QUESTION);
-  }
-
-  if (looksLikeBugFix(prompt) && !hasExpectedActualContext(prompt)) {
-    questions.push(EXPECTED_ACTUAL_QUESTION);
-  }
-
-  return Array.from(new Set(questions)).filter(Boolean);
-};
-
 const createRequestClarificationQuestions = ({ llmClient, extractJsonObject }) => async (prompt, projectContext) => {
+  const rawPrompt = typeof prompt === 'string' ? prompt : '';
+
   const systemMessage = {
     role: 'system',
     content:
       'You are a senior product engineer. Given a user request and project context, ' +
       'return ONLY JSON in the shape { "needsClarification": boolean, "questions": [string] }. ' +
-      'Ask short, specific questions only if required to implement the request correctly. ' +
-      'If the request is sufficiently specified, return {"needsClarification": false, "questions": []}. '
+      'Ask short, specific questions only if a missing detail blocks implementation. ' +
+      'Do not ask for acceptance criteria or vague confirmations. ' +
+      'If reasonable defaults can be assumed (colors, spacing, generic labels), do so and return no questions. ' +
+      'If the request is sufficiently specified, return {"needsClarification": false, "questions": []}. ' +
+      'Examples: ' +
+      '"Add a navigation bar along the top with Home, About, Contact and Products; Products has a dropdown with 3 generic categories." => {"needsClarification": false, "questions": []}. ' +
+      '"Change the background color to red" => {"needsClarification": false, "questions": []}. ' +
+      '"Fix the crash" with no repro steps => needsClarification true with a question about steps and expected vs actual.'
   };
 
   const userMessage = {
     role: 'user',
-    content: ['Project context:', projectContext || 'Unavailable', '', `User request: "${prompt}"`].join('\n')
+    content: ['Project context:', projectContext || 'Unavailable', '', `User request: "${rawPrompt}"`].join('\n')
   };
 
   const raw = await llmClient.generateResponse([systemMessage, userMessage], {
@@ -118,11 +89,7 @@ const createBuildGoalMetadataFromPrompt = ({ isStyleOnlyPrompt }) =>
   ({ prompt, extraClarifyingQuestions = [] } = {}) => {
     const rawPrompt = typeof prompt === 'string' ? prompt : '';
     const acceptanceCriteria = extractAcceptanceCriteria(rawPrompt);
-    const autoQuestions = extractClarifyingQuestions({ prompt: rawPrompt, acceptanceCriteria });
-    const clarifyingQuestions = normalizeClarifyingQuestions([
-      ...autoQuestions,
-      ...extraClarifyingQuestions
-    ]);
+    const clarifyingQuestions = normalizeClarifyingQuestions(extraClarifyingQuestions);
     const styleOnly = isStyleOnlyPrompt(rawPrompt);
 
     const metadata = {

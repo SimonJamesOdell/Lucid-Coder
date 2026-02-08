@@ -1,3 +1,11 @@
+## 0.5.4 (2026-02-08)
+- Move clarification questions into a modal with per-question inputs, pause/resume/cancel controls, and answer submission back into the agent.
+- Integrate the Runs view into the LLM Usage page via Usage/Runs tabs while keeping the usage summary intact.
+- Refresh Goals immediately after creation and tighten goal automation handling around clarification/goal updates.
+- Make OpenAI-compatible fallback timeouts configurable for /completions and /responses endpoints.
+- Refine clarification prompting behavior to avoid default acceptance-criteria questions unless required.
+- Extend coverage-focused tests across ChatPanel, LLM usage, LLM client, and goal metadata flows to keep strict gates green.
+
 ## 0.5.3 (2026-02-08)
 - Introduce the Clean Up tool end-to-end: backend foreground cleanup runner with strict coverage gates, SSE streaming endpoint, and a full UI modal flow (progress logs, cancellation, and branch cleanup decisions).
 - Add cleanup resume coordination + request storage so automation can reopen and resume cleanup after passing test runs.

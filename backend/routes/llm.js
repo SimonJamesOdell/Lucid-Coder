@@ -1,8 +1,9 @@
 import express from 'express';
+import axios from 'axios';
 import { db_operations } from '../database.js';
 import { encryptApiKey } from '../encryption.js';
 import { decryptApiKey } from '../encryption.js';
-import { llmClient } from '../llm-client.js';
+import { llmClient, LLMClient } from '../llm-client.js';
 import { llmRequestMetrics } from '../services/llmRequestMetrics.js';
 
 const router = express.Router();
@@ -15,6 +16,74 @@ const sanitizeApiKey = (value) => {
     return '';
   }
   return value.replace(/[\u0000-\u001F\u007F]+/g, '').trim();
+};
+
+const normalizeApiUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
+
+const shouldValidateModelAccess = (provider) => String(provider || '').toLowerCase() === 'openai';
+
+const buildOpenAiModelUrl = (apiUrl, model) => {
+  const baseUrl = normalizeApiUrl(apiUrl);
+  return `${baseUrl}/models/${encodeURIComponent(String(model || '').trim())}`;
+};
+
+const formatModelAccessError = (error, { apiUrl, model }) => {
+  const status = error?.response?.status;
+  const errorMessage =
+    error?.response?.data?.error?.message
+    || error?.response?.data?.error
+    || error?.response?.data?.message
+    || error?.message;
+
+  if (typeof errorMessage === 'string' && errorMessage.trim()) {
+    return errorMessage.trim();
+  }
+
+  if (status === 404) {
+    return `Model lookup failed (404). Check API URL (${normalizeApiUrl(apiUrl) || 'missing'}) and model name (${model}).`;
+  }
+
+  return 'Failed to verify model access.';
+};
+
+const verifyOpenAiModelAccess = async ({ apiUrl, apiKey, model }) => {
+  const url = buildOpenAiModelUrl(apiUrl, model);
+  const sanitizedKey = sanitizeApiKey(apiKey);
+
+  try {
+    await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${sanitizedKey}`
+      }
+    });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: formatModelAccessError(error, { apiUrl, model })
+    };
+  }
+};
+
+const runRuntimeProbe = async ({ provider, model, apiUrl, apiKey, requiresApiKey }) => {
+  const probeClient = new LLMClient();
+  probeClient.config = {
+    provider,
+    model,
+    api_url: apiUrl,
+    requires_api_key: requiresApiKey
+  };
+  probeClient.apiKey = apiKey || null;
+
+  await probeClient.generateResponse(
+    [{ role: 'user', content: 'Test connection - respond with "OK".' }],
+    {
+      max_tokens: 12,
+      temperature: 0,
+      __lucidcoderRequestType: 'test',
+      __lucidcoderPhase: 'llm-config-test'
+    }
+  );
 };
 
 const summarizeSafeConfig = (config) => ({
@@ -146,6 +215,28 @@ router.post('/test', async (req, res) => {
     // Test the connection
     const result = await llmClient.testConnection(testConfig);
 
+    if (shouldValidateModelAccess(provider)) {
+      const modelAccess = await verifyOpenAiModelAccess({
+        apiUrl,
+        apiKey: effectiveApiKey,
+        model
+      });
+      if (!modelAccess.ok) {
+        return res.status(400).json({
+          success: false,
+          error: modelAccess.error
+        });
+      }
+    }
+
+    await runRuntimeProbe({
+      provider,
+      model,
+      apiUrl,
+      apiKey: providerWithoutKey ? null : effectiveApiKey,
+      requiresApiKey
+    });
+
     console.log(`✅ LLM test successful: ${provider}/${model}`, result);
 
     res.json({
@@ -186,12 +277,12 @@ router.post('/configure', async (req, res) => {
     const requiresApiKey = !providerWithoutKey;
 
     let encryptedApiKey = null;
+    let effectiveApiKey = sanitizeApiKey(apiKey);
 
     if (requiresApiKey) {
-      const sanitizedApiKey = sanitizeApiKey(apiKey);
-      if (sanitizedApiKey) {
+      if (effectiveApiKey) {
         // Encrypt API key if required
-        encryptedApiKey = encryptApiKey(sanitizedApiKey);
+        encryptedApiKey = encryptApiKey(effectiveApiKey);
         if (!encryptedApiKey) {
           return res.status(500).json({
             success: false,
@@ -222,6 +313,21 @@ router.post('/configure', async (req, res) => {
         }
 
         encryptedApiKey = activeConfig.api_key_encrypted;
+        effectiveApiKey = decrypted;
+      }
+    }
+
+    if (shouldValidateModelAccess(provider)) {
+      const modelAccess = await verifyOpenAiModelAccess({
+        apiUrl,
+        apiKey: effectiveApiKey,
+        model
+      });
+      if (!modelAccess.ok) {
+        return res.status(400).json({
+          success: false,
+          error: modelAccess.error
+        });
       }
     }
 
@@ -421,6 +527,14 @@ router.get('/logs', async (req, res) => {
       error: 'Failed to retrieve logs'
     });
   }
+});
+
+router.__testHooks = router.__testHooks || {};
+Object.assign(router.__testHooks, {
+  normalizeApiUrl,
+  shouldValidateModelAccess,
+  buildOpenAiModelUrl,
+  formatModelAccessError
 });
 
 export default router;

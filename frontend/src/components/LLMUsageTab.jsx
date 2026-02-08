@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import RunsTab from './RunsTab';
 import './LLMUsageTab.css';
 
 const DEFAULT_REFRESH_MS = 2000;
@@ -31,13 +32,14 @@ const parsePhaseTypeCounters = (counters) => {
 
 const getKindCount = (counters, kind) => toNumber(counters?.[`kind:${kind}`]);
 
-const LLMUsageTab = () => {
+const LLMUsageTab = ({ project }) => {
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [filterText, setFilterText] = useState('');
   const [copiedAt, setCopiedAt] = useState(null);
+  const [activeView, setActiveView] = useState('usage');
   const abortRef = useRef(null);
 
   const fetchMetrics = useCallback(async () => {
@@ -177,126 +179,157 @@ const LLMUsageTab = () => {
 
   return (
     <div className="llm-usage-tab" data-testid="llm-usage-tab-content">
-      <div className="llm-usage-header">
-        <div>
-          <h2>LLM Usage</h2>
-          <div className="llm-usage-subtitle">
-            Tracks requested calls vs outbound API calls.
+      <div className="llm-usage-tabs" role="tablist" aria-label="LLM usage views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeView === 'usage'}
+          className={`llm-usage-tab-button${activeView === 'usage' ? ' is-active' : ''}`}
+          onClick={() => setActiveView('usage')}
+          data-testid="llm-usage-tab-usage"
+        >
+          Usage
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeView === 'runs'}
+          className={`llm-usage-tab-button${activeView === 'runs' ? ' is-active' : ''}`}
+          onClick={() => setActiveView('runs')}
+          data-testid="llm-usage-tab-runs"
+        >
+          Runs
+        </button>
+      </div>
+
+      {activeView === 'usage' ? (
+        <div className="llm-usage-panel">
+          <div className="llm-usage-header">
+            <div>
+              <h2>LLM Usage</h2>
+              <div className="llm-usage-subtitle">
+                Tracks requested calls vs outbound API calls.
+              </div>
+            </div>
+
+            <div className="llm-usage-controls">
+              <button
+                type="button"
+                className="llm-usage-btn"
+                onClick={fetchMetrics}
+                disabled={loading}
+                data-testid="llm-usage-refresh"
+              >
+                {loading ? 'Refreshing…' : 'Refresh'}
+              </button>
+              <button
+                type="button"
+                className="llm-usage-btn destructive"
+                onClick={resetMetrics}
+                disabled={loading}
+                data-testid="llm-usage-reset"
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                className="llm-usage-btn"
+                onClick={handleCopyJson}
+                disabled={!metrics}
+                data-testid="llm-usage-copy"
+              >
+                Copy JSON
+              </button>
+            </div>
+          </div>
+
+          <div className="llm-usage-meta">
+            <label className="llm-usage-toggle">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(Boolean(e.target.checked))}
+              />
+              Auto-refresh
+            </label>
+
+            <input
+              className="llm-usage-filter"
+              type="text"
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              placeholder="Filter phases (e.g. classification, code_edit…)"
+              aria-label="Filter metrics"
+              data-testid="llm-usage-filter"
+            />
+
+            {copiedAt && (
+              <span className="llm-usage-copied" data-testid="llm-usage-copied">
+                Copied
+              </span>
+            )}
+
+            <div className="llm-usage-time">
+              <span>Started: {startedAt || '—'}</span>
+              <span>Now: {now || '—'}</span>
+            </div>
+          </div>
+
+          {error && (
+            <div className="llm-usage-error" role="alert">
+              {error}
+            </div>
+          )}
+
+          <div className="llm-usage-summary">
+            <div className="llm-usage-card">
+              <div className="llm-usage-card-title">Requested</div>
+              <div className="llm-usage-card-value" data-testid="llm-usage-requested">
+                {summary.requested}
+              </div>
+              <div className="llm-usage-card-note">Calls into LLMClient</div>
+            </div>
+
+            <div className="llm-usage-card">
+              <div className="llm-usage-card-title">Outbound</div>
+              <div className="llm-usage-card-value" data-testid="llm-usage-outbound">
+                {summary.outbound}
+              </div>
+              <div className="llm-usage-card-note">Actual provider requests</div>
+            </div>
+          </div>
+
+          <div className="llm-usage-table">
+            <div className="llm-usage-table-header">
+              <span>Phase</span>
+              <span>Request type</span>
+              <span className="numeric">Count</span>
+            </div>
+            {phaseTypeRows.length ? (
+              <div className="llm-usage-table-body" data-testid="llm-usage-phase-table">
+                {phaseTypeRows.map((row) => (
+                  <div
+                    key={`${row.phase}::${row.requestType}`}
+                    className="llm-usage-table-row"
+                  >
+                    <span className="mono">{row.phase}</span>
+                    <span className="mono">{row.requestType}</span>
+                    <span className="numeric">{row.count}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="llm-usage-table-empty" data-testid="llm-usage-phase-empty">
+                No phase metrics yet.
+              </div>
+            )}
           </div>
         </div>
-
-        <div className="llm-usage-controls">
-          <button
-            type="button"
-            className="llm-usage-btn"
-            onClick={fetchMetrics}
-            disabled={loading}
-            data-testid="llm-usage-refresh"
-          >
-            {loading ? 'Refreshing…' : 'Refresh'}
-          </button>
-          <button
-            type="button"
-            className="llm-usage-btn destructive"
-            onClick={resetMetrics}
-            disabled={loading}
-            data-testid="llm-usage-reset"
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            className="llm-usage-btn"
-            onClick={handleCopyJson}
-            disabled={!metrics}
-            data-testid="llm-usage-copy"
-          >
-            Copy JSON
-          </button>
-        </div>
-      </div>
-
-      <div className="llm-usage-meta">
-        <label className="llm-usage-toggle">
-          <input
-            type="checkbox"
-            checked={autoRefresh}
-            onChange={(e) => setAutoRefresh(Boolean(e.target.checked))}
-          />
-          Auto-refresh
-        </label>
-
-        <input
-          className="llm-usage-filter"
-          type="text"
-          value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          placeholder="Filter phases (e.g. classification, code_edit…)"
-          aria-label="Filter metrics"
-          data-testid="llm-usage-filter"
-        />
-
-        {copiedAt && (
-          <span className="llm-usage-copied" data-testid="llm-usage-copied">
-            Copied
-          </span>
-        )}
-
-        <div className="llm-usage-time">
-          <span>Started: {startedAt || '—'}</span>
-          <span>Now: {now || '—'}</span>
-        </div>
-      </div>
-
-      {error && (
-        <div className="llm-usage-error" role="alert">
-          {error}
+      ) : (
+        <div className="llm-usage-panel llm-usage-panel-runs">
+          <RunsTab project={project} />
         </div>
       )}
-
-      <div className="llm-usage-summary">
-        <div className="llm-usage-card">
-          <div className="llm-usage-card-title">Requested</div>
-          <div className="llm-usage-card-value" data-testid="llm-usage-requested">
-            {summary.requested}
-          </div>
-          <div className="llm-usage-card-note">Calls into LLMClient</div>
-        </div>
-
-        <div className="llm-usage-card">
-          <div className="llm-usage-card-title">Outbound</div>
-          <div className="llm-usage-card-value" data-testid="llm-usage-outbound">
-            {summary.outbound}
-          </div>
-          <div className="llm-usage-card-note">Actual provider requests</div>
-        </div>
-      </div>
-
-      <div className="llm-usage-table">
-        <div className="llm-usage-table-header">
-          <span>Phase</span>
-          <span>Request type</span>
-          <span className="numeric">Count</span>
-        </div>
-        {phaseTypeRows.length ? (
-          <div className="llm-usage-table-body" data-testid="llm-usage-phase-table">
-            {phaseTypeRows.map((row) => (
-              <div
-                key={`${row.phase}::${row.requestType}`}
-                className="llm-usage-table-row"
-              >
-                <span className="mono">{row.phase}</span>
-                <span className="mono">{row.requestType}</span>
-                <span className="numeric">{row.count}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="llm-usage-table-empty" data-testid="llm-usage-phase-empty">
-            No phase metrics yet.
-          </div>
-        )}
-      </div>
     </div>
   );
 };

@@ -459,6 +459,7 @@ describe('planGoalFromPrompt', () => {
     }
   });
 
+
   it('falls back to heuristic plans when strict planning fails', async () => {
     llmClient.generateResponse
       .mockResolvedValueOnce(

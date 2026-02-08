@@ -1,6 +1,7 @@
 import { fetchGoals, planMetaGoal } from '../../utils/goalsApi';
 import { ensureBranch } from './ensureBranch';
 import { processGoal } from './processGoal';
+import { notifyGoalsUpdated } from './automationUtils';
 
 export async function processGoals(
   childGoals,
@@ -109,6 +110,8 @@ export async function handlePlanOnlyFeature(
     setGoalCount(Array.isArray(goalsData) ? goalsData.length : 0);
   } catch {
     setGoalCount(0);
+  } finally {
+    notifyGoalsUpdated(projectId);
   }
 
   setPreviewPanelTab?.('goals', { source: 'automation' });
@@ -164,6 +167,8 @@ export async function handleRegularFeature(
     setGoalCount(Array.isArray(goalsData) ? goalsData.length : 0);
   } catch {
     setGoalCount(0);
+  } finally {
+    notifyGoalsUpdated(projectId);
   }
 
   setPreviewPanelTab?.('goals', { source: 'automation' });

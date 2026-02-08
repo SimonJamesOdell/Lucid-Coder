@@ -24,6 +24,9 @@ const updateChatPanelTestHooks = (ChatPanelComponent, values = {}) => {
     stopAutopilotPoller,
     setAutopilotSession,
     setAutopilotEvents,
+    setClarificationAnswers,
+    setPendingClarification,
+    setClarificationPaused,
     clearStoredAutopilotSession,
     persistAutopilotSession,
     loadStoredAutopilotSession,
@@ -56,7 +59,10 @@ const updateChatPanelTestHooks = (ChatPanelComponent, values = {}) => {
     refreshAutopilotStatus,
     stopAutopilotPoller,
     setAutopilotSession,
-    setAutopilotEvents
+    setAutopilotEvents,
+    setClarificationAnswers,
+    setPendingClarification,
+    setClarificationPaused
   };
 
   ChatPanelComponent.__testHooks.storage = {

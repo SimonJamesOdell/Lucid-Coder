@@ -168,7 +168,7 @@ const GoalsPanel = ({
 
   const isTabMode = !isModal;
 
-  const { currentProject, jobState } = useAppState();
+  const { currentProject, jobState, markTestRunIntent } = useAppState();
   const [goals, setGoals] = useState([]);
   const [activeList, setActiveList] = useState('current');
   const [expandedPastGoalIds, setExpandedPastGoalIds] = useState(() => new Set());
@@ -176,6 +176,7 @@ const GoalsPanel = ({
   const [error, setError] = useState(null);
   const [isClearing, setIsClearing] = useState(false);
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false);
+  const [clearMode, setClearMode] = useState('all');
   const [selectedGoalId, setSelectedGoalId] = useState(null);
 
   const fullGoalTree = useMemo(() => buildGoalTree(goals), [goals]);
@@ -427,6 +428,38 @@ const GoalsPanel = ({
     };
   }, [isVisible, projectId]);
 
+  const clearTargets = useMemo(() => {
+    if (clearMode === 'current') {
+      return goalTabs.current;
+    }
+    if (clearMode === 'past') {
+      return goalTabs.past;
+    }
+    return fullGoalTree;
+  }, [clearMode, fullGoalTree, goalTabs.current, goalTabs.past]);
+
+  const clearDialogCopy = useMemo(() => {
+    if (clearMode === 'current') {
+      return {
+        title: 'Clear current goals?',
+        message: 'This will permanently remove all current goals and their child goals for this project.',
+        confirmText: 'Clear current'
+      };
+    }
+    if (clearMode === 'past') {
+      return {
+        title: 'Clear past goals?',
+        message: 'This will permanently remove all past goals and their child goals for this project.',
+        confirmText: 'Clear past'
+      };
+    }
+    return {
+      title: 'Clear all goals?',
+      message: 'This will permanently remove all goals and child goals for this project.',
+      confirmText: 'Clear all'
+    };
+  }, [clearMode]);
+
   if (isModal && !isVisible) {
     return null;
   }
@@ -446,7 +479,7 @@ const GoalsPanel = ({
     }
     /* c8 ignore stop */
 
-    const rootIds = fullGoalTree.map((goal) => goal?.id).filter(Boolean);
+    const rootIds = clearTargets.map((goal) => goal?.id).filter(Boolean);
     /* c8 ignore start */
     if (rootIds.length === 0) {
       return;
@@ -461,12 +494,18 @@ const GoalsPanel = ({
         await deleteGoal(id);
       }
       await loadGoals(projectId);
+      markTestRunIntent?.('user');
       setIsClearDialogOpen(false);
     } catch {
       setError('Failed to clear goals');
     } finally {
       setIsClearing(false);
     }
+  };
+
+  const openClearDialog = (mode) => {
+    setClearMode(mode);
+    setIsClearDialogOpen(true);
   };
 
   const panel = (
@@ -536,14 +575,33 @@ const GoalsPanel = ({
                       </button>
                     </div>
                     <div className="goals-tab-actions">
+                      <span className="goals-tab-actions-label">Clear</span>
                       <button
                         type="button"
-                        className="git-settings-button primary"
-                        onClick={() => setIsClearDialogOpen(true)}
-                        disabled={!projectId || isClearing || goals.length === 0}
-                        data-testid="goals-clear-goals"
+                        className="git-settings-button"
+                        onClick={() => openClearDialog('current')}
+                        disabled={!projectId || isClearing || goalTabs.current.length === 0}
+                        data-testid="goals-clear-current"
                       >
-                        {isClearing ? 'Clearing…' : 'Clear goals'}
+                        {isClearing ? 'Clearing…' : 'Current'}
+                      </button>
+                      <button
+                        type="button"
+                        className="git-settings-button"
+                        onClick={() => openClearDialog('past')}
+                        disabled={!projectId || isClearing || goalTabs.past.length === 0}
+                        data-testid="goals-clear-past"
+                      >
+                        {isClearing ? 'Clearing…' : 'Past'}
+                      </button>
+                      <button
+                        type="button"
+                        className="git-settings-button"
+                        onClick={() => openClearDialog('all')}
+                        disabled={!projectId || isClearing || goals.length === 0}
+                        data-testid="goals-clear-all"
+                      >
+                        {isClearing ? 'Clearing…' : 'All'}
                       </button>
                     </div>
                   </div>
@@ -660,16 +718,35 @@ const GoalsPanel = ({
               ) : (
                 <>
                   <div className="goals-modal-section-title">Actions</div>
-                  <div className="goals-modal-muted">Remove all goals for this project.</div>
+                  <div className="goals-modal-muted">Remove goals for this project.</div>
                   <div className="goals-modal-detail-actions">
+                    <span className="goals-tab-actions-label">Clear</span>
                     <button
                       type="button"
-                      className="git-settings-button primary"
-                      onClick={() => setIsClearDialogOpen(true)}
-                      disabled={!projectId || isClearing || goals.length === 0}
-                      data-testid="goals-clear-goals"
+                      className="git-settings-button"
+                      onClick={() => openClearDialog('current')}
+                      disabled={!projectId || isClearing || goalTabs.current.length === 0}
+                      data-testid="goals-clear-current"
                     >
-                      {isClearing ? 'Clearing…' : 'Clear goals'}
+                      {isClearing ? 'Clearing…' : 'Current'}
+                    </button>
+                    <button
+                      type="button"
+                      className="git-settings-button"
+                      onClick={() => openClearDialog('past')}
+                      disabled={!projectId || isClearing || goalTabs.past.length === 0}
+                      data-testid="goals-clear-past"
+                    >
+                      {isClearing ? 'Clearing…' : 'Past'}
+                    </button>
+                    <button
+                      type="button"
+                      className="git-settings-button"
+                      onClick={() => openClearDialog('all')}
+                      disabled={!projectId || isClearing || goals.length === 0}
+                      data-testid="goals-clear-all"
+                    >
+                      {isClearing ? 'Clearing…' : 'All'}
                     </button>
                   </div>
                 </>
@@ -683,9 +760,9 @@ const GoalsPanel = ({
           isOpen={isClearDialogOpen}
           onClose={() => setIsClearDialogOpen(false)}
           onConfirm={handleClearGoals}
-          title="Clear all goals?"
-          message="This will permanently remove all goals and child goals for this project."
-          confirmText="Clear goals"
+          title={clearDialogCopy.title}
+          message={clearDialogCopy.message}
+          confirmText={clearDialogCopy.confirmText}
           cancelText="Cancel"
           type="danger"
           isProcessing={isClearing}

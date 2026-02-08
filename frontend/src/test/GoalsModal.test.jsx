@@ -99,7 +99,7 @@ describe('GoalsModal', () => {
 
     render(<GoalsModal isOpen={true} onClose={vi.fn()} />);
 
-    fireEvent.click(await screen.findByTestId('goals-clear-goals'));
+    fireEvent.click(await screen.findByTestId('goals-clear-all'));
     fireEvent.click(await screen.findByTestId('modal-confirm'));
 
     await waitFor(() => {
