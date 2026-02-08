@@ -60,6 +60,7 @@
   height: 100%;
   border: none;
   background: var(--background-primary, #000);
+  transition: opacity 0.15s ease-out;
 }
 
 .full-iframe--loading {
