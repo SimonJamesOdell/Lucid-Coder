@@ -164,7 +164,8 @@ describe('commitsApi.mergeBranch changelog + bump coverage', () => {
 
   it('bumpVersionAfterMerge returns null when the project path does not exist', async () => {
     const { __testOnly } = api();
-    await expect(__testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: 'Z:/this/does/not/exist' }, branchName))
+    const missingPath = path.join(os.tmpdir(), `lucidcoder-missing-project-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await expect(__testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: missingPath }, branchName))
       .resolves.toBe(null);
   });
 

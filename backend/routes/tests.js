@@ -55,7 +55,7 @@ export const runTestsHandler = async (req, res) => {
 
     testRunRateLimitState.set(projectId, now);
     const { branchName, forceFail, workspaceScope } = req.body || {};
-    const options = { forceFail };
+    const options = { forceFail, enforceFullCoverage: true };
     if (typeof workspaceScope === 'string' && workspaceScope.trim()) {
       options.workspaceScope = workspaceScope;
     }

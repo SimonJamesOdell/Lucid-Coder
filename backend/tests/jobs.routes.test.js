@@ -271,7 +271,7 @@ describe('Jobs Routes', () => {
 
     expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
       displayName: 'Frontend tests',
-      args: ['run', 'test'],
+      args: ['run', 'test:coverage'],
       cwd: FRONTEND_DIR
     }));
   });
@@ -612,7 +612,8 @@ describe('Jobs Routes', () => {
       command: 'git',
       args: ['status'],
       cwd: PROJECT_ROOT,
-      createdAt: 'now'
+      createdAt: 'now',
+      summary: { ok: true }
     });
 
     const response = await request(app).get('/api/projects/42/jobs/job-12');
@@ -620,6 +621,7 @@ describe('Jobs Routes', () => {
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.job).toMatchObject({ id: 'job-12', type: 'git:status' });
+    expect(response.body.job.summary).toEqual({ ok: true });
   });
 
   it('returns 404 when fetching job for a missing project', async () => {
@@ -767,7 +769,7 @@ describe('Jobs Routes', () => {
 
     expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
       command: 'npm',
-      args: ['run', 'test'],
+      args: ['run', 'test:coverage'],
       cwd: BACKEND_DIR
     }));
   });

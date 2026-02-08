@@ -235,6 +235,114 @@ describe('FilesTab Component', () => {
     expect(screen.queryByTestId('no-open-files')).not.toBeInTheDocument();
   });
 
+  test('resizes the file explorer and persists the width', async () => {
+    getFileExplorerStateMock.mockReturnValue({ explorerWidth: 200, expandedFolders: ['src'] });
+
+    await renderFilesTab();
+
+    const explorer = screen.getByTestId('file-tree');
+    expect(explorer).toHaveStyle({ width: '200px' });
+
+    const divider = screen.getByRole('separator', { name: 'Resize file explorer' });
+
+    await act(async () => {
+      fireEvent.mouseDown(divider, { button: 0, clientX: 200 });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.mouseMove(window, { clientX: 1200 });
+    });
+
+    await act(async () => {
+      fireEvent.mouseUp(window);
+    });
+
+    expect(explorer).toHaveStyle({ width: '520px' });
+    expect(setFileExplorerStateMock).toHaveBeenCalledWith(mockProject.id, expect.objectContaining({
+      explorerWidth: 520
+    }));
+  });
+
+  test('clamps the explorer width to the default when the drag delta is non-finite', async () => {
+    getFileExplorerStateMock.mockReturnValue({ explorerWidth: 200, expandedFolders: [] });
+
+    await renderFilesTab();
+
+    const divider = screen.getByRole('separator', { name: 'Resize file explorer' });
+
+    await act(async () => {
+      fireEvent.mouseDown(divider, { button: 0, clientX: 100 });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.mouseMove(window, { clientX: Number.NaN });
+    });
+
+    const explorer = screen.getByTestId('file-tree');
+    expect(explorer).toHaveStyle({ width: '260px' });
+  });
+
+  test('ignores mouse moves after drag state is cleared', async () => {
+    getFileExplorerStateMock.mockReturnValue({ explorerWidth: 240, expandedFolders: [] });
+
+    await renderFilesTab();
+
+    const divider = screen.getByRole('separator', { name: 'Resize file explorer' });
+
+    await act(async () => {
+      fireEvent.mouseDown(divider, { button: 0, clientX: 100 });
+      fireEvent.mouseUp(window);
+      fireEvent.mouseMove(window, { clientX: 140 });
+    });
+
+    expect(screen.getByTestId('file-tree')).toBeInTheDocument();
+  });
+
+  test('ignores mouse moves when drag state is missing while resizing', async () => {
+    getFileExplorerStateMock.mockReturnValue({ explorerWidth: 240, expandedFolders: [] });
+
+    const { getHooks } = await renderFilesTabWithHooks();
+
+    const divider = screen.getByRole('separator', { name: 'Resize file explorer' });
+
+    await act(async () => {
+      fireEvent.mouseDown(divider, { button: 0, clientX: 100 });
+    });
+
+    const hooks = getHooks();
+    expect(hooks?.dragStateRef).toBeTruthy();
+    hooks.dragStateRef.current = null;
+
+    await act(async () => {
+      fireEvent.mouseMove(window, { clientX: 140 });
+    });
+
+    expect(screen.getByTestId('file-tree')).toHaveStyle({ width: '240px' });
+  });
+
+  test('ignores non-left clicks on the divider', async () => {
+    getFileExplorerStateMock.mockReturnValue({ explorerWidth: 240, expandedFolders: [] });
+
+    await renderFilesTab();
+
+    const explorer = screen.getByTestId('file-tree');
+    expect(explorer).toHaveStyle({ width: '240px' });
+
+    const divider = screen.getByRole('separator', { name: 'Resize file explorer' });
+    fireEvent.mouseDown(divider, { button: 2, clientX: 200 });
+    fireEvent.mouseMove(window, { clientX: 500 });
+
+    expect(explorer).toHaveStyle({ width: '240px' });
+  });
+
   test('right-click shows context menu and rename stages both paths', async () => {
     const { user } = await renderFilesTab();
 

@@ -80,7 +80,10 @@ describe('tests routes', () => {
       .send({ branchName: 'feature/login', forceFail: false })
       .expect(200);
 
-    expect(workflowMocks.runTestsForBranch).toHaveBeenCalledWith(5, 'feature/login', { forceFail: false });
+    expect(workflowMocks.runTestsForBranch).toHaveBeenCalledWith(5, 'feature/login', {
+      forceFail: false,
+      enforceFullCoverage: true
+    });
     expect(workflowMocks.getBranchOverview).toHaveBeenCalledWith(5);
     expect(res.body).toEqual({ success: true, testRun, overview });
   });
@@ -98,6 +101,7 @@ describe('tests routes', () => {
 
     expect(workflowMocks.runTestsForBranch).toHaveBeenCalledWith(5, 'feature/login', {
       forceFail: false,
+      enforceFullCoverage: true,
       workspaceScope: 'changed'
     });
   });
@@ -265,7 +269,10 @@ describe('tests route internals', () => {
 
     await runTestsHandler(req, res);
 
-    expect(workflowMocks.runTestsForBranch).toHaveBeenCalledWith(11, undefined, { forceFail: undefined });
+    expect(workflowMocks.runTestsForBranch).toHaveBeenCalledWith(11, undefined, {
+      forceFail: undefined,
+      enforceFullCoverage: true
+    });
     expect(workflowMocks.getBranchOverview).toHaveBeenCalledWith(11);
     expect(res.json).toHaveBeenCalledWith({ success: true, testRun, overview });
   });

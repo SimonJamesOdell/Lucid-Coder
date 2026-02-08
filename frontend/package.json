@@ -1,7 +1,7 @@
 {
   "name": "lucidcoder-frontend",
   "private": true,
-  "version": "0.5.2",
+  "version": "0.5.3",
   "type": "module",
   "scripts": {
     "start": "vite --host 0.0.0.0",
@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:run": "vitest run",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "node --input-type=module -e \"import { mkdirSync } from 'node:fs'; mkdirSync('coverage/.tmp', { recursive: true });\" && vitest run --coverage --pool=threads"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -45,8 +45,5 @@
   },
   "overrides": {
     "baseline-browser-mapping": "^2.9.18"
-  },
-  "vitest": {
-    "pool": "threads"
   }
 }

@@ -1,10 +1,207 @@
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import fs from 'fs/promises';
+import path from 'path';
 import { appendRunEvent, createRun, updateRun } from './runStore.js';
 
 const MAX_LOG_ENTRIES = 500;
 const jobs = new Map();
+
+const COVERAGE_THRESHOLDS = Object.freeze({
+  lines: 100,
+  statements: 100,
+  functions: 100,
+  branches: 100
+});
+
+const TEST_SUMMARY_START_REGEX = /^\s*(Test Suites:|Test Files\s+)/i;
+const TEST_SUMMARY_LINE_REGEX = /^\s*(Test Suites:|Tests:|Tests\s+|Snapshots:|Time:|Ran all test suites\.|Test Files\s+|Start at\s+|Duration\s+)/i;
+const MAX_TEST_SUMMARY_LINES = 6;
+const ANSI_REGEX = /\x1b\[[0-9;]*m/g;
+const COVERAGE_ALL_FILES_REGEX = /^\s*All files\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|/i;
+
+const isTestJobType = (type) => typeof type === 'string' && type.endsWith(':test');
+
+const stripAnsi = (value) => String(value || '').replace(ANSI_REGEX, '');
+
+const normalizeTestSummaryLine = (line) => stripAnsi(line).replace(/\s+/g, ' ').trim();
+
+const appendTestSummaryLines = (job, message) => {
+  if (!job || !isTestJobType(job.type) || !message) {
+    return;
+  }
+
+  const lines = String(message).split(/\r?\n/);
+  const matched = [];
+
+  for (const line of lines) {
+    const trimmed = stripAnsi(line).trimEnd();
+    if (!trimmed) {
+      continue;
+    }
+    if (TEST_SUMMARY_LINE_REGEX.test(trimmed)) {
+      matched.push(trimmed);
+    }
+  }
+
+  if (matched.length === 0) {
+    return;
+  }
+
+  const existingSummary = job.summary && typeof job.summary === 'object' ? job.summary : {};
+  const existingLines = Array.isArray(existingSummary.testSummaryLines)
+    ? existingSummary.testSummaryLines
+    : [];
+  const normalizedExisting = new Set(existingLines.map(normalizeTestSummaryLine));
+
+  const combined = [...existingLines];
+  for (const line of matched) {
+    const normalized = normalizeTestSummaryLine(line);
+    if (!normalized || normalizedExisting.has(normalized)) {
+      continue;
+    }
+    normalizedExisting.add(normalized);
+    combined.push(line);
+  }
+
+  if (combined.length > MAX_TEST_SUMMARY_LINES) {
+    combined.splice(MAX_TEST_SUMMARY_LINES);
+  }
+
+  job.summary = {
+    ...existingSummary,
+    testSummaryLines: combined
+  };
+};
+
+const getCoverageSummaryPath = (cwd) => path.join(cwd, 'coverage', 'coverage-summary.json');
+
+const readCoverageTotals = async (cwd) => {
+  if (!cwd) {
+    return null;
+  }
+
+  const summaryPath = getCoverageSummaryPath(cwd);
+  const raw = await fs.readFile(summaryPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  const total = parsed?.total && typeof parsed.total === 'object' ? parsed.total : null;
+  if (!total) {
+    return null;
+  }
+
+  const totals = {
+    lines: Number(total?.lines?.pct),
+    statements: Number(total?.statements?.pct),
+    functions: Number(total?.functions?.pct),
+    branches: Number(total?.branches?.pct)
+  };
+
+  const invalid = Object.values(totals).some((value) => !Number.isFinite(value));
+  if (invalid) {
+    return null;
+  }
+
+  return totals;
+};
+
+const parseCoverageTotalsFromLogs = (logs = []) => {
+  if (!Array.isArray(logs) || logs.length === 0) {
+    return null;
+  }
+
+  for (const entry of logs) {
+    const message = stripAnsi(entry?.message || '');
+    if (!message) {
+      continue;
+    }
+
+    const lines = message.split(/\r?\n/);
+    for (const line of lines) {
+      const match = String(line || '').trimEnd().match(COVERAGE_ALL_FILES_REGEX);
+      if (!match) {
+        continue;
+      }
+
+      const totals = {
+        statements: Number(match[1]),
+        branches: Number(match[2]),
+        functions: Number(match[3]),
+        lines: Number(match[4])
+      };
+
+      const invalid = Object.values(totals).some((value) => !Number.isFinite(value));
+      if (invalid) {
+        continue;
+      }
+
+      return totals;
+    }
+  }
+
+  return null;
+};
+
+const evaluateCoverageGate = async (job, { assumeSucceeded = false } = {}) => {
+  if (!job || !isTestJobType(job.type)) {
+    return;
+  }
+  if (!assumeSucceeded && job.status !== JOB_STATUS.SUCCEEDED) {
+    return;
+  }
+
+  let totals = null;
+  try {
+    totals = await readCoverageTotals(job.cwd);
+  } catch {
+    totals = null;
+  }
+
+  if (!totals) {
+    totals = parseCoverageTotalsFromLogs(job.logs);
+  }
+
+  if (!totals) {
+    const message = 'Coverage gate failed: coverage summary not found.';
+    const existingSummary = job.summary && typeof job.summary === 'object' ? job.summary : {};
+    job.summary = {
+      ...existingSummary,
+      coverage: {
+        passed: false,
+        totals: null,
+        thresholds: { ...COVERAGE_THRESHOLDS },
+        message
+      },
+      error: message
+    };
+    job.status = JOB_STATUS.FAILED;
+    return;
+  }
+
+  const passed =
+    totals.lines >= COVERAGE_THRESHOLDS.lines &&
+    totals.statements >= COVERAGE_THRESHOLDS.statements &&
+    totals.functions >= COVERAGE_THRESHOLDS.functions &&
+    totals.branches >= COVERAGE_THRESHOLDS.branches;
+
+  const message = passed
+    ? 'Coverage gate passed.'
+    : 'Coverage gate failed: coverage below 100%.';
+
+  const existingSummary = job.summary && typeof job.summary === 'object' ? job.summary : {};
+  job.summary = {
+    ...existingSummary,
+    coverage: {
+      passed,
+      totals,
+      thresholds: { ...COVERAGE_THRESHOLDS },
+      message
+    },
+    error: passed ? null : message
+  };
+
+  job.status = passed ? JOB_STATUS.SUCCEEDED : JOB_STATUS.FAILED;
+};
 
 export const jobEvents = new EventEmitter();
 
@@ -114,6 +311,8 @@ const pushLog = (job, stream, chunk) => {
   if (job.logs.length > MAX_LOG_ENTRIES) {
     job.logs.splice(0, job.logs.length - MAX_LOG_ENTRIES);
   }
+
+  appendTestSummaryLines(job, entry.message);
 
   emitJobLog(job, entry);
 
@@ -379,30 +578,49 @@ export const startJob = (config) => {
   child.on('exit', (code, signal) => {
     job.exitCode = code;
     job.signal = signal || null;
+    const isTestJob = isTestJobType(job.type);
 
     // If a job was cancelled, keep it cancelled even if the process eventually exits
     // with a success/failure code.
     if (job.status !== JOB_STATUS.CANCELLED) {
-      job.status = code === 0 ? JOB_STATUS.SUCCEEDED : JOB_STATUS.FAILED;
       job.completedAt = now();
+      job.status = isTestJob ? JOB_STATUS.RUNNING : code === 0 ? JOB_STATUS.SUCCEEDED : JOB_STATUS.FAILED;
     }
 
     delete job.process;
 
-    const runStatus = mapJobStatusToRunStatus(job.status);
-    enqueueRunUpdate(job, {
-      status: runStatus,
-      statusMessage: job.status === JOB_STATUS.SUCCEEDED ? 'Job succeeded' : job.status === JOB_STATUS.CANCELLED ? 'Job cancelled' : 'Job failed',
-      finishedAt: job.completedAt
-    });
-    enqueueRunEvent(job, {
-      type: 'job:completed',
-      timestamp: job.completedAt,
-      message: `Job ${runStatus}`,
-      payload: { status: runStatus, exitCode: code ?? null, signal: signal || null }
-    });
+    const finalize = async () => {
+      if (job.status === JOB_STATUS.CANCELLED) {
+        return;
+      }
 
-    emitJobUpdated(job);
+      const baseStatus = code === 0 ? JOB_STATUS.SUCCEEDED : JOB_STATUS.FAILED;
+      if (baseStatus === JOB_STATUS.FAILED || !isTestJobType(job.type)) {
+        job.status = baseStatus;
+        return;
+      }
+
+      await evaluateCoverageGate(job, { assumeSucceeded: true });
+    };
+
+    finalize()
+      .catch(() => {})
+      .finally(() => {
+        const runStatus = mapJobStatusToRunStatus(job.status);
+        enqueueRunUpdate(job, {
+          status: runStatus,
+          statusMessage: job.status === JOB_STATUS.SUCCEEDED ? 'Job succeeded' : job.status === JOB_STATUS.CANCELLED ? 'Job cancelled' : 'Job failed',
+          finishedAt: job.completedAt
+        });
+        enqueueRunEvent(job, {
+          type: 'job:completed',
+          timestamp: job.completedAt,
+          message: `Job ${runStatus}`,
+          payload: { status: runStatus, exitCode: code ?? null, signal: signal || null }
+        });
+
+        emitJobUpdated(job);
+      });
   });
 
   return sanitizeJob(job);
@@ -461,8 +679,13 @@ export const getAllJobs = () => [...jobs.values()].map(sanitizeJob);
 export const __testing = {
   clearJobs: () => jobs.clear(),
   resetJobEvents: () => jobEvents.removeAllListeners(),
+  getRawJob: (jobId) => jobs.get(jobId),
   terminatePid,
   mapJobStatusToRunStatus,
+  appendTestSummaryLines,
+  parseCoverageTotalsFromLogs,
+  readCoverageTotals,
+  evaluateCoverageGate,
   enqueueRunEvent,
   enqueueRunUpdate,
   flushPendingRunWork

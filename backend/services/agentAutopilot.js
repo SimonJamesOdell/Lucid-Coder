@@ -106,10 +106,7 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
   const ui = deps.ui && typeof deps.ui === 'object' ? deps.ui : null;
   const appendEvent = typeof deps.appendEvent === 'function' ? deps.appendEvent : null;
 
-  const thresholds = {
-    ...DEFAULT_THRESHOLDS,
-    ...(options.coverageThresholds && typeof options.coverageThresholds === 'object' ? options.coverageThresholds : {})
-  };
+  const thresholds = { ...DEFAULT_THRESHOLDS };
 
   const verificationFixRetriesRaw = options?.verificationFixRetries;
   const verificationFixRetries = Number.isFinite(verificationFixRetriesRaw)
@@ -452,7 +449,9 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
         }
         failingRun = await runTests(projectId, branchName, {
           real: true,
-          coverageThresholds: thresholds
+          coverageThresholds: thresholds,
+          enforceFullCoverage: true,
+          includeCoverageLineRefs: true
         });
 
         appendRunEvents({ appendEvent, phase: 'failing', branchName, stepPrompt: childPrompt, run: failingRun });
@@ -552,7 +551,9 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
         }
         passingRun = await runTests(projectId, branchName, {
           real: true,
-          coverageThresholds: thresholds
+          coverageThresholds: thresholds,
+          enforceFullCoverage: true,
+          includeCoverageLineRefs: true
         });
 
         appendRunEvents({ appendEvent, phase: 'passing', branchName, stepPrompt: childPrompt, run: passingRun });
@@ -620,7 +621,9 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
           reportStatus('Re-running tests/coverage…');
           const retryRun = await runTests(projectId, branchName, {
             real: true,
-            coverageThresholds: thresholds
+            coverageThresholds: thresholds,
+            enforceFullCoverage: true,
+            includeCoverageLineRefs: true
           });
           appendRunEvents({ appendEvent, phase: `verification-retry-${attempt}`, branchName, stepPrompt: childPrompt, run: retryRun });
 
@@ -690,7 +693,9 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
             reportStatus('Re-running tests/coverage…');
             const guidanceRun = await runTests(projectId, branchName, {
               real: true,
-              coverageThresholds: thresholds
+              coverageThresholds: thresholds,
+              enforceFullCoverage: true,
+              includeCoverageLineRefs: true
             });
             appendRunEvents({
               appendEvent,

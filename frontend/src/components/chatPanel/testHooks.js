@@ -13,6 +13,7 @@ const updateChatPanelTestHooks = (ChatPanelComponent, values = {}) => {
     handleAgentResult,
     appendStreamingChunk,
     autopilotResumeAttemptedRef,
+    autoFixCancelRef,
     isMessagesScrolledToBottom,
     messagesRef,
     messagesContainerRef,
@@ -45,6 +46,7 @@ const updateChatPanelTestHooks = (ChatPanelComponent, values = {}) => {
 
   ChatPanelComponent.__testHooks.latestInstance = {
     autopilotResumeAttemptedRef,
+    autoFixCancelRef,
     isMessagesScrolledToBottom,
     messagesRef,
     messagesContainerRef,
