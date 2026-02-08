@@ -2372,12 +2372,143 @@ describe('ChatPanel', () => {
       const optionButton = await screen.findByRole('button', { name: 'Option A' });
       await userEvent.click(optionButton);
 
+      const submitButton = await screen.findByRole('button', { name: 'Submit answers' });
+      await userEvent.click(submitButton);
+
       await waitFor(() => {
         expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
       });
 
       const lastPrompt = goalsApi.agentRequest.mock.calls[goalsApi.agentRequest.mock.calls.length - 1][0].prompt;
       expect(lastPrompt).toContain('Option A');
+    });
+
+    it('applies clarification option selection to the answer field', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Pick one:\n- Option A\n- Option B']
+        });
+      });
+
+      const optionButton = await screen.findByRole('button', { name: 'Option A' });
+      await userEvent.click(optionButton);
+
+      const answerField = await screen.findByLabelText('Your answer');
+      expect(answerField).toHaveValue('Option A');
+      expect(screen.getByRole('button', { name: 'Submit answers' })).toBeEnabled();
+    });
+
+    it('submits no-answer placeholders when answers are blank', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Pick one:\n- Option A\n- Option B']
+        });
+      });
+
+      const submitButton = await screen.findByRole('button', { name: 'Submit answers' });
+      expect(submitButton).toBeDisabled();
+
+      const handleClarificationSubmit = ChatPanel.__testHooks?.handlers?.handleClarificationSubmit;
+      expect(handleClarificationSubmit).toBeInstanceOf(Function);
+
+      await act(async () => {
+        await handleClarificationSubmit();
+      });
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
+      });
+
+      const lastPrompt = goalsApi.agentRequest.mock.calls[goalsApi.agentRequest.mock.calls.length - 1][0].prompt;
+      expect(lastPrompt).toContain('(no answer provided)');
+    });
+
+    it('skips clarification submission when no pending clarification exists', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const handleClarificationSubmit = ChatPanel.__testHooks?.handlers?.handleClarificationSubmit;
+      expect(handleClarificationSubmit).toBeInstanceOf(Function);
+
+      await act(async () => {
+        await handleClarificationSubmit();
+      });
+
+      expect(goalsApi.agentRequest).not.toHaveBeenCalled();
+    });
+
+    it('uses the non-string fallback when a clarification answer is not text', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Pick one:\n- Option A\n- Option B']
+        });
+      });
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      expect(instance?.setClarificationAnswers).toBeInstanceOf(Function);
+
+      await act(async () => {
+        instance.setClarificationAnswers([null]);
+      });
+
+      const handleClarificationSubmit = ChatPanel.__testHooks?.handlers?.handleClarificationSubmit;
+      await act(async () => {
+        await handleClarificationSubmit();
+      });
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
+      });
+
+      const lastPrompt = goalsApi.agentRequest.mock.calls[goalsApi.agentRequest.mock.calls.length - 1][0].prompt;
+      expect(lastPrompt).toContain('(no answer provided)');
     });
 
     it('parses clarification options from an options line', async () => {
@@ -2405,6 +2536,9 @@ describe('ChatPanel', () => {
 
       const optionButton = await screen.findByRole('button', { name: 'Red' });
       await userEvent.click(optionButton);
+
+      const submitButton = await screen.findByRole('button', { name: 'Submit answers' });
+      await userEvent.click(submitButton);
 
       await waitFor(() => {
         expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
@@ -2437,12 +2571,15 @@ describe('ChatPanel', () => {
       const optionButton = await screen.findByRole('button', { name: 'Red' });
       await userEvent.click(optionButton);
 
+      const submitButton = await screen.findByRole('button', { name: 'Submit answers' });
+      await userEvent.click(submitButton);
+
       await waitFor(() => {
         expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
       });
     });
 
-    it('renders clarification text without options for non-string questions', async () => {
+    it('renders clarification modal without options for non-string questions', async () => {
       goalsApi.agentRequest
         .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
         .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
@@ -2466,8 +2603,108 @@ describe('ChatPanel', () => {
       });
 
       const clarification = await screen.findByTestId('chat-clarification');
+      expect(await screen.findByTestId('chat-clarification-modal')).toBeInTheDocument();
       expect(within(clarification).getByText('42')).toBeInTheDocument();
-      expect(within(clarification).queryAllByRole('button')).toHaveLength(0);
+      expect(within(clarification).getByRole('button', { name: 'Close for now' })).toBeInTheDocument();
+      expect(within(clarification).getByRole('button', { name: 'Submit answers' })).toBeInTheDocument();
+      expect(clarification.querySelectorAll('.chat-clarification__option')).toHaveLength(0);
+    });
+
+    it('closes the clarification modal via the SettingsModal close control', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Pick one:\n- Option A\n- Option B']
+        });
+      });
+
+      const closeButton = await screen.findByTestId('chat-clarification-close');
+      await userEvent.click(closeButton);
+
+      expect(await screen.findByTestId('chat-clarification-paused')).toBeInTheDocument();
+    });
+
+    it('updates clarification text input on change', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['Describe the expected behavior']
+        });
+      });
+
+      const answerField = await screen.findByLabelText('Your answer');
+      await userEvent.type(answerField, 'It should do the thing.');
+      expect(answerField).toHaveValue('It should do the thing.');
+    });
+
+    it('pauses clarification and lets the user resume or cancel', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      let resolveFeature;
+      const featurePromise = new Promise((resolve) => {
+        resolveFeature = resolve;
+      });
+      goalAutomationService.handleRegularFeature.mockReturnValueOnce(featurePromise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await act(async () => {
+        resolveFeature({
+          needsClarification: true,
+          clarifyingQuestions: ['What should I do next?']
+        });
+      });
+
+      const closeButton = await screen.findByRole('button', { name: 'Close for now' });
+      await userEvent.click(closeButton);
+
+      expect(await screen.findByTestId('chat-clarification-paused')).toBeInTheDocument();
+      expect(screen.queryByTestId('chat-clarification-modal')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Resume clarification' }));
+      expect(await screen.findByTestId('chat-clarification-modal')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Close for now' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('chat-clarification-paused')).not.toBeInTheDocument();
+      });
     });
 
     it('uses reduced motion fallback when matchMedia is unavailable', () => {
@@ -2705,6 +2942,22 @@ describe('ChatPanel', () => {
       await waitFor(() => {
         expect(screen.getByTestId('chat-typing')).toBeInTheDocument();
         expect(screen.getByText('Assistant is thinking')).toBeInTheDocument();
+      });
+    });
+
+    it('renders the typing indicator inside the chat log', async () => {
+      goalsApi.agentRequest.mockImplementation(() => new Promise(() => {}));
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Test message');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      const messages = screen.getByTestId('chat-messages');
+
+      await waitFor(() => {
+        const typing = within(messages).getByTestId('chat-typing');
+        expect(typing).toBeInTheDocument();
       });
     });
 

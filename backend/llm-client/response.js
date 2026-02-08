@@ -80,6 +80,27 @@ export function extractResponse(provider, responseData) {
     return JSON.stringify(responseData);
   }
 
+  const extractOpenAiResponses = () => {
+    if (typeof responseData.output_text === 'string' && responseData.output_text.trim()) {
+      return responseData.output_text.trim();
+    }
+
+    const output = Array.isArray(responseData.output) ? responseData.output : [];
+    for (const entry of output) {
+      const content = Array.isArray(entry?.content) ? entry.content : [];
+      for (const chunk of content) {
+        if (typeof chunk?.text === 'string' && chunk.text.trim()) {
+          return chunk.text.trim();
+        }
+        if (typeof chunk?.output_text === 'string' && chunk.output_text.trim()) {
+          return chunk.output_text.trim();
+        }
+      }
+    }
+
+    return '';
+  };
+
   const extractFromChoices = () => {
     const firstChoice = responseData.choices?.[0];
     if (!firstChoice) {
@@ -218,6 +239,12 @@ export function extractResponse(provider, responseData) {
     case 'lmstudio':
     case 'textgen':
     case 'custom':
+      if (provider === 'openai') {
+        const responseText = extractOpenAiResponses();
+        if (responseText) {
+          return responseText;
+        }
+      }
       return extractFromChoices() || JSON.stringify(responseData);
 
     case 'anthropic':

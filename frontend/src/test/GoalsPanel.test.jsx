@@ -43,7 +43,8 @@ describe('GoalsPanel', () => {
   });
 
   it('always loads goals including completed/archived', async () => {
-    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    const markTestRunIntent = vi.fn();
+    useAppState.mockReturnValue({ currentProject: project, jobState: null, markTestRunIntent });
     goalsApi.fetchGoals.mockResolvedValue([]);
 
     const { container } = render(<GoalsPanel mode="tab" />);
@@ -529,7 +530,8 @@ describe('GoalsPanel', () => {
   });
 
   it('clears all root goals when confirmed', async () => {
-    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    const markTestRunIntent = vi.fn();
+    useAppState.mockReturnValue({ currentProject: project, jobState: null, markTestRunIntent });
     goalsApi.fetchGoals
       .mockResolvedValueOnce([
         { id: 10, prompt: 'Parent goal', status: 'planning', parentGoalId: null },
@@ -541,7 +543,7 @@ describe('GoalsPanel', () => {
     const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
 
-    await user.click(await screen.findByTestId('goals-clear-goals'));
+    await user.click(await screen.findByTestId('goals-clear-all'));
     await user.click(await screen.findByTestId('modal-confirm'));
 
     await waitFor(() => {
@@ -553,6 +555,52 @@ describe('GoalsPanel', () => {
       expect(goalsApi.fetchGoals).toHaveBeenCalledTimes(2);
     });
 
+    expect(markTestRunIntent).toHaveBeenCalledWith('user');
+
+  });
+
+  it('clears only current goals when confirmed', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals
+      .mockResolvedValueOnce([
+        { id: 20, prompt: 'Current goal', status: 'planning', parentGoalId: null },
+        { id: 21, prompt: 'Past goal', status: 'ready', parentGoalId: null }
+      ])
+      .mockResolvedValueOnce([]);
+    goalsApi.deleteGoal.mockResolvedValue({ success: true, deletedGoalIds: [20] });
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-clear-current'));
+    await user.click(await screen.findByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      expect(goalsApi.deleteGoal).toHaveBeenCalledWith(20);
+      expect(goalsApi.deleteGoal).not.toHaveBeenCalledWith(21);
+    });
+  });
+
+  it('clears only past goals when confirmed', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals
+      .mockResolvedValueOnce([
+        { id: 30, prompt: 'Current goal', status: 'planning', parentGoalId: null },
+        { id: 31, prompt: 'Past goal', status: 'ready', parentGoalId: null }
+      ])
+      .mockResolvedValueOnce([]);
+    goalsApi.deleteGoal.mockResolvedValue({ success: true, deletedGoalIds: [31] });
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-clear-past'));
+    await user.click(await screen.findByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      expect(goalsApi.deleteGoal).toHaveBeenCalledWith(31);
+      expect(goalsApi.deleteGoal).not.toHaveBeenCalledWith(30);
+    });
   });
 
   it('renders child goals in creation order (oldest first)', async () => {
@@ -684,7 +732,7 @@ describe('GoalsPanel', () => {
     const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
 
-    await user.click(await screen.findByTestId('goals-clear-goals'));
+    await user.click(await screen.findByTestId('goals-clear-all'));
     await user.click(await screen.findByTestId('modal-cancel'));
 
     expect(goalsApi.deleteGoal).not.toHaveBeenCalled();
@@ -700,7 +748,7 @@ describe('GoalsPanel', () => {
     const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
 
-    await user.click(await screen.findByTestId('goals-clear-goals'));
+    await user.click(await screen.findByTestId('goals-clear-all'));
     await user.click(await screen.findByTestId('modal-confirm'));
 
     await waitFor(() => {
@@ -884,6 +932,27 @@ describe('GoalsPanel', () => {
     clearIntervalSpy.mockRestore();
   });
 
+  it('modal mode opens current and past clear dialogs from actions', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([
+      { id: 90, prompt: 'Current goal', status: 'planning', parentGoalId: null },
+      { id: 91, prompt: 'Past goal', status: 'ready', parentGoalId: null }
+    ]);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="modal" isOpen={true} onRequestClose={vi.fn()} />);
+
+    const clearCurrent = await screen.findByTestId('goals-clear-current');
+    await user.click(clearCurrent);
+
+    expect(await screen.findByText('Clear current goals?')).toBeInTheDocument();
+    await user.click(await screen.findByTestId('modal-cancel'));
+
+    const clearPast = await screen.findByTestId('goals-clear-past');
+    await user.click(clearPast);
+    expect(await screen.findByText('Clear past goals?')).toBeInTheDocument();
+  });
+
   it('modal close button calls onRequestClose', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
     goalsApi.fetchGoals.mockResolvedValue([]);
@@ -916,7 +985,7 @@ describe('GoalsPanel', () => {
     const user = userEvent.setup();
     render(<GoalsPanel mode="tab" />);
 
-    await user.click(await screen.findByTestId('goals-clear-goals'));
+    await user.click(await screen.findByTestId('goals-clear-all'));
 
     expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
   });

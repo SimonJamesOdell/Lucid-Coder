@@ -8,6 +8,38 @@
   color: var(--text-color, #eaeaea);
 }
 
+.llm-usage-tabs {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.llm-usage-tab-button {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: inherit;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.llm-usage-tab-button.is-active {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.llm-usage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.llm-usage-panel-runs {
+  padding: 0;
+}
+
 .llm-usage-header {
   display: flex;
   justify-content: space-between;

@@ -26,15 +26,32 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
   margin-bottom: 0.6rem;
 }
 
 .goals-tab-root .goals-tab-actions {
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  gap: 0.25rem;
   margin-left: auto;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.goals-tab-root .goals-tab-actions-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #b3b3b3);
+  margin-right: 0.15rem;
+}
+
+.goals-tab-root .goals-tab-actions .git-settings-button {
+  padding: 0.25rem 0.45rem;
+  font-size: 0.74rem;
+  min-width: 3.2rem;
 }
 
 .goals-tab-root .goals-tab-filter {
@@ -42,7 +59,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--text-secondary, #b3b3b3);
-  padding: 0.35rem 0.6rem;
+  padding: 0.32rem 0.55rem;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -110,5 +127,9 @@
 @media (max-width: 860px) {
   .goals-tab-root .goals-modal-panel.goals-tab-panel {
     border-radius: 0.5rem;
+  }
+
+  .goals-tab-root .goals-tab-header {
+    flex-wrap: wrap;
   }
 }

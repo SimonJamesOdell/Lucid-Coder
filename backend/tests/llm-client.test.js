@@ -27,10 +27,11 @@ vi.mock('../encryption.js', () => ({
 }));
 
 let LLMClient;
+let testingHelpers;
 const mockedAxios = axios;
 
 beforeAll(async () => {
-  ({ LLMClient } = await import('../llm-client.js'));
+  ({ LLMClient, __testing: testingHelpers } = await import('../llm-client.js'));
 });
 
 describe('LLM Client Tests', () => {
@@ -81,6 +82,131 @@ describe('LLM Client Tests', () => {
   });
   
   describe('Internal helpers', () => {
+    test('stripUnsupportedParams returns original payload when input is not an object', () => {
+      const result = testingHelpers.stripUnsupportedParams(null, 'unsupported parameter: temperature');
+      expect(result).toBeNull();
+    });
+
+    test('stripUnsupportedParams skips when error message lacks unsupported parameter text', () => {
+      const payload = { temperature: 0.4 };
+      const result = testingHelpers.stripUnsupportedParams(payload, 'rate limited');
+      expect(result).toBe(payload);
+    });
+
+    test('stripUnsupportedParams removes temperature and top_p when flagged', () => {
+      const payload = { temperature: 0.4, top_p: 0.9, max_tokens: 12 };
+      const result = testingHelpers.stripUnsupportedParams(
+        payload,
+        'Unsupported parameter: temperature, top_p'
+      );
+
+      expect(result).toEqual({ max_tokens: 12 });
+    });
+
+    test('stripUnsupportedParams removes max token fields when flagged', () => {
+      const payload = { max_tokens: 12, max_output_tokens: 24, top_p: 0.8 };
+      const result = testingHelpers.stripUnsupportedParams(
+        payload,
+        'Unsupported parameter: max_tokens and max_output_tokens'
+      );
+
+      expect(result).toEqual({ top_p: 0.8 });
+    });
+
+    test('stripUnsupportedParams returns payload when unsupported keys are absent', () => {
+      const payload = { temperature: 0.2 };
+      const result = testingHelpers.stripUnsupportedParams(payload, 'Unsupported parameter: top_p');
+      expect(result).toBe(payload);
+    });
+
+    test('stripUnsupportedParams detects topp alias', () => {
+      const payload = { top_p: 0.3 };
+      const result = testingHelpers.stripUnsupportedParams(payload, 'Unsupported parameter: topp');
+      expect(result).toEqual({});
+    });
+
+    test('stripUnsupportedParams returns payload when error message is undefined', () => {
+      const payload = { temperature: 0.2 };
+      const result = testingHelpers.stripUnsupportedParams(payload, undefined);
+      expect(result).toBe(payload);
+    });
+
+    test('makeAPIRequestWithEndpoint strips trailing slashes and uses fallback timeout', async () => {
+      const previousTimeout = process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS;
+      process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS = 'not-a-number';
+
+      const fresh = new LLMClient();
+      axiosRequestMock.mockResolvedValueOnce({ data: { ok: true } });
+
+      await fresh.makeAPIRequestWithEndpoint(
+        { provider: 'openai', api_url: 'http://example.test//', model: 'gpt-test' },
+        'api-key',
+        '/completions',
+        { prompt: 'hi' }
+      );
+
+      const requestConfig = axiosRequestMock.mock.calls[0][0];
+      expect(requestConfig.url).toBe('http://example.test/completions');
+      expect(requestConfig.timeout).toBe(60000);
+
+      process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS = previousTimeout;
+    });
+
+    test('makeAPIRequestWithEndpoint uses default timeout for non-fallback endpoints', async () => {
+      const fresh = new LLMClient();
+      axiosRequestMock.mockResolvedValueOnce({ data: { ok: true } });
+
+      await fresh.makeAPIRequestWithEndpoint(
+        { provider: 'openai', api_url: 'http://example.test', model: 'gpt-test' },
+        'api-key',
+        '/chat/completions',
+        { prompt: 'hi' }
+      );
+
+      const requestConfig = axiosRequestMock.mock.calls[0][0];
+      expect(requestConfig.timeout).toBe(30000);
+    });
+
+    test('makeAPIRequestWithEndpoint honors configured fallback timeout', async () => {
+      const previousTimeout = process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS;
+      process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS = '45000';
+
+      const fresh = new LLMClient();
+      axiosRequestMock.mockResolvedValueOnce({ data: { ok: true } });
+
+      await fresh.makeAPIRequestWithEndpoint(
+        { provider: 'openai', api_url: 'http://example.test', model: 'gpt-test' },
+        'api-key',
+        '/responses',
+        { input: [] }
+      );
+
+      const requestConfig = axiosRequestMock.mock.calls[0][0];
+      expect(requestConfig.timeout).toBe(45000);
+
+      process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS = previousTimeout;
+    });
+
+    test('makeAPIRequestWithEndpoint falls back when timeout is zero', async () => {
+      const previousTimeout = process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS;
+      process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS = '0';
+
+      const fresh = new LLMClient();
+      axiosRequestMock.mockResolvedValueOnce({ data: { ok: true } });
+
+      await fresh.makeAPIRequestWithEndpoint(
+        { provider: 'openai', api_url: 'http://example.test', model: 'gpt-test' },
+        'api-key',
+        '/responses',
+        { input: [] }
+      );
+
+      const requestConfig = axiosRequestMock.mock.calls[0][0];
+      expect(requestConfig.timeout).toBe(60000);
+
+      process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS = previousTimeout;
+    });
+
     test('constructor falls back to default dedup settings when env vars are invalid', () => {
       const previous = {
         LUCIDCODER_LLM_DEDUP_WINDOW_MS: process.env.LUCIDCODER_LLM_DEDUP_WINDOW_MS,
