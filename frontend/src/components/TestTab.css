@@ -139,9 +139,39 @@
   padding: 0.75rem;
   overflow-y: auto;
   font-family: 'JetBrains Mono', 'Monaco', monospace;
-  font-size: 0.85rem;
+  font-size: var(--test-log-font-size, 0.55rem);
   flex: 1;
   min-height: 0;
+}
+
+.job-logs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+  color: var(--text-tertiary, #8c8c8c);
+  font-size: 0.75rem;
+}
+
+.job-logs-controls {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.job-logs-control {
+  border-radius: 0.35rem;
+  border: 1px solid var(--border-color, #2a2a2a);
+  background: transparent;
+  color: var(--text-secondary, #a0a0a0);
+  padding: 0.05rem 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.job-logs-control:hover {
+  color: var(--text-primary, #f5f5f5);
+  border-color: var(--text-tertiary, #8c8c8c);
 }
 
 .log-line {

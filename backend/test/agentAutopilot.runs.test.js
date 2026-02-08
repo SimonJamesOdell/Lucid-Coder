@@ -110,6 +110,27 @@ describe('agentAutopilot runs helpers', () => {
     });
   });
 
+  test('summarizeTestRunForPrompt skips invalid coverage line references', () => {
+    const result = summarizeTestRunForPrompt({
+      status: 'failed',
+      summary: {
+        total: 1,
+        failed: 1,
+        coverage: {
+          uncoveredLines: [
+            null,
+            { workspace: 'frontend', file: '', lines: [1] },
+            { workspace: 'backend', file: 'server.js', lines: ['nope'] },
+            { workspace: 'backend', file: 'server.js', lines: null }
+          ]
+        }
+      },
+      workspaceRuns: []
+    });
+
+    expect(result).not.toContain('Coverage gaps (line references):');
+  });
+
   test('extractFailingTestsFromWorkspaceRuns reads failed tests and log errors', () => {
     const failures = extractFailingTestsFromWorkspaceRuns([
       {

@@ -114,7 +114,7 @@ const buildJobDefinition = async (project, type, payload = {}) => {
       return {
         displayName: 'Frontend tests',
         command: 'npm',
-        args: ['run', 'test'],
+        args: ['run', 'test:coverage'],
         cwd: await ensureWorkingDir('Frontend workspace', frontendPath)
       };
     case 'backend:install':
@@ -155,7 +155,7 @@ const buildJobDefinition = async (project, type, payload = {}) => {
         return {
           displayName: 'Backend tests',
           command: 'npm',
-          args: ['run', 'test'],
+          args: ['run', 'test:coverage'],
           cwd: await ensureWorkingDir('Backend workspace', backendPath)
         };
       }
@@ -251,7 +251,7 @@ const serializeJobResponse = (job) => {
   if (!job) {
     return null;
   }
-  return {
+  const payload = {
     id: job.id,
     type: job.type,
     displayName: job.displayName,
@@ -266,6 +266,10 @@ const serializeJobResponse = (job) => {
     signal: job.signal,
     logs: job.logs
   };
+  if (job.summary) {
+    payload.summary = job.summary;
+  }
+  return payload;
 };
 
 router.post('/', async (req, res) => {

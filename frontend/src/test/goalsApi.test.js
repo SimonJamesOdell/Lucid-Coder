@@ -16,7 +16,8 @@ import {
   agentAutopilotMessage,
   agentAutopilotCancel,
   agentAutopilotResume,
-  agentRequestStream
+  agentRequestStream,
+  agentCleanupStream
 } from '../utils/goalsApi.js';
 
 describe('goalsApi', () => {
@@ -156,6 +157,15 @@ describe('goalsApi', () => {
     expect(result).toBe(backendResponse);
   });
 
+  it('createMetaGoalWithChildren validates required inputs', async () => {
+    await expect(createMetaGoalWithChildren({ prompt: 'Fix tests', childPrompts: [] }))
+      .rejects.toThrow('projectId is required');
+    await expect(createMetaGoalWithChildren({ projectId: 1, childPrompts: [] }))
+      .rejects.toThrow('prompt is required');
+    await expect(createMetaGoalWithChildren({ projectId: 1, prompt: 'Fix tests', childPrompts: 'nope' }))
+      .rejects.toThrow('childPrompts must be an array');
+  });
+
   it('agentRequest posts to /api/agent/request and returns decision payload', async () => {
     const backendResponse = {
       kind: 'feature',
@@ -265,6 +275,110 @@ describe('goalsApi', () => {
     expect(receivedChunks).toEqual(['Hello']);
     expect(completed).toEqual([{ kind: 'question' }]);
     expect(errors).toEqual(['Agent request failed']);
+  });
+
+  it('agentCleanupStream throws when the response is not ok or has no body', async () => {
+    fetch.mockResolvedValueOnce({ ok: false, status: 500, body: null });
+    await expect(agentCleanupStream({ projectId: 'p1' })).rejects.toThrow('Cleanup stream failed (500)');
+
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, body: null });
+    await expect(agentCleanupStream({ projectId: 'p1' })).rejects.toThrow('Cleanup stream failed (200)');
+  });
+
+  it('agentCleanupStream emits onEvent/onDone/onError and falls back to text payload for non-JSON data', async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      // No data → ignored.
+      'event: status\n\n',
+      // Non-JSON data → { text: data } payload.
+      'event: status\n',
+      'data: hello\n\n',
+      // JSON data
+      'event: message\n',
+      'data: {"ok":true}\n\n',
+      'event: done\n',
+      'data: {"result":{"status":"complete"}}\n\n',
+      'event: error\n',
+      'data: {}\n\n'
+    ];
+
+    const stream = new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+        controller.close();
+      }
+    });
+
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, body: stream });
+
+    const events = [];
+    const done = [];
+    const errors = [];
+
+    await agentCleanupStream({
+      projectId: 'proj-1',
+      onEvent: (name, payload) => events.push({ name, payload }),
+      onDone: (result) => done.push(result),
+      onError: (message) => errors.push(message)
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { name: 'status', payload: { text: 'hello' } },
+        { name: 'message', payload: { ok: true } }
+      ])
+    );
+    expect(done).toEqual([{ status: 'complete' }]);
+    expect(errors).toEqual(['Cleanup failed']);
+  });
+
+  it('agentCleanupStream handles empty event names and buffered delimiter parsing', async () => {
+    const encoder = new TextEncoder();
+    const payload =
+      'event:\n' +
+      'data: null\n\n' +
+      'event: done\n' +
+      'data: {"result":{"ok":true}}\n\n';
+
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(payload));
+        controller.close();
+      }
+    });
+
+    const originalDecoder = global.TextDecoder;
+    class BufferedDecoder {
+      constructor() {
+        this.chunks = [];
+      }
+      decode(value, options) {
+        if (value) {
+          this.chunks.push(Buffer.from(value).toString('utf-8'));
+        }
+        if (options?.stream) {
+          return '';
+        }
+        return this.chunks.join('');
+      }
+    }
+    global.TextDecoder = BufferedDecoder;
+
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, body: stream });
+
+    const events = [];
+    const done = [];
+
+    await agentCleanupStream({
+      projectId: 'proj-1',
+      onEvent: (name, data) => events.push({ name, data }),
+      onDone: (result) => done.push(result)
+    });
+
+    expect(events).toEqual([{ name: 'message', data: {} }]);
+    expect(done).toEqual([{ ok: true }]);
+
+    global.TextDecoder = originalDecoder;
   });
 
   it('agentRequestStream parses a trailing event block without a delimiter', async () => {

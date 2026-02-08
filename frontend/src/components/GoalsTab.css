@@ -20,7 +20,21 @@
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.10);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.goals-tab-root .goals-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
   margin-bottom: 0.6rem;
+}
+
+.goals-tab-root .goals-tab-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
 }
 
 .goals-tab-root .goals-tab-filter {
@@ -74,6 +88,23 @@
 .goals-tab-root .goals-past-toggle:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary, #fff);
+}
+
+.goals-tab-root .goals-modal-goal.is-selected {
+  border-color: var(--accent-color, #007acc);
+  box-shadow: 0 0 0 1px var(--accent-color, #007acc);
+}
+
+.goals-tab-root .goals-inspector-json {
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-primary, #fff);
+  overflow: auto;
+  max-height: 100%;
 }
 
 @media (max-width: 860px) {

@@ -84,6 +84,12 @@ const Navigation = ({ versionLabel = null }) => {
     return () => window.removeEventListener('lucidcoder:open-git-settings', handleOpenGitSettingsEvent);
   }, []);
 
+  useEffect(() => {
+    const handleOpenCleanUpToolEvent = () => setCleanUpToolOpen(true);
+    window.addEventListener('lucidcoder:open-cleanup-tool', handleOpenCleanUpToolEvent);
+    return () => window.removeEventListener('lucidcoder:open-cleanup-tool', handleOpenCleanUpToolEvent);
+  }, []);
+
   const handleCloseGitSettings = () => {
     setGitSettingsOpen(false);
   };

@@ -304,14 +304,8 @@ const normalizeJsonLikeText = (input) => {
   return escapeControlCharsInStrings(unifiedQuotes);
 };
 
-export const extractJsonObject = (value) => {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const text = normalizeJsonLikeText(value);
-  const start = text.indexOf('{');
-  if (start < 0) {
+const extractJsonObjectFromIndex = (text, start) => {
+  if (typeof text !== 'string' || start < 0) {
     return null;
   }
 
@@ -338,6 +332,24 @@ export const extractJsonObject = (value) => {
       continue;
     }
 
+    if (ch === '/' && text[index + 1] === '/') {
+      const newlineIndex = text.indexOf('\n', index + 2);
+      if (newlineIndex === -1) {
+        return null;
+      }
+      index = newlineIndex;
+      continue;
+    }
+
+    if (ch === '/' && text[index + 1] === '*') {
+      const commentEnd = text.indexOf('*/', index + 2);
+      if (commentEnd === -1) {
+        return null;
+      }
+      index = commentEnd + 1;
+      continue;
+    }
+
     if (ch === '"' || ch === "'") {
       inString = true;
       stringChar = ch;
@@ -360,7 +372,134 @@ export const extractJsonObject = (value) => {
   return null;
 };
 
+const extractJsonArrayFromIndex = (text, start) => {
+  if (typeof text !== 'string' || start < 0) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let stringChar = '"';
+  let escape = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const ch = text[index];
+
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === stringChar) {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '/' && text[index + 1] === '/') {
+      const newlineIndex = text.indexOf('\n', index + 2);
+      if (newlineIndex === -1) {
+        return null;
+      }
+      index = newlineIndex;
+      continue;
+    }
+
+    if (ch === '/' && text[index + 1] === '*') {
+      const commentEnd = text.indexOf('*/', index + 2);
+      if (commentEnd === -1) {
+        return null;
+      }
+      index = commentEnd + 1;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      stringChar = ch;
+      continue;
+    }
+
+    if (ch === '[') {
+      depth += 1;
+      continue;
+    }
+
+    if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+};
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const extractJsonObjectWithKey = (value, keyName) => {
+  if (typeof value !== 'string' || !keyName) {
+    return null;
+  }
+
+  const text = normalizeJsonLikeText(value);
+  const start = text.indexOf('{');
+  if (start < 0) {
+    return null;
+  }
+
+  const keyRegex = new RegExp(`["']?${escapeRegex(keyName)}["']?\\s*:`);
+
+  for (let index = start; index >= 0; index = text.indexOf('{', index + 1)) {
+    const candidate = extractJsonObjectFromIndex(text, index);
+    if (candidate && keyRegex.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
+export const extractJsonObject = (value) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const text = normalizeJsonLikeText(value);
+  const start = text.indexOf('{');
+  if (start < 0) {
+    return null;
+  }
+
+  return extractJsonObjectFromIndex(text, start);
+};
+
+const extractJsonArray = (value) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const text = normalizeJsonLikeText(value);
+  const start = text.indexOf('[');
+  if (start < 0) {
+    return null;
+  }
+
+  return extractJsonArrayFromIndex(text, start);
+};
+
 export const tryParseLooseJson = (value) => {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value && typeof value === 'object') {
+    return value;
+  }
   if (typeof value !== 'string') {
     return null;
   }
@@ -371,6 +510,64 @@ export const tryParseLooseJson = (value) => {
     text = text.slice(1, -1).trim();
   }
 
+  const removeCommentsOutsideStrings = (input) => {
+    let output = '';
+    let inString = false;
+    let escape = false;
+    let stringChar = '"';
+
+    for (let index = 0; index < input.length; index += 1) {
+      const ch = input[index];
+
+      if (inString) {
+        output += ch;
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escape = true;
+          continue;
+        }
+        if (ch === stringChar) {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === '"' || ch === "'") {
+        inString = true;
+        stringChar = ch;
+        output += ch;
+        continue;
+      }
+
+      if (ch === '/' && input[index + 1] === '/') {
+        const newlineIndex = input.indexOf('\n', index + 2);
+        if (newlineIndex === -1) {
+          break;
+        }
+        index = newlineIndex;
+        output += '\n';
+        continue;
+      }
+
+      if (ch === '/' && input[index + 1] === '*') {
+        const commentEnd = input.indexOf('*/', index + 2);
+        if (commentEnd === -1) {
+          break;
+        }
+        index = commentEnd + 1;
+        continue;
+      }
+
+      output += ch;
+    }
+
+    return output;
+  };
+
+  text = removeCommentsOutsideStrings(text);
   text = text.replace(/'/g, '"');
 
   const quoteUnquotedKeysOutsideStrings = (input) => {
@@ -546,6 +743,9 @@ export const buildModifyRepairPrompt = ({ goalPrompt, stage, filePath, fileConte
         role: 'user',
         content:
           `Goal (stage: ${stageLabel}): ${String(goalPrompt).slice(0, 400)}\n\n` +
+          (stageLabel === 'tests'
+            ? 'Use Vitest (vi) APIs and @testing-library for React tests. Do not use Jest globals or jest.*.\n\n'
+            : '') +
           `File path: ${filePath}\n` +
           `Previous modify edit failed with: ${errorMessage}\n\n` +
           `Failed replacements (for reference):\n${JSON.stringify(replacementsPreview, null, 2)}\n\n` +
@@ -581,6 +781,9 @@ export const buildRewriteFilePrompt = ({ goalPrompt, stage, filePath, fileConten
         role: 'user',
         content:
           `Goal (stage: ${stageLabel}): ${String(goalPrompt).slice(0, 400)}\n\n` +
+          (stageLabel === 'tests'
+            ? 'Use Vitest (vi) APIs and @testing-library for React tests. Do not use Jest globals or jest.*.\n\n'
+            : '') +
           `File path: ${filePath}\n` +
           `Previous edit failed with: ${errorMessage}\n\n` +
           `File content (read-only):\n\n${limitedContent}\n\n` +
@@ -699,6 +902,8 @@ export const tryRewriteFileWithLLM = async ({ goalPrompt, stage, filePath, origi
     message: errorMessage
   });
 
+  const preferUpsert = stage === 'tests';
+
   for (const attempt of [1, 2]) {
     try {
       const response = await axios.post(
@@ -729,6 +934,9 @@ export const tryRewriteFileWithLLM = async ({ goalPrompt, stage, filePath, origi
       }
 
       if (candidate?.type === 'modify' && Array.isArray(candidate?.replacements)) {
+        if (preferUpsert && attempt < 2) {
+          continue;
+        }
         return candidate;
       }
     } catch (rewriteError) {
@@ -780,14 +988,31 @@ export const upsertProjectFile = async ({ projectId, filePath, content, knownPat
     }
   }
 
-  const createResponse = await axios.post(`/api/projects/${projectId}/files-ops/create-file`, {
-    filePath,
-    content
-  });
-  if (useKnownPaths) {
-    knownPathsSet.add(filePath);
+  try {
+    const createResponse = await axios.post(`/api/projects/${projectId}/files-ops/create-file`, {
+      filePath,
+      content
+    });
+    if (useKnownPaths) {
+      knownPathsSet.add(filePath);
+    }
+    return createResponse.data;
+  } catch (error) {
+    if (!error?.__lucidcoderFileOpFailure) {
+      const status = error?.response?.status;
+      if (status === 404 || status === 400) {
+        const wrapped = new Error(`Failed to create file: ${filePath}`);
+        wrapped.__lucidcoderFileOpFailure = {
+          path: filePath,
+          status,
+          message: wrapped.message,
+          operation: 'create'
+        };
+        throw wrapped;
+      }
+    }
+    throw error;
   }
-  return createResponse.data;
 };
 
 export const deleteProjectPath = async ({ projectId, targetPath, recursive = false }) => {
@@ -1013,16 +1238,32 @@ export const validateEditsAgainstReflection = (edits, reflection) => {
 
 export const parseEditsFromLLM = (llmResponse) => {
   const responseContent = llmResponse?.data?.response || llmResponse?.data?.content || '';
-  const jsonText = extractJsonObject(responseContent);
+  const jsonText =
+    extractJsonObjectWithKey(responseContent, 'edits') ||
+    extractJsonArray(responseContent) ||
+    extractJsonObject(responseContent);
   if (!jsonText) {
+    const fallback = tryParseLooseJson(responseContent);
+    if (Array.isArray(fallback)) {
+      return fallback;
+    }
+    if (fallback && Array.isArray(fallback?.edits)) {
+      return fallback.edits;
+    }
     return [];
   }
 
   try {
     const parsed = JSON.parse(jsonText);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
     return Array.isArray(parsed?.edits) ? parsed.edits : [];
   } catch (error) {
-    const loose = tryParseLooseJson(jsonText);
+    const loose = tryParseLooseJson(jsonText) || tryParseLooseJson(responseContent);
+    if (Array.isArray(loose)) {
+      return loose;
+    }
     if (loose && Array.isArray(loose?.edits)) {
       return loose.edits;
     }
@@ -1066,6 +1307,38 @@ const formatTestFailureJobSection = (job, index) => {
       /* ignore JSON issues */
     }
   }
+  if (Array.isArray(job?.uncoveredLines) && job.uncoveredLines.length > 0) {
+    const lineSummary = job.uncoveredLines
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return null;
+        }
+        const workspace = typeof entry.workspace === 'string' ? entry.workspace.trim() : '';
+        const file = typeof entry.file === 'string' ? entry.file.trim() : '';
+        const normalizedFile = [workspace, file].filter(Boolean).join('/');
+        if (!normalizedFile) {
+          return null;
+        }
+        const lines = Array.isArray(entry.lines)
+          ? entry.lines.map((value) => Number(value)).filter(Number.isFinite)
+          : [];
+        if (lines.length > 0) {
+          const preview = lines.slice(0, 8).join(', ');
+          const suffix = lines.length > 8 ? ', …' : '';
+          return `${normalizedFile} (${preview}${suffix})`;
+        }
+        return normalizedFile;
+      })
+      .filter(Boolean)
+      .slice(0, 4);
+
+    if (lineSummary.length > 0) {
+      details.push(`Uncovered lines: ${lineSummary.join('; ')}`);
+    }
+  }
+  if (job?.failureReport) {
+    details.push(`Failure report:\n${job.failureReport}`);
+  }
   if (Array.isArray(job?.recentLogs) && job.recentLogs.length > 0) {
     details.push(`Recent logs:\n${job.recentLogs.join('\n')}`);
   }
@@ -1101,9 +1374,14 @@ export const buildEditsPrompt = ({
     stage === 'tests'
       ? 'Focus only on adding/updating tests first (TDD). Do not implement the feature beyond minimal scaffolding needed for tests to compile. Do not stub or remove required functionality just to satisfy tests.'
       : 'Now implement the feature so the tests pass. Keep edits minimal and localized. Do not weaken or remove required functionality to make tests pass.';
+  const testRunnerGuidance =
+    stage === 'tests'
+      ? 'Use Vitest (vi) APIs and @testing-library for React tests. Do not use Jest globals or jest.*. If you are unsure about precise replacements in test files, prefer returning a full-file upsert.'
+      : '';
 
   const retryNotices = [];
   if (retryContext?.message || retryContext?.path || retryContext?.searchSnippet) {
+    const retryMessage = typeof retryContext?.message === 'string' ? retryContext.message.toLowerCase() : '';
     retryNotices.push(
       `Previous attempt failed while editing ${retryContext.path || 'the target file'} because ${
         retryContext.message || 'the replacement snippet did not match the current file.'
@@ -1113,9 +1391,17 @@ export const buildEditsPrompt = ({
           ? ` Problematic search snippet: ${retryContext.searchSnippet.slice(0, 200)}`
           : '')
     );
+    if (retryMessage.includes('ambiguous')) {
+      retryNotices.push('The previous search snippet matched multiple locations. Use a longer, unique snippet with surrounding lines or return a full-file upsert.');
+    } else if (retryMessage.includes('not found')) {
+      retryNotices.push('The previous search snippet did not match the file. Copy an exact, current snippet from the file content or return a full-file upsert.');
+    }
   }
   if (typeof retryContext?.scopeWarning === 'string' && retryContext.scopeWarning.trim()) {
     retryNotices.push(`Scope reminder: ${retryContext.scopeWarning.trim()}`);
+  }
+  if (Array.isArray(retryContext?.suggestedPaths) && retryContext.suggestedPaths.length > 0) {
+    retryNotices.push(`Existing paths with similar names: ${retryContext.suggestedPaths.join(', ')}`);
   }
 
   const retryNotice = retryNotices.length ? `\n\n${retryNotices.join('\n\n')}` : '';
@@ -1130,6 +1416,9 @@ export const buildEditsPrompt = ({
 
   let userContent = `${projectInfo}${fileTreeContext}\n\nTask: ${goalPrompt}\n\nStage: ${stageLabel}. ${focusInstructions} ` +
     'Honor layout/placement constraints in the task (e.g., top of page, full-width).';
+  if (testRunnerGuidance) {
+    userContent += `\n\n${testRunnerGuidance}`;
+  }
   if (reflectionBlock) {
     userContent += reflectionBlock;
   }
@@ -1391,7 +1680,9 @@ const { applyEdits, __setApplyEditsTestDeps } = createApplyEditsModule({
 export const __automationUtilsTestHooks = {
   formatTestFailureContext,
   formatTestFailureJobSection,
+  extractJsonObjectFromIndex,
   formatScopeReflectionContext,
+  extractJsonArrayFromIndex,
   extractPathsFromTestFailureContext,
   normalizeJsonLikeText,
   normalizeReflectionList,

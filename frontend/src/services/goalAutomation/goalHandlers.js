@@ -16,6 +16,18 @@ export async function processGoals(
     return { success: true, processed: 0 };
   }
 
+  const shouldPause = typeof options?.shouldPause === 'function' ? options.shouldPause : () => false;
+  const shouldCancel = typeof options?.shouldCancel === 'function' ? options.shouldCancel : () => false;
+  const waitWhilePaused = async () => {
+    while (shouldPause()) {
+      if (shouldCancel()) {
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return !shouldCancel();
+  };
+
   const resolveChildren = (goal) => (Array.isArray(goal?.children) ? goal.children : []);
   const shouldProcessParent = Boolean(options.processParentGoals);
 
@@ -31,6 +43,9 @@ export async function processGoals(
   const processTree = async (goals, count = 0) => {
     let processed = count;
     for (const goal of goals) {
+      if (!(await waitWhilePaused())) {
+        return { success: false, processed, cancelled: true };
+      }
       const children = resolveChildren(goal);
       if (children.length > 0) {
         const childResult = await processTree(children, processed);
@@ -54,6 +69,10 @@ export async function processGoals(
         setMessages,
         options
       );
+
+      if (result?.skipped) {
+        continue;
+      }
 
       if (!result.success) {
         return { success: false, processed };

@@ -29,6 +29,22 @@ describe('tryParseLooseJson', () => {
       trailing: [1, 2]
     });
   });
+
+  it('strips line and block comments before parsing', () => {
+    const raw = `{
+      // leading comment
+      edits: [
+        { type: "modify", path: "frontend/src/App.jsx" }
+      ],
+      /* trailing comment */
+    }`;
+
+    const parsed = tryParseLooseJson(raw);
+
+    expect(parsed).toEqual({
+      edits: [{ type: 'modify', path: 'frontend/src/App.jsx' }]
+    });
+  });
 });
 
 describe('buildScopeReflectionPrompt', () => {
@@ -302,6 +318,19 @@ describe('buildEditsPrompt', () => {
     expect(userMessage).toContain('Avoid changing: None noted');
     expect(userMessage).toContain('Tests required: Yes');
   });
+
+  it('includes Vitest guidance for test-stage prompts', () => {
+    const prompt = buildEditsPrompt({
+      projectInfo: 'Repo info',
+      fileTreeContext: '',
+      goalPrompt: 'Cover uncovered lines',
+      stage: 'tests'
+    });
+
+    const userMessage = prompt.messages[1].content;
+    expect(userMessage).toContain('Use Vitest');
+    expect(userMessage).toContain('Do not use Jest');
+  });
 });
 
 describe('parseEditsFromLLM', () => {
@@ -315,10 +344,45 @@ describe('parseEditsFromLLM', () => {
     expect(edits).toEqual([{ type: 'modify', path: 'frontend/src/App.jsx' }]);
   });
 
+  it('selects the edits object when earlier braces appear in the response', () => {
+    const edits = parseEditsFromLLM({
+      data: {
+        response: "Here is a sample: const foo = { bar: 1 };\n{edits:[{type:'modify',path:'frontend/src/App.jsx'}]}"
+      }
+    });
+
+    expect(edits).toEqual([{ type: 'modify', path: 'frontend/src/App.jsx' }]);
+  });
+
+  it('parses edits when the response is a JSON array', () => {
+    const edits = parseEditsFromLLM({
+      data: {
+        response: '[{"type":"modify","path":"frontend/src/App.jsx"}]'
+      }
+    });
+
+    expect(edits).toEqual([{ type: 'modify', path: 'frontend/src/App.jsx' }]);
+  });
+
   it('falls back to the loose JSON parser when strict parsing fails', () => {
     const edits = parseEditsFromLLM({
       data: {
         response: '{edits:[{type:"modify",path:"frontend/src/App.jsx"}]}'
+      }
+    });
+
+    expect(edits).toEqual([{ type: 'modify', path: 'frontend/src/App.jsx' }]);
+  });
+
+  it('parses edits when JSON includes comments', () => {
+    const edits = parseEditsFromLLM({
+      data: {
+        response: `{
+          // comment before edits
+          edits: [
+            { type: "modify", path: "frontend/src/App.jsx" }
+          ]
+        }`
       }
     });
 

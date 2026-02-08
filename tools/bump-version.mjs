@@ -50,12 +50,11 @@ const updateFile = (relativePath, transform, { ensureTrailingNewline = false } =
   const prev = readFileSync(absolutePath, 'utf8');
   const eol = detectEol(prev);
   const next = transform(prev);
-  if (next === prev) {
-    return;
-  }
-
   const normalized = withEol(next, eol);
   const finalText = ensureTrailingNewline && !normalized.endsWith(eol) ? `${normalized}${eol}` : normalized;
+  if (finalText === prev) {
+    return;
+  }
   if (!dryRun) {
     writeFileSync(absolutePath, finalText, 'utf8');
   }
@@ -133,15 +132,15 @@ updateOptionalJsonFile('frontend/package-lock.json', (lock) => {
 updateFile('VERSION', () => `${newVersion}\n`);
 updateFile(
   'README.md',
-  (text) => replaceOnceOrThrow(text, /^Version:\s*\S+\s*$/m, `Version: ${newVersion}`, 'README.md')
+  (text) => replaceOnceOrThrow(text, /^Version:[ \t]*\S+[ \t]*$/m, `Version: ${newVersion}`, 'README.md')
 );
 updateFile(
   'docs/VERSIONING.md',
   (text) =>
     replaceOnceOrThrow(
       text,
-      /(## Current version\s*\n\s*)\S+\s*/m,
-      `$1\n${newVersion}\n`,
+      /(## Current version[ \t]*\r?\n)(?:\r?\n)?[ \t]*\S+[ \t]*\r?\n(?:\r?\n)*/m,
+      `$1\n${newVersion}\n\n`,
       'docs/VERSIONING.md'
     )
 );

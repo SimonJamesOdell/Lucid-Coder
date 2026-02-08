@@ -1,3 +1,12 @@
+## 0.5.3 (2026-02-08)
+- Introduce the Clean Up tool end-to-end: backend foreground cleanup runner with strict coverage gates, SSE streaming endpoint, and a full UI modal flow (progress logs, cancellation, and branch cleanup decisions).
+- Add cleanup resume coordination + request storage so automation can reopen and resume cleanup after passing test runs.
+- Extend goals APIs with cleanup streaming support and richer meta-goal payloads (child metadata + parent overrides).
+- Add a draggable file explorer divider with clamped widths and per-project persistence.
+- Add TestTab log font size controls (zoom in/out) to improve test output readability.
+- Enforce 100% coverage thresholds and line references in automation/test workflows, including frontend Vitest thresholds and autopilot/test route coverage enforcement.
+- Harden version bump tooling for CRLF/no-op runs and add guard tests for cleanup/coverage utilities, goal automation, ChatPanel/TestTab flows, and branch state edge cases.
+
 ## 0.5.2 (2026-02-04)
 - Split Create New Project into a two-step wizard (Project Details → Git Setup) with Next/Back navigation, while preserving local/global/custom git workflows and remote create/connect options.
 - Fix Preview tab blank page regressions by making backend-origin resolution SSR-safe, adding `VITE_API_TARGET` support, and proxying `/preview` to the backend in Vite dev.

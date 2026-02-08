@@ -50,6 +50,7 @@ const ChatPanel = ({
     }
     return window.__lucidcoderAutofixHalted === true;
   });
+  const autoFixHaltedRef = useRef(autoFixHalted);
   const {
     currentProject,
     stageAiChange,
@@ -224,11 +225,13 @@ const ChatPanel = ({
     if (typeof window !== 'undefined') {
       window.__lucidcoderAutofixHalted = next;
     }
+    autoFixHaltedRef.current = next;
     setAutoFixHalted(next);
-    if (next) {
-      autoFixCancelRef.current = true;
-    }
   }, []);
+
+  useEffect(() => {
+    autoFixHaltedRef.current = autoFixHalted;
+  }, [autoFixHalted]);
 
   const readStoredChat = useCallback((projectId) => {
     return readStoredChatMessages(projectId);
@@ -398,6 +401,7 @@ const ChatPanel = ({
     handleAutopilotControl,
     appendStreamingChunk,
     autopilotResumeAttemptedRef,
+    autoFixCancelRef,
     isMessagesScrolledToBottom,
     messagesRef,
     messagesContainerRef,
@@ -432,6 +436,25 @@ const ChatPanel = ({
   const autopilotStatusValue = autopilotSession?.status || 'idle';
   const autopilotCanPause = autopilotStatusValue === 'running';
   const autopilotCanResume = autopilotStatusValue === 'paused';
+  const assistantToggleLabel = autopilotIsActive
+    ? (autopilotCanResume ? 'Resume' : 'Pause')
+    : (autoFixHalted ? 'Resume' : '■');
+  const assistantToggleTitle = autopilotIsActive
+    ? (autopilotCanResume ? 'Resume autopilot' : 'Pause autopilot')
+    : (autoFixHalted ? 'Resume automated test fixing' : 'Stop automated test fixing');
+  const assistantToggleDisabled = autopilotIsActive && !autopilotCanPause && !autopilotCanResume;
+
+  const handleAssistantToggle = async () => {
+    if (autopilotIsActive) {
+      if (autopilotCanResume) {
+        await handleAutopilotControl('resume');
+      } else if (autopilotCanPause) {
+        await handleAutopilotControl('pause');
+      }
+      return;
+    }
+    setAutofixHaltFlag(!autoFixHalted);
+  };
 
   const panelClassName = `chat-panel ${side === 'right' ? 'chat-panel--right' : 'chat-panel--left'} ${isResizing ? 'chat-panel--resizing' : ''}`;
   const panelStyle = {
@@ -880,14 +903,12 @@ const ChatPanel = ({
     const childPrompts = Array.isArray(payload?.childPrompts)
       ? payload.childPrompts.map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean)
       : [];
+    const childPromptMetadata = payload && typeof payload.childPromptMetadata === 'object'
+      ? payload.childPromptMetadata
+      : null;
     const failureContext = payload && typeof payload.failureContext === 'object' ? payload.failureContext : null;
 
     if (!prompt || !currentProject?.id) {
-      return;
-    }
-
-    // When halted, ignore automation-driven retries (but still allow user-driven fixes).
-    if (autoFixHalted && origin === 'automation') {
       return;
     }
 
@@ -917,7 +938,9 @@ const ChatPanel = ({
         const planned = await createMetaGoalWithChildren({
           projectId: currentProject.id,
           prompt,
-          childPrompts
+          childPrompts,
+          childPromptMetadata,
+          parentMetadataOverrides: { suppressClarifyingQuestions: true }
         });
         const children = Array.isArray(planned?.children) ? planned.children : [];
         goalsToProcess = children;
@@ -967,7 +990,9 @@ const ChatPanel = ({
         {
           requestEditorFocus,
           syncBranchOverview,
-          testFailureContext: failureContext
+          testFailureContext: childPromptMetadata ? null : failureContext,
+          shouldPause: () => autoFixHaltedRef.current,
+          shouldCancel: () => autoFixCancelRef.current
         }
       );
 
@@ -1097,6 +1122,12 @@ const ChatPanel = ({
       return undefined;
     }
 
+    const handleAutoFixResume = () => {
+      if (autoFixHaltedRef.current) {
+        setAutofixHaltFlag(false);
+      }
+    };
+
     const handleAutoFixTests = (event) => {
       const payload = event?.detail;
       const prompt = payload?.prompt;
@@ -1106,14 +1137,19 @@ const ChatPanel = ({
       const origin = event?.detail?.origin;
 
       const normalizedOrigin = origin === 'automation' ? 'automation' : 'user';
+      if (normalizedOrigin === 'user' && autoFixHaltedRef.current) {
+        setAutofixHaltFlag(false);
+      }
       runAutomatedTestFixGoal(payload, { origin: normalizedOrigin });
     };
 
+    window.addEventListener('lucidcoder:autofix-resume', handleAutoFixResume);
     window.addEventListener('lucidcoder:autofix-tests', handleAutoFixTests);
     return () => {
+      window.removeEventListener('lucidcoder:autofix-resume', handleAutoFixResume);
       window.removeEventListener('lucidcoder:autofix-tests', handleAutoFixTests);
     };
-  }, [autoFixHalted, runAutomatedTestFixGoal]);
+  }, [autoFixHalted, runAutomatedTestFixGoal, setAutofixHaltFlag]);
 
   const handleSendMessage = async () => {
     await submitPrompt(inputValue, { origin: 'user' });
@@ -1135,10 +1171,11 @@ const ChatPanel = ({
             type="button"
             className="chat-autofix-toggle"
             data-testid="chat-autofix-toggle"
-            onClick={() => setAutofixHaltFlag(!autoFixHalted)}
-            title={autoFixHalted ? 'Resume automated test fixing' : 'Stop automated test fixing'}
+            onClick={handleAssistantToggle}
+            title={assistantToggleTitle}
+            disabled={assistantToggleDisabled}
           >
-            {autoFixHalted ? 'Resume' : '■'}
+            {assistantToggleLabel}
           </button>
           <button
             type="button"

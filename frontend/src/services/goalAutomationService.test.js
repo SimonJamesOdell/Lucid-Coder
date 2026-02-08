@@ -9,6 +9,7 @@ import {
   handleRegularFeature,
   __testOnly
 } from './goalAutomationService';
+import * as automationUtils from './goalAutomation/automationUtils';
 
 vi.mock('../utils/goalsApi');
 
@@ -551,6 +552,70 @@ describe('goalAutomationService', () => {
       ]);
     });
 
+    test('parseEditsFromLLM falls back to loose JSON when strict parsing fails', () => {
+      const edits = __testOnly.parseEditsFromLLM({
+        data: {
+          content: "{edits:[{type:'upsert',path:'src/Loose.js',content:'export default 1;'}]}"
+        }
+      });
+
+      expect(edits).toEqual([
+        {
+          type: 'upsert',
+          path: 'src/Loose.js',
+          content: 'export default 1;'
+        }
+      ]);
+    });
+
+    test('parseEditsFromLLM returns loose JSON edits object when no JSON snippet is found', () => {
+      const edits = __testOnly.parseEditsFromLLM({
+        data: {
+          content: 'edits: [{"type":"upsert","path":"src/Fallback.jsx","content":"export default 1;"}]'
+        }
+      });
+
+      expect(edits).toEqual([
+        {
+          type: 'upsert',
+          path: 'src/Fallback.jsx',
+          content: 'export default 1;'
+        }
+      ]);
+    });
+
+    test('parseEditsFromLLM returns array responses from loose parsing', () => {
+      const edits = __testOnly.parseEditsFromLLM({
+        data: {
+          content: "[{type:'upsert',path:'src/Array.jsx',content:'export default 1;'}]"
+        }
+      });
+
+      expect(edits).toEqual([
+        {
+          type: 'upsert',
+          path: 'src/Array.jsx',
+          content: 'export default 1;'
+        }
+      ]);
+    });
+
+    test('parseEditsFromLLM recovers when strict JSON parsing fails', () => {
+      const edits = __testOnly.parseEditsFromLLM({
+        data: {
+          content: '{"edits":[{type:"upsert",path:"src/Recover.jsx",content:"export default 1;"}]}'
+        }
+      });
+
+      expect(edits).toEqual([
+        {
+          type: 'upsert',
+          path: 'src/Recover.jsx',
+          content: 'export default 1;'
+        }
+      ]);
+    });
+
     test('applyEdits calls syncBranchOverview and onFileApplied when stage returns overview', async () => {
       axios.get.mockResolvedValue({ data: { content: 'const value = 1;\n' } });
 
@@ -661,6 +726,62 @@ describe('goalAutomationService', () => {
 
       expect(prompt.messages[1].content).toContain('Test failure context');
       expect(prompt.messages[1].content).toContain('FAIL src/App.test.jsx');
+    });
+
+    test('buildEditsPrompt includes suggested paths and uncovered line previews', () => {
+      const prompt = __testOnly.buildEditsPrompt({
+        projectInfo: 'Project Foo',
+        fileTreeContext: '',
+        goalPrompt: 'Fix tests',
+        stage: 'tests',
+        attempt: 2,
+        retryContext: {
+          suggestedPaths: ['frontend/src/test/App.test.jsx']
+        },
+        testFailureContext: {
+          jobs: [
+            {
+              label: 'Frontend tests',
+              status: 'failed',
+              uncoveredLines: [
+                {
+                  workspace: 'frontend',
+                  file: 'src/App.jsx',
+                  lines: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+                }
+              ]
+            }
+          ]
+        }
+      });
+
+      const userContent = prompt.messages[1].content;
+      expect(userContent).toContain('Existing paths with similar names: frontend/src/test/App.test.jsx');
+      expect(userContent).toContain('Uncovered lines: frontend/src/App.jsx (1, 2, 3, 4, 5, 6, 7, 8, …)');
+    });
+
+    test('buildEditsPrompt skips invalid uncovered line entries and formats numeric previews', () => {
+      const prompt = __testOnly.buildEditsPrompt({
+        projectInfo: 'Project Foo',
+        fileTreeContext: '',
+        goalPrompt: 'Fix tests',
+        stage: 'tests',
+        testFailureContext: {
+          jobs: [
+            {
+              label: 'Backend tests',
+              status: 'failed',
+              uncoveredLines: [
+                null,
+                { workspace: '', file: '', lines: [1] },
+                { workspace: 'backend', file: 'server.js', lines: ['nope', 2] }
+              ]
+            }
+          ]
+        }
+      });
+
+      expect(prompt.messages[1].content).toContain('Uncovered lines: backend/server.js (2)');
     });
 
     test('applyEdits uses fallback rewrite error message when caught error loses its message', async () => {
@@ -1376,6 +1497,144 @@ describe('goalAutomationService', () => {
         source: 'automation',
         highlight: 'editor'
       });
+    });
+
+    test('rejects non-test edits for coverage goals', async () => {
+      fetchGoals.mockResolvedValue([]);
+      advanceGoalPhase.mockResolvedValue({});
+
+      axios.post.mockResolvedValue({
+        data: {
+          content: JSON.stringify({
+            edits: [
+              {
+                type: 'modify',
+                path: 'frontend/src/App.jsx',
+                replacements: [{ search: 'old', replace: 'new' }]
+              }
+            ]
+          })
+        }
+      });
+
+      const result = await processGoal(
+        {
+          id: 1,
+          prompt: 'Fix coverage',
+          metadata: { uncoveredLines: [{ workspace: 'frontend', file: 'src/App.jsx', lines: [1] }] }
+        },
+        42,
+        '/test',
+        'Project: Test',
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages,
+        {
+          enableScopeReflection: false,
+          testsAttemptSequence: [1],
+          implementationAttemptSequence: [1]
+        }
+      );
+
+      expect(result).toEqual(
+        expect.objectContaining({ success: false, error: 'Coverage fixes are limited to test files only.' })
+      );
+    });
+
+    test('returns cancelled when pause guard fails early', async () => {
+      fetchGoals.mockResolvedValue([]);
+      advanceGoalPhase.mockResolvedValue({});
+
+      const result = await processGoal(
+        { id: 2, prompt: 'Short-circuit' },
+        42,
+        '/test',
+        'Project: Test',
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages,
+        {
+          enableScopeReflection: false,
+          shouldPause: () => true,
+          shouldCancel: () => true
+        }
+      );
+
+      expect(result).toEqual({ success: false, cancelled: true });
+    });
+
+    test('retries implementation edits after file operation failures', async () => {
+      fetchGoals.mockResolvedValue([{ id: 1, phase: 'ready' }]);
+      advanceGoalPhase.mockResolvedValue({});
+
+      const applyEditsSpy = vi.spyOn(automationUtils, 'applyEdits');
+      applyEditsSpy
+        .mockRejectedValueOnce({ __lucidcoderFileOpFailure: { path: 'frontend/src/App.jsx', status: 404 } })
+        .mockResolvedValueOnce({ applied: 1, skipped: 0 });
+
+      let llmCall = 0;
+      axios.post.mockImplementation((url) => {
+        if (url === '/api/llm/generate') {
+          llmCall += 1;
+          if (llmCall === 1) {
+            return Promise.resolve({ data: { content: JSON.stringify({ edits: [] }) } });
+          }
+          return Promise.resolve({
+            data: {
+              content: JSON.stringify({
+                edits: [{ type: 'upsert', path: 'frontend/src/App.jsx', content: 'export default 1;' }]
+              })
+            }
+          });
+        }
+        if (url === '/api/projects/42/branches/stage') {
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: { success: true } });
+      });
+
+      const promise = processGoal(
+        { id: 1, prompt: 'Fix app' },
+        42,
+        '/test',
+        'Project: Test',
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages,
+        {
+          enableScopeReflection: false,
+          testsAttemptSequence: [1],
+          implementationAttemptSequence: [1, 2]
+        }
+      );
+
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(applyEditsSpy).toHaveBeenCalledTimes(2);
+      applyEditsSpy.mockRestore();
+    });
+
+    test('returns a goal not found error when API responds with 404', async () => {
+      fetchGoals.mockRejectedValueOnce({ response: { status: 404 }, message: 'Goal not found' });
+      advanceGoalPhase.mockResolvedValue({});
+
+      const result = await processGoal(
+        { id: 55, prompt: 'Missing goal' },
+        42,
+        '/test',
+        'Project: Test',
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages,
+        { enableScopeReflection: false }
+      );
+
+      expect(result).toEqual({ success: false, skipped: true, error: 'Goal not found' });
     });
 
     test('repairs modify edits by matching equivalent paths (prefix omitted)', async () => {
@@ -3148,6 +3407,22 @@ describe('goalAutomationService', () => {
             });
           }
 
+          if (llmCall === 5) {
+            return Promise.resolve({
+              data: {
+                content: JSON.stringify({
+                  edits: [
+                    {
+                      type: 'modify',
+                      path: 'frontend/src/app.js',
+                      replacements: [{ search: 'hello', replace: 'HELLO' }]
+                    }
+                  ]
+                })
+              }
+            });
+          }
+
           return Promise.resolve({ data: { content: JSON.stringify({ edits: [] }) } });
         }
 
@@ -3173,7 +3448,7 @@ describe('goalAutomationService', () => {
       const result = await promise;
 
       expect(result).toEqual({ success: true });
-      expect(llmCall).toBe(5);
+      expect(llmCall).toBe(6);
       expect(axios.put).toHaveBeenCalledWith('/api/projects/42/files/frontend/src/app.js', {
         content: 'const msg = "HELLO";\n'
       });
@@ -3270,7 +3545,7 @@ describe('goalAutomationService', () => {
       });
       expect(axios.put).not.toHaveBeenCalled();
       // Second implementation-stage attempt adds one more LLM call before exiting.
-      expect(llmCall).toBe(6);
+      expect(llmCall).toBe(7);
     });
 
     test('parses edits when LLM responds with data.response', async () => {
@@ -7242,7 +7517,7 @@ line2"}]}`;
       await vi.advanceTimersByTimeAsync(3000);
       const result = await promise;
 
-      expect(result).toEqual({ success: false, error: 'File not found' });
+      expect(result).toEqual({ success: false, error: 'File not found: src/missing.js' });
     });
 
     test('rethrows non-parse edit errors from the tests stage', async () => {

@@ -76,6 +76,34 @@ describe('goalHandlers processGoals', () => {
     expect(result).toEqual({ success: true, processed: 1 });
   });
 
+  it('returns immediately when no child goals are provided', async () => {
+    const result = await goalHandlers.processGoals(
+      [],
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages
+    );
+
+    expect(result).toEqual({ success: true, processed: 0 });
+  });
+
+  it('returns immediately when child goals are not an array', async () => {
+    const result = await goalHandlers.processGoals(
+      null,
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages
+    );
+
+    expect(result).toEqual({ success: true, processed: 0 });
+  });
+
   it('processes parent goals when processParentGoals is enabled', async () => {
     const result = await goalHandlers.processGoals(
       buildTree(),
@@ -116,6 +144,99 @@ describe('goalHandlers processGoals', () => {
       expect.any(Object)
     );
     expect(result).toEqual({ success: true, processed: 2 });
+  });
+
+  it('waits while paused before processing goals', async () => {
+    vi.useFakeTimers();
+    const shouldPause = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    const shouldCancel = vi.fn().mockReturnValue(false);
+
+    const resultPromise = goalHandlers.processGoals(
+      buildTree(),
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages,
+      { shouldPause, shouldCancel }
+    );
+
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(shouldPause).toHaveBeenCalled();
+    expect(result).toEqual({ success: true, processed: 1 });
+  });
+
+  it('continues when a child goal is skipped', async () => {
+    const { processGoal } = await import('./processGoal');
+    processGoal.mockResolvedValueOnce({ success: true, skipped: true });
+
+    const result = await goalHandlers.processGoals(
+      buildTree(),
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages
+    );
+
+    expect(result).toEqual({ success: true, processed: 0 });
+  });
+
+  it('cancels processing when paused and cancelled', async () => {
+    const result = await goalHandlers.processGoals(
+      buildTree(),
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages,
+      {
+        shouldPause: () => true,
+        shouldCancel: () => true
+      }
+    );
+
+    expect(result).toEqual({ success: false, processed: 0, cancelled: true });
+  });
+
+  it('returns failure when a goal fails to process', async () => {
+    const { processGoal } = await import('./processGoal');
+    processGoal.mockResolvedValueOnce({ success: false });
+
+    const result = await goalHandlers.processGoals(
+      [{ id: 5, prompt: 'Solo', children: [] }],
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages
+    );
+
+    expect(result).toEqual({ success: false, processed: 0 });
+  });
+
+  it('returns cancelled when pause checks detect a cancel request', async () => {
+    const result = await goalHandlers.processGoals(
+      buildTree(),
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages,
+      {
+        shouldPause: () => true,
+        shouldCancel: () => true
+      }
+    );
+
+    expect(result).toEqual({ success: false, processed: 0, cancelled: true });
   });
 });
 

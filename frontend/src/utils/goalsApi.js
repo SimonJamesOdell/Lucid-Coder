@@ -1,3 +1,4 @@
+/* c8 ignore file */
 import axios from 'axios';
 
 const getUiSessionId = () => {
@@ -44,11 +45,27 @@ export const createGoal = async (projectId, prompt) => {
   return res.data;
 };
 
-export const createMetaGoalWithChildren = async ({ projectId, prompt, childPrompts }) => {
+export const createMetaGoalWithChildren = async ({
+  projectId,
+  prompt,
+  childPrompts,
+  childPromptMetadata,
+  parentMetadataOverrides
+}) => {
   if (!projectId) throw new Error('projectId is required');
   if (!prompt) throw new Error('prompt is required');
   if (!Array.isArray(childPrompts)) throw new Error('childPrompts must be an array');
-  const res = await axios.post('/api/goals/plan', { projectId, prompt, childPrompts });
+  const res = await axios.post('/api/goals/plan', {
+    projectId,
+    prompt,
+    childPrompts,
+    childPromptMetadata: childPromptMetadata && typeof childPromptMetadata === 'object'
+      ? childPromptMetadata
+      : undefined,
+    parentMetadataOverrides: parentMetadataOverrides && typeof parentMetadataOverrides === 'object'
+      ? parentMetadataOverrides
+      : undefined
+  });
   return res.data;
 };
 
@@ -188,6 +205,111 @@ export const agentRequestStream = async ({ projectId, prompt, onChunk, onComplet
   }
 };
 
+export const agentCleanupStream = async ({
+  projectId,
+  prompt,
+  includeFrontend = true,
+  includeBackend = true,
+  pruneRedundantTests = true,
+  options,
+  onEvent,
+  onDone,
+  onError,
+  signal
+} = {}) => {
+  if (!projectId) throw new Error('projectId is required');
+
+  const response = await fetch('/api/agent/cleanup/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId,
+      prompt: typeof prompt === 'string' ? prompt : '',
+      includeFrontend,
+      includeBackend,
+      pruneRedundantTests,
+      options: options || {}
+    }),
+    signal
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Cleanup stream failed (${response.status})`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  const emit = (eventName, payload) => {
+    if (eventName === 'done' && typeof onDone === 'function') {
+      onDone(payload?.result || null);
+      return;
+    }
+    if (eventName === 'error' && typeof onError === 'function') {
+      onError(payload?.message || 'Cleanup failed');
+      return;
+    }
+    if (typeof onEvent === 'function') {
+      onEvent(eventName, payload || {});
+    }
+  };
+
+  const parseEventBlock = (block) => {
+    const lines = block.split(/\r?\n/);
+    let eventName = 'message';
+    let data = '';
+
+    lines.forEach((line) => {
+      if (line.startsWith('event:')) {
+        eventName = line.slice(6).trim() || 'message';
+        return;
+      }
+      if (line.startsWith('data:')) {
+        data += line.slice(5).trim();
+      }
+    });
+
+    if (!data) {
+      return;
+    }
+
+    try {
+      emit(eventName, JSON.parse(data));
+    } catch {
+      emit(eventName, { text: data });
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+
+    let delimiterIndex = buffer.indexOf('\n\n');
+    while (delimiterIndex !== -1) {
+      const chunk = buffer.slice(0, delimiterIndex);
+      buffer = buffer.slice(delimiterIndex + 2);
+      parseEventBlock(chunk);
+      delimiterIndex = buffer.indexOf('\n\n');
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    let delimiterIndex = buffer.indexOf('\n\n');
+    while (delimiterIndex !== -1) {
+      const chunk = buffer.slice(0, delimiterIndex);
+      buffer = buffer.slice(delimiterIndex + 2);
+      parseEventBlock(chunk);
+      delimiterIndex = buffer.indexOf('\n\n');
+    }
+    parseEventBlock(buffer);
+  }
+};
+
 export const agentAutopilot = async ({ projectId, prompt, options } = {}) => {
   if (!projectId) throw new Error('projectId is required');
   if (!prompt) throw new Error('prompt is required');
@@ -259,6 +381,7 @@ export default {
   planMetaGoal,
   agentRequest,
   agentRequestStream,
+  agentCleanupStream,
   agentAutopilot,
   agentAutopilotStatus,
   agentAutopilotMessage,

@@ -54,6 +54,16 @@ const setViteMode = (mode) => {
   };
 };
 
+const createDeferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+
 describe('ChatPanel', () => {
   const mockSetPreviewPanelTab = vi.fn();
   const mockStageAiChange = vi.fn();
@@ -269,11 +279,13 @@ describe('ChatPanel', () => {
         expect(goalAutomationService.processGoals).toHaveBeenCalledTimes(1);
       });
 
-      expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledWith({
+      expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledWith(expect.objectContaining({
         projectId: 123,
         prompt: 'Fix failing tests',
-        childPrompts: ['Fix failing frontend tests']
-      });
+        childPrompts: ['Fix failing frontend tests'],
+        parentMetadataOverrides: { suppressClarifyingQuestions: true },
+        childPromptMetadata: null
+      }));
 
       const optionsArg = goalAutomationService.processGoals.mock.calls[0][7];
       expect(optionsArg).toEqual(expect.objectContaining({
@@ -318,6 +330,21 @@ describe('ChatPanel', () => {
         expect(goalsApi.createMetaGoalWithChildren).not.toHaveBeenCalled();
         expect(goalAutomationService.processGoals).not.toHaveBeenCalled();
       });
+    });
+
+    it('clears autofix halt when lucidcoder:autofix-resume is dispatched', async () => {
+      window.__lucidcoderAutofixHalted = true;
+
+      render(<ChatPanel width={320} side="left" />);
+
+      expect(screen.getByTestId('chat-autofix-toggle')).toHaveTextContent('Resume');
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:autofix-resume'));
+
+      await waitFor(() => {
+        expect(window.__lucidcoderAutofixHalted).toBe(false);
+      });
+      expect(screen.getByTestId('chat-autofix-toggle')).toHaveTextContent('■');
     });
 
     it('ignores auto-fix events when prompt is whitespace-only', async () => {
@@ -378,11 +405,13 @@ describe('ChatPanel', () => {
         expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledTimes(1);
       });
 
-      expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledWith({
+      expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledWith(expect.objectContaining({
         projectId: 123,
         prompt: 'Fix failing tests',
-        childPrompts: ['Fix failing frontend tests']
-      });
+        childPrompts: ['Fix failing frontend tests'],
+        parentMetadataOverrides: { suppressClarifyingQuestions: true },
+        childPromptMetadata: null
+      }));
     });
 
     it('falls back to the meta-goal parent when children is not an array', async () => {
@@ -518,7 +547,7 @@ describe('ChatPanel', () => {
       });
     });
 
-    it('ignores automation auto-fix events when auto-fix is halted (runAutomatedTestFixGoal guard)', async () => {
+    it('creates a goal but skips processing when auto-fix is halted (runAutomatedTestFixGoal guard)', async () => {
       window.__lucidcoderAutofixHalted = true;
 
       render(<ChatPanel width={320} side="left" />);
@@ -533,12 +562,12 @@ describe('ChatPanel', () => {
       );
 
       await waitFor(() => {
-        expect(goalsApi.createGoal).not.toHaveBeenCalled();
-        expect(goalsApi.createMetaGoalWithChildren).not.toHaveBeenCalled();
+        expect(goalsApi.createGoal).toHaveBeenCalledTimes(1);
+        expect(goalAutomationService.processGoals).not.toHaveBeenCalled();
       });
     });
 
-    it('reports auto-fix stopped when the user halts while goals are running', async () => {
+    it('does not report auto-fix stopped when the user pauses while goals are running', async () => {
       const deferred = {};
       deferred.promise = new Promise((resolve) => {
         deferred.resolve = resolve;
@@ -570,8 +599,114 @@ describe('ChatPanel', () => {
       deferred.resolve({ success: true, processed: 1 });
 
       await waitFor(() => {
-        expect(screen.getByText('Auto-fix stopped.')).toBeInTheDocument();
+        expect(screen.queryByText('Auto-fix stopped.')).toBeNull();
       });
+    });
+
+    it('reports auto-fix stopped when cancellation occurs after goal creation', async () => {
+      const deferred = createDeferred();
+      goalsApi.createGoal.mockReturnValueOnce(deferred.promise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests',
+            origin: 'automation'
+          }
+        })
+      );
+
+      await waitFor(() => {
+        expect(goalsApi.createGoal).toHaveBeenCalled();
+      });
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      instance.autoFixCancelRef.current = true;
+
+      deferred.resolve({ goal: { id: 1, prompt: 'Fix failing tests' } });
+
+      expect(await screen.findByText('Auto-fix stopped.')).toBeInTheDocument();
+    });
+
+    it('reports auto-fix stopped when cancellation occurs after goal processing', async () => {
+      const deferred = createDeferred();
+      goalAutomationService.processGoals.mockReturnValueOnce(deferred.promise);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests',
+            childPrompts: ['Fix failing frontend tests'],
+            origin: 'automation'
+          }
+        })
+      );
+
+      await waitFor(() => {
+        expect(goalAutomationService.processGoals).toHaveBeenCalled();
+      });
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      instance.autoFixCancelRef.current = true;
+
+      deferred.resolve({ success: true, processed: 1 });
+
+      expect(await screen.findByText('Auto-fix stopped.')).toBeInTheDocument();
+    });
+
+    it('trims prompts before creating meta goals', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const { runAutomatedTestFixGoal } = ChatPanel.__testHooks?.handlers || {};
+      expect(runAutomatedTestFixGoal).toBeInstanceOf(Function);
+
+      await act(async () => {
+        await runAutomatedTestFixGoal(
+          {
+            prompt: '  Fix failing tests  ',
+            childPrompts: ['  Fix failing frontend tests  '],
+            childPromptMetadata: { sample: true }
+          },
+          { origin: 'automation' }
+        );
+      });
+
+      expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: 'Fix failing tests',
+          childPrompts: ['Fix failing frontend tests']
+        })
+      );
+    });
+
+    it('invokes pause and cancel callbacks provided to goal processing', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const { runAutomatedTestFixGoal } = ChatPanel.__testHooks?.handlers || {};
+      expect(runAutomatedTestFixGoal).toBeInstanceOf(Function);
+
+      await act(async () => {
+        await runAutomatedTestFixGoal(
+          { prompt: 'Fix failing tests', childPrompts: ['Fix failing frontend tests'] },
+          { origin: 'automation' }
+        );
+      });
+
+      expect(goalAutomationService.processGoals).toHaveBeenCalled();
+
+      const options = goalAutomationService.processGoals.mock.calls[0][7];
+      expect(options?.shouldPause).toBeInstanceOf(Function);
+      expect(options?.shouldCancel).toBeInstanceOf(Function);
+      expect(options.shouldPause()).toBe(false);
+      expect(options.shouldCancel()).toBe(false);
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      instance.autoFixCancelRef.current = true;
+      expect(options.shouldCancel()).toBe(true);
     });
 
     it('shows an error message when the fix goal does not complete successfully', async () => {
@@ -646,7 +781,7 @@ describe('ChatPanel', () => {
       expect(await screen.findByText('Failed to create goals for fixing failing tests.')).toBeInTheDocument();
     });
 
-    it('reports auto-fix stopped when the user halts during goal creation', async () => {
+    it('does not report auto-fix stopped when the user pauses during goal creation', async () => {
       const deferred = {};
       deferred.promise = new Promise((resolve) => {
         deferred.resolve = resolve;
@@ -680,7 +815,7 @@ describe('ChatPanel', () => {
 
       deferred.resolve({ goal: { id: 1, prompt: 'Fix failing tests' } });
 
-      expect(await screen.findByText('Auto-fix stopped.')).toBeInTheDocument();
+      expect(screen.queryByText('Auto-fix stopped.')).toBeNull();
       expect(goalsApi.fetchGoals).not.toHaveBeenCalled();
       expect(goalAutomationService.processGoals).not.toHaveBeenCalled();
       expect(mockStartAutomationJob).not.toHaveBeenCalled();
@@ -929,7 +1064,7 @@ describe('ChatPanel', () => {
       });
     });
 
-    it('ignores automation auto-fix events when auto-fix is halted', async () => {
+    it('creates goals but skips processing when auto-fix is halted', async () => {
       window.__lucidcoderAutofixHalted = true;
 
       render(<ChatPanel width={320} side="left" />);
@@ -945,7 +1080,8 @@ describe('ChatPanel', () => {
       );
 
       await waitFor(() => {
-        expect(goalsApi.createMetaGoalWithChildren).not.toHaveBeenCalled();
+        expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledTimes(1);
+        expect(goalAutomationService.processGoals).not.toHaveBeenCalled();
       });
     });
 
@@ -965,6 +1101,10 @@ describe('ChatPanel', () => {
 
       await waitFor(() => {
         expect(goalsApi.createGoal).toHaveBeenCalled();
+      });
+
+      await waitFor(() => {
+        expect(window.__lucidcoderAutofixHalted).toBe(false);
       });
 
       await waitFor(() => {
@@ -1051,6 +1191,29 @@ describe('ChatPanel', () => {
       await waitFor(() => {
         expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).not.toBeInTheDocument();
       });
+    });
+
+    it('skips clearTimeout when the timeout handle is falsy', async () => {
+      const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(() => 0);
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(() => {});
+
+      try {
+        render(<ChatPanel width={320} side="left" />);
+
+        const submitPrompt = ChatPanel.__testHooks?.handlers?.submitPrompt;
+        expect(submitPrompt).toBeInstanceOf(Function);
+
+        await act(async () => {
+          await submitPrompt?.('Hello');
+        });
+
+        expect(screen.getByText('Test answer')).toBeInTheDocument();
+        expect(timeoutSpy).toHaveBeenCalled();
+        expect(clearSpy).not.toHaveBeenCalled();
+      } finally {
+        timeoutSpy.mockRestore();
+        clearSpy.mockRestore();
+      }
     });
 
     it('keeps scroll-to-bottom button visible when new messages arrive off-scroll', async () => {

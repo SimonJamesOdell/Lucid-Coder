@@ -7,6 +7,11 @@
   position: relative;
 }
 
+.files-tab.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .files-tab.is-busy {
   pointer-events: none;
   opacity: 0.65;
@@ -45,13 +50,41 @@
 }
 
 .file-tree {
-  width: 20%;
+  width: 260px;
+  min-width: 180px;
+  max-width: 520px;
   height: 100%;
   background: var(--background-secondary, #1a1a1a);
   border-right: 1px solid var(--border-color, #333);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.files-tab-divider {
+  width: 6px;
+  cursor: col-resize;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 45%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.08) 55%,
+    transparent 100%
+  );
+  flex: 0 0 auto;
+}
+
+.files-tab-divider:hover {
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(0, 122, 204, 0.2) 35%,
+    rgba(0, 122, 204, 0.5) 50%,
+    rgba(0, 122, 204, 0.2) 65%,
+    transparent 100%
+  );
 }
 
 .file-tree-header {
@@ -272,7 +305,7 @@
 
 
 .code-editor {
-  width: 80%;
+  flex: 1 1 auto;
   height: 100%;
   background: var(--background-primary, #000);
   display: flex;
