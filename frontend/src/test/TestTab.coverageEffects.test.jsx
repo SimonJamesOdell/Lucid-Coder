@@ -224,4 +224,51 @@ describe('TestTab coverage effects', () => {
     expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
     expect(screen.getByText(/same error repeating/i)).toBeInTheDocument();
   });
+
+  test('circuit-breaker fingerprint handles non-array uncoveredLines in coverage gate failures', async () => {
+    const frontendOnlyProject = { ...baseProject, backend: null };
+    const createdAt1 = new Date(Date.now() + 50).toISOString();
+    const completedAt1 = new Date(Date.now() + 100).toISOString();
+    const createdAt2 = new Date(Date.now() + 200).toISOString();
+    const completedAt2 = new Date(Date.now() + 300).toISOString();
+
+    // Coverage-gate failure with no FAIL log lines and uncoveredLines: undefined
+    // so the fingerprint ternary takes the non-array branch.
+    const buildCovJob = (id, createdAt, completedAt) => ({
+      id, type: 'frontend:test', status: 'failed', logs: [], createdAt, completedAt,
+      summary: { coverage: { passed: false, uncoveredLines: undefined } }
+    });
+
+    const running = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: createdAt1 },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'cov-f-1', type: 'frontend:test', status: 'running', logs: [], createdAt: createdAt1 }
+      ])
+    });
+
+    const failed1 = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt1 },
+      getJobsForProject: vi.fn().mockReturnValue([buildCovJob('cov-f-1', createdAt1, completedAt1)])
+    });
+
+    const failed2 = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt2 },
+      getJobsForProject: vi.fn().mockReturnValue([buildCovJob('cov-f-2', createdAt2, completedAt2)])
+    });
+
+    let context = running;
+    useAppState.mockImplementation(() => context);
+
+    const view = render(<TestTab project={frontendOnlyProject} />);
+
+    context = failed1;
+    view.rerender(<TestTab project={frontendOnlyProject} />);
+    await act(async () => {});
+
+    context = failed2;
+    view.rerender(<TestTab project={frontendOnlyProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText(/same error repeating/i)).toBeInTheDocument();
+  });
 });

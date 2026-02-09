@@ -583,6 +583,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       const parts = [];
       for (const config of visibleTestConfigs) {
         const job = jobsByType[config.type];
+        /* c8 ignore next -- allTestsCompleted guarantees every visible config has a job */
         if (!job) continue;
         const ids = extractFailingTestIdsFromJob(job);
         if (ids.length > 0) {
