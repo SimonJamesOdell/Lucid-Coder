@@ -78,3 +78,10 @@ vitest-*.json
 
 # Backend vitest runtime project artifacts
 backend/test-runtime-projects.*/
+
+# Root-level test runtime artifacts (created when vitest cwd is workspace root)
+test-runtime-projects/
+test-runtime-projects.*/
+test-projects/
+test-projects-api/
+outside-*/
