@@ -428,6 +428,9 @@ describe('PreviewTab', () => {
     expect(previewRef.current).not.toBeNull();
     expect(typeof previewRef.current.reloadPreview).toBe('function');
     expect(typeof previewRef.current.restartProject).toBe('function');
+    expect(typeof previewRef.current.getDisplayedUrl).toBe('function');
+    // Exercise the public getDisplayedUrl accessor (distinct from __testHooks.getDisplayedUrl)
+    expect(typeof previewRef.current.getDisplayedUrl()).toBe('string');
   });
 
   test('getOpenInNewTabUrl maps the preview URL to the dev server', () => {
@@ -3481,6 +3484,223 @@ describe('PreviewTab', () => {
     } finally {
       Object.defineProperty(window, 'setInterval', { configurable: true, writable: true, value: originalSetInterval });
       Object.defineProperty(window, 'clearInterval', { configurable: true, writable: true, value: originalClearInterval });
+    }
+  });
+
+  test('unmount clears a pending debounced reload timeout', () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef, unmount } = renderPreviewTab({ processInfo });
+
+      // Trigger debounced reload to populate reloadDebounceRef
+      act(() => {
+        previewRef.current.reloadPreview();
+      });
+
+      const callsBeforeUnmount = clearTimeoutSpy.mock.calls.length;
+      unmount();
+
+      // Cleanup effect should have called clearTimeout for the debounce timer
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(callsBeforeUnmount);
+    } finally {
+      clearTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test('proxy placeholder load re-arms the load timeout and eventually schedules error confirmation', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+      const hooks = previewRef.current.__testHooks;
+
+      // Set up a proxy placeholder page that does NOT exceed the escalation threshold
+      const fakeIframe = {
+        contentDocument: { title: 'Preview proxy error', querySelector: vi.fn() }
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      // First placeholder load (non-escalated) — should keep loading and re-arm timeout
+      act(() => {
+        hooks.triggerIframeLoad();
+      });
+
+      // Should NOT show error yet (placeholder just started)
+      expect(screen.queryByText('Failed to load preview')).toBeNull();
+
+      // Advance past the 8 s load timeout that was re-armed by the placeholder handler
+      act(() => {
+        vi.advanceTimersByTime(8000);
+      });
+
+      // Now advance past the error confirmation delay (typically ~1200 ms)
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+
+      // The error should now be confirmed
+      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('getIsSoftReloadingForTests reports soft-reload state', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    // Initially not soft-reloading
+    expect(previewRef.current.__testHooks.getIsSoftReloadingForTests()).toBe(false);
+  });
+
+  test('softReloadIframe calls location.reload on the iframe window', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+
+      const reloadFn = vi.fn();
+      const fakeIframe = {
+        contentWindow: {
+          location: { reload: reloadFn, href: 'http://localhost:5555/' }
+        },
+        contentDocument: null
+      };
+      previewRef.current.__testHooks.setIframeNodeForTests(fakeIframe);
+
+      act(() => {
+        previewRef.current.__testHooks.softReloadIframeForTests();
+      });
+
+      expect(reloadFn).toHaveBeenCalledTimes(1);
+
+      // The soft reload arms a load timeout – advance past it so the
+      // scheduleErrorConfirmation callback inside fires (covers lines 881-882).
+      act(() => {
+        vi.advanceTimersByTime(8000);
+      });
+
+      // Now advance past the error-confirmation delay
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+
+      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('softReloadIframe falls back to hard reload when iframe ref is missing', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+
+      // Clear the iframe ref so softReload has nothing to reload
+      previewRef.current.__testHooks.setIframeNodeForTests(null);
+
+      const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+      act(() => {
+        previewRef.current.__testHooks.softReloadIframeForTests();
+      });
+
+      // Hard reload increments the iframe key
+      expect(previewRef.current.__testHooks.getIframeKey()).toBe(keyBefore + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('softReloadIframe falls back to hard reload when contentWindow is missing', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+
+      const fakeIframe = { contentWindow: null, contentDocument: null };
+      previewRef.current.__testHooks.setIframeNodeForTests(fakeIframe);
+
+      const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+      act(() => {
+        previewRef.current.__testHooks.softReloadIframeForTests();
+      });
+
+      expect(previewRef.current.__testHooks.getIframeKey()).toBe(keyBefore + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('softReloadIframe falls back to hard reload on cross-origin error', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+
+      const fakeIframe = {
+        contentWindow: {
+          get location() {
+            throw new DOMException('Blocked a frame');
+          }
+        },
+        contentDocument: null
+      };
+      previewRef.current.__testHooks.setIframeNodeForTests(fakeIframe);
+
+      const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+      act(() => {
+        previewRef.current.__testHooks.softReloadIframeForTests();
+      });
+
+      expect(previewRef.current.__testHooks.getIframeKey()).toBe(keyBefore + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('debouncedReload coalesces multiple rapid calls into a single reload', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+      const hooks = previewRef.current.__testHooks;
+
+      // Set up an iframe so softReloadIframe uses location.reload
+      const reloadFn = vi.fn();
+      const fakeIframe = {
+        contentWindow: {
+          location: { reload: reloadFn, href: 'http://localhost:5555/' }
+        },
+        contentDocument: null
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      // Call reloadPreview (debouncedReload) several times rapidly
+      act(() => {
+        previewRef.current.reloadPreview();
+        previewRef.current.reloadPreview();
+        previewRef.current.reloadPreview();
+      });
+
+      // Before the 300 ms debounce fires, no reload should have happened
+      expect(reloadFn).not.toHaveBeenCalled();
+
+      // Advance past the debounce delay
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+
+      // Only a single soft reload should have fired
+      expect(reloadFn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
