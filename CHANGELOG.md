@@ -1,3 +1,17 @@
+## 0.5.5 (2026-02-09)
+- Add OpenAI Responses API support for codex-family models: auto-detect codex models, route to `/v1/responses`, convert payloads (system/developer to `instructions`, omit temperature/top_p for reasoning models), and apply 120s timeouts.
+- Cache discovered endpoint paths after fallback probing so subsequent LLM requests skip the retry chain.
+- Reorder fallback logic to try `/responses` before `/completions`, and skip legacy `/completions` entirely for codex-only models.
+- Route codex models to `/v1/responses` in endpoint URL resolution.
+- Add a circuit breaker to goal processing that halts after consecutive failures to prevent runaway automation on a broken project.
+- Add transient LLM error detection and automatic retry with backoff during tests and implementation stages of goal processing.
+- Fix ChatPanel clarification prompt to preserve the original user prompt instead of the resolved prompt.
+- Hide the "Assistant is thinking" indicator when the assistant is paused (autopilot or auto-fix).
+- Treat HTTP 400 as a missing-file response and skip directory-like paths when building relevant-files context.
+- Add soft reloads for the Preview iframe to avoid blank flashes, with debounced reload coalescing and safer timeout/error handling.
+- Smooth Preview iframe loading-state transitions with an opacity fade.
+- Extend coverage-focused tests across LLM client (responses API, endpoint caching, fallback routing), goal automation (circuit breaker, transient retries), ChatPanel, PreviewTab, and automation utilities to keep strict coverage gates green.
+
 ## 0.5.4 (2026-02-08)
 - Move clarification questions into a modal with per-question inputs, pause/resume/cancel controls, and answer submission back into the agent.
 - Integrate the Runs view into the LLM Usage page via Usage/Runs tabs while keeping the usage summary intact.
