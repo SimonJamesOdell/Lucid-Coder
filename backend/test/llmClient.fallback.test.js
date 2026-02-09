@@ -106,6 +106,35 @@ describe('LLMClient fallback routing', () => {
     expect(result).toBe('OK responses');
   });
 
+  it('falls back to /responses when error mentions v1/responses but not chat/completions', async () => {
+    const endpointsCalled = [];
+    axios.mockImplementation((options) => {
+      if (options.url.endsWith('/chat/completions')) {
+        return Promise.reject({
+          response: { data: { error: { message: 'Please use the v1/responses endpoint for this model.' } } }
+        });
+      }
+      endpointsCalled.push(options.url);
+      if (options.url.endsWith('/responses')) {
+        return Promise.resolve({ data: { output_text: 'OK via responses hint' } });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = { provider: 'openai', model: 'o3', api_url: 'https://api.openai.com/v1' };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(result).toBe('OK via responses hint');
+    // shouldTryResponses is true, shouldTryCompletions is false, preferResponsesFirst is false
+    // → only /responses is in the fallback chain
+    expect(endpointsCalled).toEqual(['https://api.openai.com/v1/responses']);
+  });
+
   it('retries /completions without temperature when unsupported', async () => {
     axios.mockImplementation((options) => {
       if (options.url.endsWith('/chat/completions')) {
@@ -162,6 +191,37 @@ describe('LLMClient fallback routing', () => {
     ], { max_tokens: 10, top_p: 0.9 });
 
     expect(result).toBe('OK');
+  });
+
+  it('falls back to /completions first when error mentions chat/completions but not "not a chat model"', async () => {
+    const endpointsCalled = [];
+    axios.mockImplementation((options) => {
+      if (options.url.endsWith('/chat/completions')) {
+        return Promise.reject({
+          response: { data: { error: { message: 'Unsupported endpoint: v1/chat/completions is deprecated for this model.' } } }
+        });
+      }
+      endpointsCalled.push(options.url);
+      if (options.url.endsWith('/completions')) {
+        return Promise.resolve({ data: { choices: [{ text: 'OK completions-first' }] } });
+      }
+      if (options.url.endsWith('/responses')) {
+        return Promise.resolve({ data: { output_text: 'OK responses' } });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = { provider: 'openai', model: 'some-model', api_url: 'https://api.openai.com/v1' };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(result).toBe('OK completions-first');
+    // /completions should be tried before /responses when preferResponsesFirst is false
+    expect(endpointsCalled[0]).toBe('https://api.openai.com/v1/completions');
   });
 
   it('retries /responses and strips multiple unsupported parameters', async () => {
@@ -298,6 +358,8 @@ describe('LLMClient stored endpoint shortcut', () => {
   });
 
   it('falls through to default path when stored endpoint fails', async () => {
+    // Enable debug logging so the fallthrough console.log branch is exercised
+    process.env.LUCIDCODER_LLM_DEBUG = '1';
     const endpointsCalled = [];
     axios.mockImplementation((options) => {
       endpointsCalled.push(options.url);
@@ -331,6 +393,39 @@ describe('LLMClient stored endpoint shortcut', () => {
     // Should have tried /responses first (stored), then fallen through to /chat/completions
     expect(endpointsCalled[0]).toBe('https://api.openai.com/v1/responses');
     expect(endpointsCalled).toContain('https://api.openai.com/v1/chat/completions');
+    delete process.env.LUCIDCODER_LLM_DEBUG;
+  });
+
+  it('falls through to default path without debug logging', async () => {
+    delete process.env.LUCIDCODER_LLM_DEBUG;
+    axios.mockImplementation((options) => {
+      if (options.url.endsWith('/responses')) {
+        return Promise.reject({
+          response: { data: { error: { message: 'Service unavailable' } } }
+        });
+      }
+      if (options.url.endsWith('/chat/completions')) {
+        return Promise.resolve({
+          data: { choices: [{ message: { content: 'Silent fallback' } }] }
+        });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = {
+      provider: 'openai',
+      model: 'o3',
+      api_url: 'https://api.openai.com/v1',
+      endpoint_path: '/responses'
+    };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(result).toBe('Silent fallback');
   });
 
   it('sets resolvedEndpointPath when fallback discovers working endpoint', async () => {
