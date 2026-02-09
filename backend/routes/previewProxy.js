@@ -675,6 +675,9 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       }
     }
 
+    // The page is intentionally invisible – the frontend's own loading overlay
+    // handles all user-facing feedback.  We keep the <title> so the frontend
+    // can detect this placeholder, and the reload script so the iframe retries.
     const htmlBody =
       '<!doctype html>' +
       '<html><head><meta charset="utf-8" />' +
@@ -682,12 +685,9 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       // Keep title stable so the frontend can detect this placeholder page.
       `<title>${isFrontendStarting ? 'Preview starting' : 'Preview proxy error'}</title>` +
       '<style>' +
-      'html,body{height:100%;margin:0;padding:0;}' +
-      'body{background:#0b0f1a;color:#e7eaf1;}' +
-      '.message{font:16px/1.4 "Segoe UI",system-ui,Arial,sans-serif;padding:24px;}' +
+      'html,body{height:100%;margin:0;padding:0;background:transparent;}' +
       '</style>' +
       '</head><body aria-busy="true">' +
-      `<div class="message">${isFrontendStarting ? 'Preview is starting. Retrying...' : 'Preview proxy error.'}</div>` +
       '<script>setTimeout(function(){try{location.reload();}catch(e){}},900);</script>' +
       '</body></html>';
 
@@ -787,8 +787,9 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
     const port = await resolveFrontendPort(projectId);
     if (!port) {
       res.status(409).send(
-        '<!doctype html><html><head><meta charset="utf-8"/><title>Preview unavailable</title></head>' +
-        '<body><h1>Preview unavailable</h1><p>The project preview is not running.</p></body></html>'
+        '<!doctype html><html><head><meta charset="utf-8"/><title>Preview unavailable</title>' +
+        '<style>html,body{margin:0;padding:0;background:transparent;}</style></head>' +
+        '<body></body></html>'
       );
       return;
     }
