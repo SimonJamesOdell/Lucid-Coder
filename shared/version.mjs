@@ -1,2 +1,2 @@
-export const VERSION = '0.5.5';
+export const VERSION = '0.5.6';
 export default VERSION;

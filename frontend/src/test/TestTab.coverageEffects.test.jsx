@@ -171,4 +171,104 @@ describe('TestTab coverage effects', () => {
 
     TestTab.__testHooks.resetAutofixMaxAttemptsOverride?.();
   });
+
+  test('shows circuit-breaker modal when the same failure fingerprint repeats', async () => {
+    const frontendOnlyProject = { ...baseProject, backend: null };
+    const createdAt1 = new Date(Date.now() + 50).toISOString();
+    const completedAt1 = new Date(Date.now() + 100).toISOString();
+    const createdAt2 = new Date(Date.now() + 200).toISOString();
+    const completedAt2 = new Date(Date.now() + 300).toISOString();
+
+    // The same FAIL line produces an identical fingerprint across both rounds.
+    const failLogs = [{ message: 'FAIL src/App.test.js' }];
+
+    // Round 0: jobs are running – establishes hasObservedTestRunRef.
+    const running = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: createdAt1 },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'cb-f-1', type: 'frontend:test', status: 'running', logs: [], createdAt: createdAt1 }
+      ])
+    });
+
+    // Round 1: first failure – starts the auto-fix session and records the fingerprint.
+    const failed1 = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt1 },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'cb-f-1', type: 'frontend:test', status: 'failed', logs: failLogs, createdAt: createdAt1, completedAt: completedAt1 }
+      ])
+    });
+
+    // Round 2: second failure with different job ID (so the modal key changes)
+    // but the same FAIL log so the fingerprint is identical → triggers circuit breaker.
+    const failed2 = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt2 },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'cb-f-2', type: 'frontend:test', status: 'failed', logs: failLogs, createdAt: createdAt2, completedAt: completedAt2 }
+      ])
+    });
+
+    let context = running;
+    useAppState.mockImplementation(() => context);
+
+    const view = render(<TestTab project={frontendOnlyProject} />);
+
+    // First failure round – triggers autofix session start + triggerTestFix.
+    context = failed1;
+    view.rerender(<TestTab project={frontendOnlyProject} />);
+    await act(async () => {});
+
+    // Second failure round – same fingerprint → circuit breaker.
+    context = failed2;
+    view.rerender(<TestTab project={frontendOnlyProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText(/same error repeating/i)).toBeInTheDocument();
+  });
+
+  test('circuit-breaker fingerprint handles non-array uncoveredLines in coverage gate failures', async () => {
+    const frontendOnlyProject = { ...baseProject, backend: null };
+    const createdAt1 = new Date(Date.now() + 50).toISOString();
+    const completedAt1 = new Date(Date.now() + 100).toISOString();
+    const createdAt2 = new Date(Date.now() + 200).toISOString();
+    const completedAt2 = new Date(Date.now() + 300).toISOString();
+
+    // Coverage-gate failure with no FAIL log lines and uncoveredLines: undefined
+    // so the fingerprint ternary takes the non-array branch.
+    const buildCovJob = (id, createdAt, completedAt) => ({
+      id, type: 'frontend:test', status: 'failed', logs: [], createdAt, completedAt,
+      summary: { coverage: { passed: false, uncoveredLines: undefined } }
+    });
+
+    const running = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: createdAt1 },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'cov-f-1', type: 'frontend:test', status: 'running', logs: [], createdAt: createdAt1 }
+      ])
+    });
+
+    const failed1 = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt1 },
+      getJobsForProject: vi.fn().mockReturnValue([buildCovJob('cov-f-1', createdAt1, completedAt1)])
+    });
+
+    const failed2 = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt2 },
+      getJobsForProject: vi.fn().mockReturnValue([buildCovJob('cov-f-2', createdAt2, completedAt2)])
+    });
+
+    let context = running;
+    useAppState.mockImplementation(() => context);
+
+    const view = render(<TestTab project={frontendOnlyProject} />);
+
+    context = failed1;
+    view.rerender(<TestTab project={frontendOnlyProject} />);
+    await act(async () => {});
+
+    context = failed2;
+    view.rerender(<TestTab project={frontendOnlyProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText(/same error repeating/i)).toBeInTheDocument();
+  });
 });

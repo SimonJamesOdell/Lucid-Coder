@@ -784,6 +784,19 @@ describe('goalAutomationService', () => {
       expect(prompt.messages[1].content).toContain('Uncovered lines: backend/server.js (2)');
     });
 
+    test('buildEditsPrompt system prompt includes React Router guidance', () => {
+      const prompt = __testOnly.buildEditsPrompt({
+        projectInfo: 'Project Foo',
+        fileTreeContext: '',
+        goalPrompt: 'Add a navbar',
+        stage: 'implementation'
+      });
+
+      const systemContent = prompt.messages[0].content;
+      expect(systemContent).toContain('Never wrap a component in <BrowserRouter>');
+      expect(systemContent).toContain('second router');
+    });
+
     test('applyEdits uses fallback rewrite error message when caught error loses its message', async () => {
       axios.get.mockImplementation((url) => {
         if (url === '/api/projects/42/files/frontend/src/app.js') {

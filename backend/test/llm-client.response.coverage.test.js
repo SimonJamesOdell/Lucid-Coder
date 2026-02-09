@@ -201,6 +201,10 @@ describe('LLMClient generateResponse fallbacks', () => {
     });
 
     client.makeAPIRequestWithEndpoint = vi.fn().mockImplementation((config, apiKey, endpointPath, payload) => {
+      // "not a chat model" now tries /responses first; let it fail so we reach /completions
+      if (endpointPath === '/responses') {
+        return Promise.reject(new Error('Responses not supported'));
+      }
       if (endpointPath !== '/completions') {
         return Promise.reject(new Error('Unexpected endpoint'));
       }
@@ -218,6 +222,10 @@ describe('LLMClient generateResponse fallbacks', () => {
     });
 
     client.makeAPIRequestWithEndpoint = vi.fn().mockImplementation((config, apiKey, endpointPath, payload) => {
+      // "not a chat model" now tries /responses first; let it fail so we reach /completions
+      if (endpointPath === '/responses') {
+        return Promise.reject(new Error('Responses not supported'));
+      }
       if (endpointPath !== '/completions') {
         return Promise.reject(new Error('Unexpected endpoint'));
       }
@@ -243,14 +251,15 @@ describe('LLMClient generateResponse fallbacks', () => {
       }
     });
 
+    // With "not a chat model", /responses is tried first, then /completions
     client.makeAPIRequestWithEndpoint = vi
       .fn()
-      .mockRejectedValueOnce({ response: { data: { error: { message: 'Completions not supported' } } } })
-      .mockRejectedValueOnce({ response: { data: { error: { message: 'Responses not supported' } } } });
+      .mockRejectedValueOnce({ response: { data: { error: { message: 'Responses not supported' } } } })
+      .mockRejectedValueOnce({ response: { data: { error: { message: 'Completions not supported' } } } });
 
     await expect(
       client.generateResponse([{ role: 'user', content: 'Hi' }], { __lucidcoderDisableToolBridge: true })
-    ).rejects.toThrow('Fallback failed: Responses not supported');
+    ).rejects.toThrow('Fallback failed: Completions not supported');
   });
 
   it('skips fallback when provider is not in the OpenAI-compatible set', async () => {

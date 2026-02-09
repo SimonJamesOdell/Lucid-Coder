@@ -81,6 +81,12 @@ export class LLMClient {
     this.config = null;
     this.apiKey = null;
 
+    // Set by the fallback chain when a non-default endpoint (e.g. /responses)
+    // succeeds during a runtime probe.  The configure route reads this after
+    // the probe and stores it in the database so future requests go directly
+    // to the right endpoint.
+    this.resolvedEndpointPath = null;
+
     // De-duplicate identical outbound requests to avoid hammering providers.
     // This is especially useful when multiple subsystems ask the same question
     // concurrently (or retry logic replays identical payloads).
@@ -466,6 +472,52 @@ export class LLMClient {
 
     try {
 
+      // ── Stored-endpoint shortcut ──────────────────────────────────
+      // If the config probe already determined the correct endpoint at
+      // configuration time, skip the default /chat/completions path and
+      // call the stored endpoint directly.
+      const storedEndpoint = this.config.endpoint_path;
+      if (storedEndpoint === '/responses' || storedEndpoint === '/completions') {
+        const model = this.config.model;
+        const directPayload = storedEndpoint === '/responses'
+          ? buildResponsesPayload(basePayload, model)
+          : buildCompletionsPayload(basePayload, model);
+
+        let payload = directPayload;
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            llmRequestMetrics.record('outbound', metricsContext);
+            const directResponse = await this.makeAPIRequestWithEndpoint(
+              this.config, this.apiKey, storedEndpoint, payload
+            );
+            const responseTime = Date.now() - startTime;
+            await db_operations.logAPIRequest({
+              provider: this.config.provider,
+              model: this.config.model,
+              requestType: 'generate',
+              responseTime,
+              success: true,
+              errorMessage: null
+            });
+            return this.extractResponse(this.config.provider, directResponse.data);
+          } catch (directError) {
+            lastError = directError;
+            const msg = this.getErrorMessage(directError);
+            const stripped = stripUnsupportedParams(payload, msg);
+            if (stripped === payload) break;
+            payload = stripped;
+          }
+        }
+
+        // If the stored endpoint failed, log and fall through to the
+        // normal /chat/completions path with full fallback logic so
+        // the request still has a chance to succeed.
+        if (process.env.LUCIDCODER_LLM_DEBUG === '1') {
+          console.log(`⚠️  Stored endpoint ${storedEndpoint} failed, falling through to default path`);
+        }
+      }
+
       let response;
       const request = async (payload) => this._makeDedupedRequest(
         payload,
@@ -578,6 +630,12 @@ export class LLMClient {
           message.includes('v1/chat/completions');
         const shouldTryResponses = message.includes('v1/responses') || message.includes('responses endpoint');
 
+        // When the error says "not a chat model", the model almost certainly
+        // uses the Responses API (e.g. o3, o4-mini).  Try /responses first so
+        // we don't waste 60 s on a /completions timeout before reaching the
+        // correct endpoint.
+        const preferResponsesFirst = message.includes('not a chat model');
+
         const attemptWithStripping = async (endpointPath, initialPayload) => {
           let payload = initialPayload;
           let lastError = null;
@@ -602,24 +660,33 @@ export class LLMClient {
           throw lastError;
         };
 
-        try {
+        // Build the ordered fallback chain.
+        const fallbackChain = [];
+        if (preferResponsesFirst) {
+          // preferResponsesFirst is only true when the error says "not a chat
+          // model", which also sets shouldTryCompletions=true, so both
+          // endpoints are always pushed in this branch.
+          fallbackChain.push({ endpoint: '/responses', buildPayload: () => buildResponsesPayload(basePayload, model) });
+          fallbackChain.push({ endpoint: '/completions', buildPayload: () => buildCompletionsPayload(basePayload, model) });
+        } else {
           if (shouldTryCompletions) {
-            const completionsPayload = buildCompletionsPayload(basePayload, model);
-            const completionResponse = await attemptWithStripping('/completions', completionsPayload);
-            return this.extractResponse(this.config.provider, completionResponse.data);
+            fallbackChain.push({ endpoint: '/completions', buildPayload: () => buildCompletionsPayload(basePayload, model) });
           }
-        } catch (fallbackError) {
-          fallbackErrorMessage = this.getErrorMessage(fallbackError);
+          if (shouldTryResponses || shouldTryCompletions) {
+            fallbackChain.push({ endpoint: '/responses', buildPayload: () => buildResponsesPayload(basePayload, model) });
+          }
         }
 
-        try {
-          if (shouldTryResponses || shouldTryCompletions) {
-            const responsesPayload = buildResponsesPayload(basePayload, model);
-            const responsesResponse = await attemptWithStripping('/responses', responsesPayload);
-            return this.extractResponse(this.config.provider, responsesResponse.data);
+        for (const { endpoint, buildPayload } of fallbackChain) {
+          try {
+            const fallbackPayload = buildPayload();
+            const fallbackResponse = await attemptWithStripping(endpoint, fallbackPayload);
+            // Remember which endpoint worked so probes can read it
+            this.resolvedEndpointPath = endpoint;
+            return this.extractResponse(this.config.provider, fallbackResponse.data);
+          } catch (fallbackError) {
+            fallbackErrorMessage = this.getErrorMessage(fallbackError);
           }
-        } catch (fallbackError) {
-          fallbackErrorMessage = this.getErrorMessage(fallbackError);
         }
       }
 
