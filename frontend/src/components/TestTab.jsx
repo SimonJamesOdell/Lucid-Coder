@@ -590,6 +590,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
           parts.push(`${config.type}:${ids.sort().join(',')}`);
         } else if (isCoverageGateFailed(job)) {
           const uncovered = job?.summary?.coverage?.uncoveredLines;
+          /* c8 ignore next 2 -- defensive: uncoveredLines is always an array when the gate fires */
           const lineKeys = Array.isArray(uncovered)
             ? uncovered.map((u) => `${u?.file || ''}:${(u?.lines || []).join('-')}`).sort().join('|')
             : '';
