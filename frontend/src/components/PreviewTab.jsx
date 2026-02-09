@@ -95,6 +95,7 @@ const PreviewTab = forwardRef(
   const [startInFlight, setStartInFlight] = useState(false);
   const [hostnameOverride, setHostnameOverride] = useState(null);
   const [previewUrlOverride, setPreviewUrlOverride] = useState(null);
+  const [isSoftReloading, setIsSoftReloading] = useState(false);
   const [autoRecoverState, setAutoRecoverState] = useState({
     attempt: 0,
     mode: 'idle'
@@ -102,6 +103,7 @@ const PreviewTab = forwardRef(
   const [autoRecoverDisabled, setAutoRecoverDisabled] = useState(false);
   const autoRecoverDisabledRef = useRef(autoRecoverDisabled);
   const reloadTimeoutRef = useRef(null);
+  const reloadDebounceRef = useRef(null);
   const loadTimeoutRef = useRef(null);
   const errorConfirmTimeoutRef = useRef(null);
   const autoRecoverTimeoutRef = useRef(null);
@@ -164,6 +166,11 @@ const PreviewTab = forwardRef(
       if (reloadTimeoutRef.current) {
         clearTimeout(reloadTimeoutRef.current);
         reloadTimeoutRef.current = null;
+      }
+
+      if (reloadDebounceRef.current) {
+        clearTimeout(reloadDebounceRef.current);
+        reloadDebounceRef.current = null;
       }
 
       if (loadTimeoutRef.current) {
@@ -744,11 +751,13 @@ const PreviewTab = forwardRef(
   }, [previewUrl, iframeKey, showNotRunningState, iframeError, isStartingProject]);
 
   const handleIframeError = () => {
+    setIsSoftReloading(false);
     clearLoadTimeout();
     scheduleErrorConfirmation();
   };
 
   const handleIframeLoad = () => {
+    setIsSoftReloading(false);
     postPreviewBridgePing();
 
     // If the preview proxy is still warming up, it may briefly serve a same-origin
@@ -793,6 +802,13 @@ const PreviewTab = forwardRef(
       setIframeLoading(true);
       setPendingIframeError(false);
       clearErrorConfirmTimeout();
+      // Reset the load timeout so the proxy has more time to warm up
+      // without prematurely triggering error confirmation.
+      clearLoadTimeout();
+      loadTimeoutRef.current = setTimeout(() => {
+        loadTimeoutRef.current = null;
+        scheduleErrorConfirmation();
+      }, 8000);
       return;
     }
 
@@ -822,6 +838,7 @@ const PreviewTab = forwardRef(
     setIframeError(false);
     setIframeLoading(true);
     setPendingIframeError(false);
+    setIsSoftReloading(false);
     clearErrorConfirmTimeout();
     setErrorGracePeriod(4000);
     setHasConfirmedPreview(false);
@@ -829,6 +846,59 @@ const PreviewTab = forwardRef(
     proxyPlaceholderLoadCountRef.current = 0;
     setPreviewFailureDetails(null);
     setIframeKey((prev) => prev + 1);
+  };
+
+  // Soft reload: reloads iframe content in-place without destroying the DOM
+  // element. The old content stays visible under the loading overlay so users
+  // don't see a blank/black flash while the new content loads.
+  const softReloadIframe = () => {
+    const iframe = iframeRef.current;
+    if (!iframe) {
+      reloadIframe();
+      return;
+    }
+
+    try {
+      const win = iframe.contentWindow;
+      if (!win || typeof win.location?.reload !== 'function') {
+        reloadIframe();
+        return;
+      }
+
+      setRestartStatus(null);
+      setIframeError(false);
+      setPendingIframeError(false);
+      setIsSoftReloading(true);
+      clearErrorConfirmTimeout();
+      clearLoadTimeout();
+      setErrorGracePeriod(4000);
+      proxyPlaceholderFirstSeenRef.current = 0;
+      proxyPlaceholderLoadCountRef.current = 0;
+      setPreviewFailureDetails(null);
+
+      // Set a load timeout for the soft reload
+      loadTimeoutRef.current = setTimeout(() => {
+        loadTimeoutRef.current = null;
+        scheduleErrorConfirmation();
+      }, 8000);
+
+      win.location.reload();
+    } catch {
+      // Cross-origin or other error — fall back to full remount
+      reloadIframe();
+    }
+  };
+
+  // Debounced version of softReloadIframe for external callers (file saves, etc.)
+  // Multiple rapid calls coalesce into a single reload.
+  const debouncedReload = () => {
+    if (reloadDebounceRef.current) {
+      clearTimeout(reloadDebounceRef.current);
+    }
+    reloadDebounceRef.current = setTimeout(() => {
+      reloadDebounceRef.current = null;
+      softReloadIframe();
+    }, 300);
   };
 
   const scheduleAutoRecoveryAttempt = useCallback(() => {
@@ -1041,7 +1111,7 @@ const PreviewTab = forwardRef(
   };
 
   useImperativeHandle(ref, () => ({
-    reloadPreview: reloadIframe,
+    reloadPreview: debouncedReload,
     restartProject: handleRestartProject,
     getPreviewUrl: () => previewUrlRef.current,
     getDisplayedUrl: () => displayedUrlRef.current,
@@ -1101,7 +1171,10 @@ const PreviewTab = forwardRef(
         }
       },
       updateDisplayedUrlFromIframe,
-      startNavigationPollingForTests: () => ensureNavigationPolling()
+      startNavigationPollingForTests: () => ensureNavigationPolling(),
+      softReloadIframeForTests: softReloadIframe,
+      hardReloadIframeForTests: reloadIframe,
+      getIsSoftReloadingForTests: () => isSoftReloading
     }
   }));
 
@@ -1540,7 +1613,7 @@ const PreviewTab = forwardRef(
         <iframe
           ref={iframeRef}
           data-testid="preview-iframe"
-          className={`full-iframe${iframeLoading || pendingIframeError || !hasConfirmedPreview ? ' full-iframe--loading' : ''}`}
+          className={`full-iframe${(iframeLoading && !isSoftReloading) || pendingIframeError || (!hasConfirmedPreview && !isSoftReloading) ? ' full-iframe--loading' : ''}`}
           key={iframeKey}
           src={effectivePreviewUrl}
           title={`${project?.name || 'Project'} Preview`}
