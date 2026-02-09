@@ -663,12 +663,11 @@ export class LLMClient {
         // Build the ordered fallback chain.
         const fallbackChain = [];
         if (preferResponsesFirst) {
-          if (shouldTryResponses || shouldTryCompletions) {
-            fallbackChain.push({ endpoint: '/responses', buildPayload: () => buildResponsesPayload(basePayload, model) });
-          }
-          if (shouldTryCompletions) {
-            fallbackChain.push({ endpoint: '/completions', buildPayload: () => buildCompletionsPayload(basePayload, model) });
-          }
+          // preferResponsesFirst is only true when the error says "not a chat
+          // model", which also sets shouldTryCompletions=true, so both
+          // endpoints are always pushed in this branch.
+          fallbackChain.push({ endpoint: '/responses', buildPayload: () => buildResponsesPayload(basePayload, model) });
+          fallbackChain.push({ endpoint: '/completions', buildPayload: () => buildCompletionsPayload(basePayload, model) });
         } else {
           if (shouldTryCompletions) {
             fallbackChain.push({ endpoint: '/completions', buildPayload: () => buildCompletionsPayload(basePayload, model) });
