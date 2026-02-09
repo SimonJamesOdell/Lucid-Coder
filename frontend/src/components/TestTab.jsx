@@ -71,7 +71,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     active: false,
     origin: 'user',
     attempt: 0,
-    maxAttempts: getAutofixMaxAttempts()
+    maxAttempts: getAutofixMaxAttempts(),
+    previousCoverageTargets: new Set()
   });
 
   const resetCommitResumeState = useCallback(() => {
@@ -124,7 +125,18 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       kind: config.type.startsWith('backend') ? 'backend' : 'frontend',
       job: jobsByType[config.type]
     }));
-    const plan = buildTestFixPlan({ jobs: planJobs });
+    const session = autoFixSessionRef.current;
+    const plan = buildTestFixPlan({
+      jobs: planJobs,
+      previousCoverageTargets: session.previousCoverageTargets
+    });
+
+    // Merge newly created coverage targets into session so the next round skips them.
+    if (plan.coverageTargets && plan.coverageTargets.size > 0) {
+      for (const target of plan.coverageTargets) {
+        session.previousCoverageTargets.add(target);
+      }
+    }
 
     if (typeof window !== 'undefined') {
       if (origin === 'user') {
@@ -234,7 +246,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       active: false,
       origin: 'user',
       attempt: 0,
-      maxAttempts: getAutofixMaxAttempts()
+      maxAttempts: getAutofixMaxAttempts(),
+      previousCoverageTargets: new Set()
     };
     resetCommitResumeState();
   }, [projectId, resetCommitResumeState]);
@@ -321,7 +334,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         active: false,
         origin: 'user',
         attempt: 0,
-        maxAttempts: getAutofixMaxAttempts()
+        maxAttempts: getAutofixMaxAttempts(),
+        previousCoverageTargets: new Set()
       };
     }
 
@@ -563,6 +577,27 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
 
     resetCommitResumeState();
 
+    // Compute a fingerprint from the current failure so the circuit breaker
+    // can detect identical errors across consecutive autofix rounds.
+    const failureFingerprint = (() => {
+      const parts = [];
+      for (const config of visibleTestConfigs) {
+        const job = jobsByType[config.type];
+        if (!job) continue;
+        const ids = extractFailingTestIdsFromJob(job);
+        if (ids.length > 0) {
+          parts.push(`${config.type}:${ids.sort().join(',')}`);
+        } else if (isCoverageGateFailed(job)) {
+          const uncovered = job?.summary?.coverage?.uncoveredLines;
+          const lineKeys = Array.isArray(uncovered)
+            ? uncovered.map((u) => `${u?.file || ''}:${(u?.lines || []).join('-')}`).sort().join('|')
+            : '';
+          parts.push(`${config.type}:cov:${lineKeys}`);
+        }
+      }
+      return parts.join(';;') || null;
+    })();
+
     const session = autoFixSessionRef.current;
     const lastRunSource = typeof testRunIntent?.source === 'string' ? testRunIntent.source : 'unknown';
     const shouldAutoStartFix = lastRunSource === 'automation' && !session.active;
@@ -572,7 +607,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         active: true,
         origin: 'automation',
         attempt: 0,
-        maxAttempts: getAutofixMaxAttempts()
+        maxAttempts: getAutofixMaxAttempts(),
+        previousCoverageTargets: new Set()
       };
     }
 
@@ -584,7 +620,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
           active: false,
           origin: 'user',
           attempt: 0,
-          maxAttempts: getAutofixMaxAttempts()
+          maxAttempts: getAutofixMaxAttempts(),
+          previousCoverageTargets: new Set()
         };
         activeSession = autoFixSessionRef.current;
       } else if (Number.isFinite(activeSession.maxAttempts) && activeSession.attempt >= activeSession.maxAttempts) {
@@ -592,7 +629,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
           active: false,
           origin: 'user',
           attempt: 0,
-          maxAttempts: getAutofixMaxAttempts()
+          maxAttempts: getAutofixMaxAttempts(),
+          previousCoverageTargets: new Set()
         };
 
         resetCommitResumeState();
@@ -606,9 +644,31 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       }
 
       if (activeSession.active) {
+        // Circuit breaker: halt early if the same failure fingerprint repeats,
+        // meaning the previous fix attempt made no progress on the error.
+        if (failureFingerprint && activeSession.lastFailureFingerprint === failureFingerprint) {
+          autoFixSessionRef.current = {
+            active: false,
+            origin: 'user',
+            attempt: 0,
+            maxAttempts: getAutofixMaxAttempts(),
+            previousCoverageTargets: new Set()
+          };
+
+          resetCommitResumeState();
+          setResultModalVariant('danger');
+          setResultModalTitle('Tests failed');
+          setResultModalMessage('Auto-fix detected the same error repeating and stopped to avoid an infinite loop. Review the logs and try a manual fix.');
+          setResultModalConfirmText(null);
+          setResultModalConfirmAction(null);
+          setIsResultModalOpen(true);
+          return;
+        }
+
         autoFixSessionRef.current = {
           ...activeSession,
-          attempt: activeSession.attempt + 1
+          attempt: activeSession.attempt + 1,
+          lastFailureFingerprint: failureFingerprint
         };
 
         triggerTestFix({ origin: activeSession.origin });
@@ -630,7 +690,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         active: true,
         origin: 'user',
         attempt: 1,
-        maxAttempts: getAutofixMaxAttempts()
+        maxAttempts: getAutofixMaxAttempts(),
+        previousCoverageTargets: new Set()
       };
 
       triggerTestFix({ origin: 'user' });

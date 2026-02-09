@@ -1438,7 +1438,10 @@ export const buildEditsPrompt = ({
           '{"type":"modify","path":"...","replacements":[{"search":"<exact unique snippet>","replace":"<replacement>"}]}, ' +
           '{"type":"upsert","path":"...","content":"<full file content>"}, ' +
           '{"type":"delete","path":"...","recursive":false}. ' +
-          'Prefer type="modify" with replacements. Each search MUST match exactly once. Use repo-relative POSIX paths.'
+          'Prefer type="modify" with replacements. Each search MUST match exactly once. Use repo-relative POSIX paths. ' +
+          'IMPORTANT: Never wrap a component in <BrowserRouter> (or <HashRouter>, <MemoryRouter>) if the app already has a router in App.jsx or main.jsx. ' +
+          'Adding a second router causes a "Cannot read properties of null (reading \'useRef\')" React crash. ' +
+          'New route-aware components should use <Link>, useNavigate, etc. without their own Router provider.'
       },
       {
         role: 'user',

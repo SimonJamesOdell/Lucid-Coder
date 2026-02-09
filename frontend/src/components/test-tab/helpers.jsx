@@ -603,12 +603,17 @@ const getUncoveredLineSummary = (entries) => {
   return formatUncoveredLineSummary(entries);
 };
 
-export const buildTestFixPlan = ({ jobs }) => {
+export const buildTestFixPlan = ({ jobs, previousCoverageTargets = null }) => {
   const rawChildPrompts = [];
   const childPromptMetadata = {};
   const addChild = (text, metadata = null) => {
     collectChildPrompt(rawChildPrompts, childPromptMetadata, text, metadata);
   };
+
+  // Track which file:line pairs were already attempted to avoid duplicate
+  // coverage goals across autofix rounds.
+  const prevTargets = previousCoverageTargets instanceof Set ? previousCoverageTargets : new Set();
+  const newCoverageTargets = new Set();
 
   const buildTestFixMetadata = ({ testId = null, label = null, kind = null, failureReport = null } = {}) => {
     const acceptanceCriteria = [];
@@ -706,17 +711,39 @@ export const buildTestFixPlan = ({ jobs }) => {
           continue;
         }
 
-        for (const line of lines) {
-          const coveragePrompt = `Add tests to cover uncovered line ${line} in ${entry.filePath}. ${coverageMessage} Update existing test files for this area and avoid adding duplicate coverage-only tests.`;
-          const fileForMetadata = entry.workspaceName && entry.normalizedFile.startsWith(`${entry.workspaceName}/`)
-            ? entry.normalizedFile.slice(entry.workspaceName.length + 1)
-            : entry.normalizedFile;
-          const lineEntry = {
+        // Filter out lines that were already targeted in a previous autofix round.
+        const freshLines = prevTargets.size > 0
+          ? lines.filter((line) => !prevTargets.has(`${entry.filePath}:${line}`))
+          : lines;
+
+        if (freshLines.length === 0) {
+          continue;
+        }
+
+        // Record new targets for the caller to track.
+        for (const line of freshLines) {
+          newCoverageTargets.add(`${entry.filePath}:${line}`);
+        }
+
+        // Batch all uncovered lines for the same file into a single goal
+        // instead of creating one goal per line.
+        const MAX_LINES_PER_COVERAGE_GOAL = 20;
+        const fileForMetadata = entry.workspaceName && entry.normalizedFile.startsWith(`${entry.workspaceName}/`)
+          ? entry.normalizedFile.slice(entry.workspaceName.length + 1)
+          : entry.normalizedFile;
+
+        for (let chunkStart = 0; chunkStart < freshLines.length; chunkStart += MAX_LINES_PER_COVERAGE_GOAL) {
+          const chunk = freshLines.slice(chunkStart, chunkStart + MAX_LINES_PER_COVERAGE_GOAL);
+          const lineList = chunk.join(', ');
+          const coveragePrompt = chunk.length === 1
+            ? `Add tests to cover uncovered line ${chunk[0]} in ${entry.filePath}. ${coverageMessage} Update existing test files for this area and avoid adding duplicate coverage-only tests.`
+            : `Add tests to cover uncovered lines ${lineList} in ${entry.filePath}. ${coverageMessage} Update existing test files for this area and avoid adding duplicate coverage-only tests.`;
+          const batchEntry = {
             ...entry.entry,
             file: fileForMetadata,
-            lines: [line]
+            lines: chunk
           };
-          addChild(coveragePrompt, buildCoverageMetadata({ label: labelText, kind, uncoveredEntry: lineEntry }));
+          addChild(coveragePrompt, buildCoverageMetadata({ label: labelText, kind, uncoveredEntry: batchEntry }));
         }
       }
     }
@@ -734,7 +761,8 @@ export const buildTestFixPlan = ({ jobs }) => {
     prompt: TEST_FIX_PARENT_PROMPT,
     childPrompts,
     childPromptMetadata: trimmedMetadata,
-    failureContext: null
+    failureContext: null,
+    coverageTargets: newCoverageTargets
   };
 };
 

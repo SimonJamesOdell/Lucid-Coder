@@ -1134,9 +1134,10 @@ describe('TestTab coverage helpers', () => {
       ]
     });
 
+    // Batching puts both lines in a single prompt.
+    expect(plan.childPrompts).toHaveLength(1);
     const combined = plan.childPrompts.join(' ');
-    expect(combined).toContain('uncovered line 1 in frontend/src/App.jsx');
-    expect(combined).toContain('uncovered line 2 in frontend/src/App.jsx');
+    expect(combined).toContain('uncovered lines 1, 2 in frontend/src/App.jsx');
   });
 
   test('buildTestFixPlan deduplicates uncovered lines across repeated entries', () => {
@@ -1163,9 +1164,10 @@ describe('TestTab coverage helpers', () => {
       ]
     });
 
+    // After batching, both lines should be in a single prompt.
+    expect(plan.childPrompts).toHaveLength(1);
     const combined = plan.childPrompts.join(' ');
-    expect(combined).toContain('uncovered line 1 in frontend/src/App.jsx');
-    expect(combined).toContain('uncovered line 2 in frontend/src/App.jsx');
+    expect(combined).toContain('uncovered lines 1, 2 in frontend/src/App.jsx');
   });
 
   test('buildTestFixPlan respects workspace and file formatting when no workspace is set', () => {
@@ -1770,11 +1772,10 @@ describe('TestTab coverage helpers', () => {
       ]
     });
 
+    // Lines 12, 14, 15 from App.jsx are batched into a single prompt.
     const combined = plan.childPrompts.join(' ');
     expect(combined).toContain('frontend/src/App.jsx');
-    expect(combined).toContain('uncovered line 12');
-    expect(combined).toContain('uncovered line 14');
-    expect(combined).toContain('uncovered line 15');
+    expect(combined).toContain('uncovered lines 12, 14, 15');
     expect(combined).not.toContain('vite.config.js');
   });
 
@@ -2910,9 +2911,10 @@ describe('TestTab coverage helpers', () => {
       ]
     });
 
+    // Lines 3, 4, 5 are batched into a single prompt.
+    expect(plan.childPrompts).toHaveLength(1);
     const combined = plan.childPrompts.join(' ');
-    expect(combined).toContain('uncovered line 3');
-    expect(combined).toContain('uncovered line 5');
+    expect(combined).toContain('uncovered lines 3, 4, 5');
   });
 
   test('buildTestFixPlan treats non-array uncovered line lists as empty', () => {
@@ -3524,5 +3526,121 @@ describe('TestTab coverage helpers', () => {
   test('extractTestSummaryLines returns empty list for invalid logs', () => {
     expect(extractTestSummaryLines(null)).toEqual([]);
     expect(extractTestSummaryLines([])).toEqual([]);
+  });
+
+  test('buildTestFixPlan batches multiple uncovered lines into a single prompt', () => {
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            summary: {
+              coverage: {
+                passed: false,
+                changedFiles: { passed: true },
+                uncoveredLines: [{ workspace: 'frontend', file: 'src/App.jsx', lines: [10, 12, 15] }]
+              }
+            },
+            logs: []
+          }
+        }
+      ]
+    });
+
+    expect(plan.childPrompts).toHaveLength(1);
+    expect(plan.childPrompts[0]).toContain('uncovered lines 10, 12, 15 in frontend/src/App.jsx');
+  });
+
+  test('buildTestFixPlan returns coverageTargets set tracking targeted file:line pairs', () => {
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            summary: {
+              coverage: {
+                passed: false,
+                changedFiles: { passed: true },
+                uncoveredLines: [{ workspace: 'frontend', file: 'src/App.jsx', lines: [5, 8] }]
+              }
+            },
+            logs: []
+          }
+        }
+      ]
+    });
+
+    expect(plan.coverageTargets).toBeInstanceOf(Set);
+    expect(plan.coverageTargets.has('frontend/src/App.jsx:5')).toBe(true);
+    expect(plan.coverageTargets.has('frontend/src/App.jsx:8')).toBe(true);
+  });
+
+  test('buildTestFixPlan skips lines that appear in previousCoverageTargets', () => {
+    const previousTargets = new Set([
+      'frontend/src/App.jsx:5',
+      'frontend/src/App.jsx:8'
+    ]);
+
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            summary: {
+              coverage: {
+                passed: false,
+                changedFiles: { passed: true },
+                uncoveredLines: [{ workspace: 'frontend', file: 'src/App.jsx', lines: [5, 8, 12] }]
+              }
+            },
+            logs: []
+          }
+        }
+      ],
+      previousCoverageTargets: previousTargets
+    });
+
+    expect(plan.childPrompts).toHaveLength(1);
+    expect(plan.childPrompts[0]).toContain('uncovered line 12 in frontend/src/App.jsx');
+    // Only line 12 should remain; lines 5 and 8 were previously targeted.
+    expect(plan.childPrompts[0]).not.toMatch(/\bline(?:s)?\s+(?:\d+,\s+)*5\b/);
+    expect(plan.childPrompts[0]).not.toMatch(/\bline(?:s)?\s+(?:\d+,\s+)*8\b/);
+  });
+
+  test('buildTestFixPlan produces no coverage prompts when all lines were previously targeted', () => {
+    const previousTargets = new Set([
+      'frontend/src/App.jsx:5',
+      'frontend/src/App.jsx:8'
+    ]);
+
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            summary: {
+              coverage: {
+                passed: false,
+                changedFiles: { passed: true },
+                uncoveredLines: [{ workspace: 'frontend', file: 'src/App.jsx', lines: [5, 8] }]
+              }
+            },
+            logs: []
+          }
+        }
+      ],
+      previousCoverageTargets: previousTargets
+    });
+
+    expect(plan.childPrompts).toHaveLength(0);
+    expect(plan.coverageTargets.size).toBe(0);
   });
 });
