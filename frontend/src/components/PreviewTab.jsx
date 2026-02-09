@@ -555,13 +555,13 @@ const PreviewTab = forwardRef(
     try {
       const doc = iframe.contentDocument;
       const title = typeof doc?.title === 'string' ? doc.title : '';
-      if (/^preview proxy error$/i.test(title) || /^preview unavailable$/i.test(title)) {
+      if (/^preview (proxy error|unavailable|starting)$/i.test(title)) {
         return true;
       }
 
       const h1 = doc?.querySelector?.('h1');
       const headingText = typeof h1?.textContent === 'string' ? h1.textContent : '';
-      return /^preview proxy error$/i.test(headingText) || /^preview unavailable$/i.test(headingText);
+      return /^preview (proxy error|unavailable|starting)$/i.test(headingText);
     } catch {
       return false;
     }

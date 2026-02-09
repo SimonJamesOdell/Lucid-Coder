@@ -1681,6 +1681,20 @@ describe('PreviewTab', () => {
     expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(true);
   });
 
+  test('detects proxy placeholder by "Preview starting" title', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    Object.defineProperty(iframe, 'contentDocument', {
+      configurable: true,
+      value: { title: 'Preview starting', querySelector: vi.fn() }
+    });
+    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+
+    expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(true);
+  });
+
   test('Copy selector uses navigator.clipboard when available', async () => {
     const processInfo = buildProcessInfo();
     const { previewRef } = renderPreviewTab({ processInfo });
