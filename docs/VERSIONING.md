@@ -4,7 +4,7 @@ LucidCoder follows Semantic Versioning.
 
 ## Current version
 
-0.5.6
+0.5.7
 
 0.5.4
 ## Policy

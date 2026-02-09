@@ -1,3 +1,5 @@
+## 0.5.7 (2026-02-09)
+
 ## 0.5.6 (2026-02-09)
 - Return 503 "Preview is starting" responses (with Retry-After) when the preview proxy cannot reach a frontend still booting, instead of a generic 502.
 - Persist the detected LLM endpoint path at configuration time and reuse it at runtime to skip fallback delays for non-chat models.
