@@ -1,5 +1,8 @@
 ## 0.5.6 (2026-02-09)
 - Return 503 "Preview is starting" responses (with Retry-After) when the preview proxy cannot reach a frontend still booting, instead of a generic 502.
+- Persist the detected LLM endpoint path at configuration time and reuse it at runtime to skip fallback delays for non-chat models.
+- Expose stored LLM endpoint metadata in safe config responses and expand LLM route/client tests to keep coverage strict.
+- Remove unreachable fallback-branch guards in LLM endpoint routing to keep branch coverage accurate.
 
 ## 0.5.5 (2026-02-09)
 - Add OpenAI Responses API support for codex-family models: auto-detect codex models, route to `/v1/responses`, convert payloads (system/developer to `instructions`, omit temperature/top_p for reasoning models), and apply 120s timeouts.
