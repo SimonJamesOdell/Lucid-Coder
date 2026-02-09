@@ -31,7 +31,32 @@ export function registerProjectGitRoutes(router) {
     return getGitSettings();
   };
 
-  const buildGitStatus = async ({ project, branchName }) => {
+  const normalizeRemoteUrl = (value) => (typeof value === 'string' ? value.trim() : '');
+
+  const ensureRemoteOrigin = async (projectPath, settings) => {
+    const configuredRemote = normalizeRemoteUrl(settings?.remoteUrl);
+    const existing = await getRemoteUrl(projectPath, 'origin');
+    if (existing) {
+      return existing;
+    }
+    if (!configuredRemote || settings?.workflow !== 'cloud') {
+      return null;
+    }
+
+    try {
+      await runGitCommand(projectPath, ['remote', 'add', 'origin', configuredRemote]);
+      return configuredRemote;
+    } catch (error) {
+      try {
+        await runGitCommand(projectPath, ['remote', 'set-url', 'origin', configuredRemote]);
+        return configuredRemote;
+      } catch {
+        throw error;
+      }
+    }
+  };
+
+  const buildGitStatus = async ({ project, branchName, settings }) => {
     if (!project?.path) {
       return {
         branch: branchName,
@@ -47,11 +72,21 @@ export function registerProjectGitRoutes(router) {
 
     await ensureGitRepository(project.path, { defaultBranch: branchName });
 
-    const [currentBranch, remoteUrl, dirty] = await Promise.all([
+    const [currentBranch, remoteInfo, dirty] = await Promise.all([
       getCurrentBranch(project.path).catch(() => null),
-      getRemoteUrl(project.path, 'origin'),
+      (async () => {
+        try {
+          const remoteUrl = await ensureRemoteOrigin(project.path, settings);
+          return { remoteUrl, error: null };
+        } catch (error) {
+          return { remoteUrl: null, error: error?.message || 'Failed to configure remote origin.' };
+        }
+      })(),
       hasWorkingTreeChanges(project.path).catch(() => false)
     ]);
+
+    const remoteUrl = remoteInfo?.remoteUrl || null;
+    const remoteError = remoteInfo?.error || null;
 
     if (!remoteUrl) {
       return {
@@ -61,7 +96,8 @@ export function registerProjectGitRoutes(router) {
         behind: 0,
         dirty,
         hasRemote: false,
-        remoteUrl: null
+        remoteUrl: null,
+        error: remoteError
       };
     }
 
@@ -90,7 +126,7 @@ export function registerProjectGitRoutes(router) {
 
       const settings = await resolveEffectiveSettings(projectId);
       const branchName = settings?.defaultBranch || 'main';
-      const status = await buildGitStatus({ project, branchName });
+      const status = await buildGitStatus({ project, branchName, settings });
 
       res.json({ success: true, status });
     } catch (error) {
@@ -114,13 +150,18 @@ export function registerProjectGitRoutes(router) {
       }
 
       await ensureGitRepository(project.path, { defaultBranch: branchName });
-      const remoteUrl = await getRemoteUrl(project.path, 'origin');
+      let remoteUrl = null;
+      try {
+        remoteUrl = await ensureRemoteOrigin(project.path, settings);
+      } catch (error) {
+        return res.status(400).json({ success: false, error: error?.message || 'Failed to configure remote origin.' });
+      }
       if (!remoteUrl) {
         return res.status(400).json({ success: false, error: 'Remote origin is not configured.' });
       }
 
       await fetchRemote(project.path, 'origin');
-      const status = await buildGitStatus({ project, branchName });
+      const status = await buildGitStatus({ project, branchName, settings });
       res.json({ success: true, status });
     } catch (error) {
       console.error('Error fetching git remote:', error);
@@ -143,7 +184,12 @@ export function registerProjectGitRoutes(router) {
       }
 
       await ensureGitRepository(project.path, { defaultBranch: branchName });
-      const remoteUrl = await getRemoteUrl(project.path, 'origin');
+      let remoteUrl = null;
+      try {
+        remoteUrl = await ensureRemoteOrigin(project.path, settings);
+      } catch (error) {
+        return res.status(400).json({ success: false, error: error?.message || 'Failed to configure remote origin.' });
+      }
       if (!remoteUrl) {
         return res.status(400).json({ success: false, error: 'Remote origin is not configured.' });
       }
@@ -173,7 +219,7 @@ export function registerProjectGitRoutes(router) {
         strategy = 'rebase';
       }
 
-      const status = await buildGitStatus({ project, branchName });
+      const status = await buildGitStatus({ project, branchName, settings });
       res.json({ success: true, status, strategy });
     } catch (error) {
       console.error('Error pulling git remote:', error);

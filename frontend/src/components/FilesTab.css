@@ -93,8 +93,9 @@
   border-bottom: 1px solid var(--border-color, #333);
   background: var(--background-tertiary, #0f0f0f);
   display: flex;
-  justify-content: flex-start;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
   min-height: 35px;
 }
 
@@ -105,6 +106,16 @@
   color: var(--text-primary, #ffffff);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.file-tree-path {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-secondary, #cccccc);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .file-tree-content {

@@ -1,4 +1,8 @@
 ## 0.5.7 (2026-02-09)
+- Harden git fetch/pull/status routes to auto-seed the `origin` remote from saved settings when it is missing locally (`ensureRemoteOrigin`), with `remote add` → `set-url` fallback.
+- Show the project path in the Files tab explorer header and remove the static "Explorer" label.
+- Add comprehensive backend tests for the new remote-origin recovery paths (status, fetch, pull) including error and fallback branches.
+- Add frontend test for project-path display in the file tree header.
 
 ## 0.5.6 (2026-02-09)
 - Return 503 "Preview is starting" responses (with Retry-After) when the preview proxy cannot reach a frontend still booting, instead of a generic 502.

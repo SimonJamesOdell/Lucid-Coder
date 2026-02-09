@@ -1617,7 +1617,23 @@ describe('FilesTab Component', () => {
     await waitFor(() => expect(mockAxios.get).toHaveBeenCalledWith(`/api/projects/${mockProject.id}/files`));
 
     expect(await screen.findByTestId('file-tree')).toBeInTheDocument();
-    expect(screen.getByText('Explorer')).toBeInTheDocument();
+    expect(screen.queryByText('Explorer')).toBeNull();
+  });
+
+  test('shows the project path in the file explorer header', async () => {
+    const projectWithPath = {
+      ...mockProject,
+      path: 'C:\\Users\\simon\\lucidcoder\\projects\\tank-boss'
+    };
+    setTheme('dark', {
+      currentProject: projectWithPath
+    });
+    mockAxios.get.mockResolvedValueOnce(filesApiResponse());
+
+    render(<FilesTab project={projectWithPath} />);
+    await waitFor(() => expect(mockAxios.get).toHaveBeenCalledWith(`/api/projects/${mockProject.id}/files`));
+
+    expect(await screen.findByText(projectWithPath.path)).toBeInTheDocument();
   });
   test('tab close handles missing diff state entries', async () => {
     setTheme('dark', {
