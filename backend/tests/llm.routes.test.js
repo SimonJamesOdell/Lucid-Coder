@@ -465,7 +465,8 @@ describe('LLM Routes', () => {
         model: 'gpt-4',
         apiUrl: 'https://api.openai.com/v1',
         apiKeyEncrypted: 'encrypted_sk-test123',
-        requiresApiKey: true
+        requiresApiKey: true,
+        endpointPath: null
       });
       expect(llmClient.initialize).toHaveBeenCalled();
     });
@@ -491,7 +492,8 @@ describe('LLM Routes', () => {
         model: 'gpt-4',
         apiUrl: 'https://api.openai.com/v1',
         apiKeyEncrypted: 'encrypted_sk-test',
-        requiresApiKey: true
+        requiresApiKey: true,
+        endpointPath: null
       });
     });
 
@@ -515,7 +517,8 @@ describe('LLM Routes', () => {
         model: 'llama2',
         apiUrl: 'http://localhost:11434/api',
         apiKeyEncrypted: null,
-        requiresApiKey: false
+        requiresApiKey: false,
+        endpointPath: null
       });
     });
 
@@ -563,7 +566,8 @@ describe('LLM Routes', () => {
         model: 'gpt-4o',
         apiUrl: 'https://api.openai.com/v1',
         apiKeyEncrypted: 'encrypted_existing',
-        requiresApiKey: true
+        requiresApiKey: true,
+        endpointPath: null
       });
       expect(llmClient.initialize).toHaveBeenCalled();
     });
@@ -799,6 +803,7 @@ describe('LLM Routes', () => {
           api_url: 'https://api.openai.com/v1',
           requires_api_key: true,
           has_api_key: true,
+          endpoint_path: null,
           created_at: '2024-01-01T00:00:00Z'
         }
       });
