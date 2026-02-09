@@ -25,3 +25,157 @@
   margin: 0.5rem 0 0;
   padding-left: 1.2rem;
 }
+
+.tools-modal-meta {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.tools-modal-meta-row {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: 0.75rem;
+}
+
+.tools-modal-meta-label {
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.tools-modal-meta-value {
+  color: var(--text-primary, #fff);
+}
+
+.tools-modal-muted {
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.tools-modal-warning {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(255, 200, 0, 0.25);
+  background: rgba(255, 200, 0, 0.08);
+  color: var(--text-primary, #fff);
+}
+
+.tools-modal-fieldset {
+  margin-top: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.75rem;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tools-modal-fieldset legend {
+  padding: 0 0.35rem;
+  color: var(--text-primary, #fff);
+}
+
+.tools-modal-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tools-modal-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  line-height: 1.25;
+  color: var(--text-primary, #fff);
+}
+
+.tools-modal-checkbox input {
+  margin-top: 0.15rem;
+}
+
+.tools-modal-subtext {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.9em;
+}
+
+.tools-modal-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 0.5rem 0;
+}
+
+.tools-modal-details {
+  margin-top: 0.75rem;
+}
+
+.tools-modal-details summary {
+  cursor: pointer;
+  color: var(--text-primary, #fff);
+}
+
+.tools-modal-prompt {
+  margin: 0.65rem 0 0;
+  padding: 0.75rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-secondary, #b3b3b3);
+  overflow: auto;
+  max-height: 14rem;
+  white-space: pre-wrap;
+}
+
+.tools-modal-error {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(255, 80, 80, 0.25);
+  background: rgba(255, 80, 80, 0.08);
+  color: var(--text-primary, #fff);
+}
+
+.tools-modal-success {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(80, 255, 160, 0.25);
+  background: rgba(80, 255, 160, 0.08);
+  color: var(--text-primary, #fff);
+}
+
+.tools-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.tools-modal-hint {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.92em;
+}
+
+.tools-modal-scroll-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Reuse TestTab-style log highlighting for streamed output (e.g., cleanup logs). */
+.tools-modal-prompt .log-highlight {
+  font-weight: 600;
+}
+
+.tools-modal-prompt .log-highlight.duration {
+  color: var(--warning-color, #fbc02d);
+}
+
+.tools-modal-prompt .log-highlight.pass {
+  color: var(--success-color, #28a745);
+}
+
+.tools-modal-prompt .log-highlight.fail {
+  color: var(--error-color, #ff5f56);
+}

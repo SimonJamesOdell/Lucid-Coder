@@ -115,7 +115,12 @@ router.post('/:branchName/tests', async (req, res) => {
   try {
     const projectId = parseProjectId(req.params.projectId);
     const branchName = decodeURIComponent(req.params.branchName);
-    const testRun = await runTestsForBranch(projectId, branchName, req.body || {});
+    const rawOptions = req.body || {};
+    const testRun = await runTestsForBranch(projectId, branchName, {
+      ...rawOptions,
+      enforceFullCoverage: true,
+      includeCoverageLineRefs: true
+    });
     res.json({ success: true, testRun });
   } catch (error) {
     respondWithError(res, error, 'Failed to run tests');

@@ -465,6 +465,18 @@ describe('Navigation Component', () => {
     });
   });
 
+  test('opens Clean Up modal when lucidcoder:open-cleanup-tool fires', async () => {
+    renderNavigation();
+
+    expect(screen.queryByTestId('tool-cleanup-modal')).not.toBeInTheDocument();
+
+    window.dispatchEvent(new CustomEvent('lucidcoder:open-cleanup-tool'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tool-cleanup-modal')).toBeInTheDocument();
+    });
+  });
+
   test('create project triggers the create project view', async () => {
     const showCreateProject = vi.fn();
     const closeProject = vi.fn();

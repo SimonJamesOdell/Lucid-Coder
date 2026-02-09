@@ -126,70 +126,55 @@ describe('agentOrchestrator', () => {
     await expect(createGoalFromPrompt({ projectId: 1, prompt: 123 })).rejects.toThrow('prompt is required');
   });
 
-  it('treats whitespace-only prompts as underspecified (clarification task)', async () => {
+  it('treats whitespace-only prompts as analysis tasks', async () => {
     const { tasks } = await createGoalFromPrompt({ projectId: 1, prompt: '   ' });
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].type).toBe('clarification');
+    expect(tasks[0].type).toBe('analysis');
   });
 
-  it('creates a clarification task when the prompt is underspecified', async () => {
+  it('creates an analysis task when the prompt has no clarifying questions', async () => {
     const prompt = 'Build something';
 
     const { goal, tasks } = await createGoalFromPrompt({ projectId: 1, prompt });
 
-    expect(goal.metadata).toMatchObject({
-      clarifyingQuestions: ['What should "done" look like? Please provide acceptance criteria.']
-    });
+    expect(goal.metadata).toBeNull();
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({
       goalId: goal.id,
-      type: 'clarification',
+      type: 'analysis',
       status: 'pending',
       payload: {
-        prompt,
-        questions: ['What should "done" look like? Please provide acceptance criteria.']
+        prompt
       }
     });
   });
 
-  it('treats generic build prompts as underspecified even when longer than two words', async () => {
+  it('treats generic build prompts as analysis tasks when no clarifications exist', async () => {
     const prompt = 'Build a thing';
 
     const { goal, tasks } = await createGoalFromPrompt({ projectId: 1, prompt });
 
-    expect(goal.metadata).toMatchObject({
-      clarifyingQuestions: ['What should "done" look like? Please provide acceptance criteria.']
-    });
+    expect(goal.metadata).toBeNull();
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({
-      type: 'clarification',
+      type: 'analysis',
       payload: {
-        prompt,
-        questions: ['What should "done" look like? Please provide acceptance criteria.']
+        prompt
       }
     });
   });
 
-  it('asks for expected-vs-actual context when the prompt sounds like a bug fix', async () => {
+  it('does not auto-request clarifications for bug fix prompts', async () => {
     const prompt = 'Fix login bug';
 
     const { goal, tasks } = await createGoalFromPrompt({ projectId: 1, prompt });
 
-    expect(goal.metadata).toMatchObject({
-      clarifyingQuestions: [
-        'What should "done" look like? Please provide acceptance criteria.',
-        'What is the expected behavior, and what is currently happening?'
-      ]
-    });
+    expect(goal.metadata).toBeNull();
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({
-      type: 'clarification',
+      type: 'analysis',
       payload: {
-        prompt,
-        questions: [
-          'What should "done" look like? Please provide acceptance criteria.',
-          'What is the expected behavior, and what is currently happening?'
-        ]
+        prompt
       }
     });
   });
@@ -1179,10 +1164,7 @@ describe('agentOrchestrator', () => {
 
       expect(result.questions).toEqual(['Which dashboard layout should we use?']);
       const snapshot = await getGoalWithTasks(result.parent.id);
-      expect(snapshot.goal.metadata.clarifyingQuestions).toEqual([
-        'What should "done" look like? Please provide acceptance criteria.',
-        'Which dashboard layout should we use?'
-      ]);
+      expect(snapshot.goal.metadata.clarifyingQuestions).toEqual(['Which dashboard layout should we use?']);
       expect(snapshot.tasks[0].type).toBe('clarification');
     });
 
@@ -1313,15 +1295,9 @@ describe('agentOrchestrator', () => {
 
       expect(result).toMatchObject({
         metadata: {
-          clarifyingQuestions: [
-            'What should "done" look like? Please provide acceptance criteria.',
-            'Needs detail'
-          ]
+          clarifyingQuestions: ['Needs detail']
         },
-        clarifyingQuestions: [
-          'What should "done" look like? Please provide acceptance criteria.',
-          'Needs detail'
-        ],
+        clarifyingQuestions: ['Needs detail'],
         styleOnly: false
       });
     });

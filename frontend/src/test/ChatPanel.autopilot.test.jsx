@@ -1000,6 +1000,54 @@ describe('ChatPanel - Autopilot Features', () => {
       cancelRefresh.resolve({ session: { id: 'session-control', status: 'cancelled', events: [] } });
     });
 
+    it('resumes autopilot when the assistant toggle is clicked while paused', async () => {
+      renderWithAppState();
+
+      const latest = getLatestInstance();
+      expect(latest?.setAutopilotSession).toBeInstanceOf(Function);
+
+      await act(async () => {
+        latest.setAutopilotSession?.({ id: 'session-toggle', status: 'paused', events: [] });
+      });
+
+      const toggle = screen.getByTestId('chat-autofix-toggle');
+      const user = userEvent.setup();
+      await user.click(toggle);
+
+      expect(goalsApi.agentAutopilotMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 123,
+          sessionId: 'session-toggle',
+          message: 'resume',
+          kind: 'resume'
+        })
+      );
+    });
+
+    it('pauses autopilot when the assistant toggle is clicked while running', async () => {
+      renderWithAppState();
+
+      const latest = getLatestInstance();
+      expect(latest?.setAutopilotSession).toBeInstanceOf(Function);
+
+      await act(async () => {
+        latest.setAutopilotSession?.({ id: 'session-toggle', status: 'running', events: [] });
+      });
+
+      const toggle = screen.getByTestId('chat-autofix-toggle');
+      const user = userEvent.setup();
+      await user.click(toggle);
+
+      expect(goalsApi.agentAutopilotMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 123,
+          sessionId: 'session-toggle',
+          message: 'pause',
+          kind: 'pause'
+        })
+      );
+    });
+
     it('routes slash commands and free-form prompts while autopilot is running', async () => {
       useAppState.mockReturnValue({
         currentProject: { id: 888 },

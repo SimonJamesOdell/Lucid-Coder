@@ -32,6 +32,10 @@ vi.mock('../services/autopilotSessions.js', () => ({
   resumeAutopilotSessions: vi.fn()
 }));
 
+vi.mock('../services/foregroundCleanupRunner.js', () => ({
+  runForegroundCleanup: vi.fn()
+}));
+
 import agentRoutes from '../routes/agent.js';
 import { handleAgentRequest } from '../services/agentRequestHandler.js';
 import {

@@ -3,6 +3,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import LLMUsageTab, { __testHooks } from '../components/LLMUsageTab';
 
+vi.mock('../components/RunsTab', () => ({
+  __esModule: true,
+  default: () => <div data-testid="mock-runs-tab" />
+}));
+
 const makeResponse = (payload, ok = true, status = 200) => ({
   ok,
   status,
@@ -262,6 +267,39 @@ describe('LLMUsageTab', () => {
     promptSpy.mockRestore();
   });
 
+  test('copy JSON uses prompt when clipboard is unavailable and marks copied', async () => {
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+
+    window.prompt = global.prompt;
+    const promptSpy = vi.spyOn(global, 'prompt').mockImplementationOnce(() => 'ok');
+
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/llm/request-metrics') {
+        return Promise.resolve(
+          makeResponse({ success: true, metrics: { counters: { 'kind:requested': 1 } } })
+        );
+      }
+      return Promise.resolve(makeResponse({ success: true }));
+    });
+
+    render(<LLMUsageTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-usage-copy')).not.toBeDisabled();
+    });
+
+    fireEvent.click(screen.getByTestId('llm-usage-copy'));
+
+    await waitFor(() => {
+      expect(promptSpy).toHaveBeenCalledTimes(1);
+    });
+    expect(await screen.findByTestId('llm-usage-copied')).toBeInTheDocument();
+
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
+    promptSpy.mockRestore();
+  });
+
   test('loads and renders summary counters', async () => {
     global.fetch.mockImplementation((url) => {
       if (url === '/api/llm/request-metrics') {
@@ -507,5 +545,31 @@ describe('LLMUsageTab', () => {
 
   test('formatMetricsJson uses an empty object when metrics is null', () => {
     expect(__testHooks.formatMetricsJson(null)).toBe(JSON.stringify({}, null, 2));
+  });
+
+  test('switches between usage and runs views', async () => {
+    global.fetch.mockResolvedValueOnce(
+      makeResponse({ success: true, metrics: { counters: {} } })
+    );
+
+    const user = userEvent.setup();
+    render(<LLMUsageTab project={{ id: 1 }} />);
+
+    const usageTab = screen.getByTestId('llm-usage-tab-usage');
+    const runsTab = screen.getByTestId('llm-usage-tab-runs');
+
+    expect(usageTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('LLM Usage')).toBeInTheDocument();
+
+    await user.click(runsTab);
+
+    expect(runsTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('mock-runs-tab')).toBeInTheDocument();
+    expect(screen.queryByText('LLM Usage')).toBeNull();
+
+    await user.click(usageTab);
+
+    expect(usageTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('LLM Usage')).toBeInTheDocument();
   });
 });

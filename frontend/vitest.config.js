@@ -47,6 +47,12 @@ export default defineConfig({
     cacheDir: './.vite-cache', 
     coverage: {
       reporter: ['text', 'json', 'html'],
+      thresholds: {
+        lines: 100,
+        statements: 100,
+        functions: 100,
+        branches: 100
+      },
       exclude: [
         'node_modules/',
         'src/test/',

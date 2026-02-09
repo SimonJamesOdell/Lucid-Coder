@@ -29,14 +29,14 @@ describe('agentOrchestrator clarification gating (integration coverage)', () => 
       projectId: 1,
       prompt: whitespacePrompt
     });
-    expect(whitespaceTasks[0].type).toBe('clarification');
+    expect(whitespaceTasks[0].type).toBe('analysis');
 
     const genericBuildPrompt = 'Build a thing';
     const { tasks: genericBuildTasks } = await createGoalFromPrompt({
       projectId: 1,
       prompt: genericBuildPrompt
     });
-    expect(genericBuildTasks[0].type).toBe('clarification');
+    expect(genericBuildTasks[0].type).toBe('analysis');
 
     const specificBuildPrompt = 'Build a todo system';
     const { tasks: specificBuildTasks } = await createGoalFromPrompt({

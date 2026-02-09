@@ -17,6 +17,7 @@ import {
   getAutopilotSession,
   resumeAutopilotSessions
 } from '../services/autopilotSessions.js';
+import { runForegroundCleanup } from '../services/foregroundCleanupRunner.js';
 
 const router = express.Router();
 
@@ -25,9 +26,86 @@ const STREAM_CHUNK_SIZE = 24;
 const STREAM_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 15;
 
 const writeSseEvent = (res, event, payload) => {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  if (!res || res.writableEnded || res.destroyed) {
+    return false;
+  }
+
+  try {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    return true;
+  } catch {
+    return false;
+  }
 };
+
+router.post('/cleanup/stream', async (req, res) => {
+  const cancelled = { value: false };
+
+  try {
+    const {
+      projectId,
+      prompt,
+      includeFrontend = true,
+      includeBackend = true,
+      pruneRedundantTests = true,
+      options
+    } = req.body || {};
+
+    if (!projectId) {
+      return res.status(400).json({ error: 'projectId is required' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
+    if (!res || res.writableEnded || res.destroyed) {
+      return res.end();
+    }
+
+    try {
+      res.write('retry: 1000\n\n');
+    } catch {
+      return res.end();
+    }
+
+    // Important: `req` can emit `close` as soon as the request body is fully read.
+    // For SSE, we want cancellation when the client disconnects from the response.
+    res.on('close', () => {
+      cancelled.value = true;
+    });
+    req.on('aborted', () => {
+      cancelled.value = true;
+    });
+
+    const result = await runForegroundCleanup({
+      projectId,
+      prompt: typeof prompt === 'string' ? prompt : '',
+      includeFrontend: Boolean(includeFrontend),
+      includeBackend: Boolean(includeBackend),
+      pruneRedundantTests: pruneRedundantTests !== false,
+      options,
+      shouldCancel: () => cancelled.value,
+      onEvent: ({ event, data }) => {
+        writeSseEvent(res, event || 'message', data || {});
+      }
+    });
+
+    writeSseEvent(res, 'done', { result });
+    res.end();
+  } catch (error) {
+    if (error?.code === 'CLEANUP_CANCELLED' || cancelled.value) {
+      writeSseEvent(res, 'done', { result: { cancelled: true } });
+      return res.end();
+    }
+
+    writeSseEvent(res, 'error', { message: error?.message || 'Cleanup failed' });
+    return res.end();
+  }
+});
 
 router.post('/request', async (req, res) => {
   try {

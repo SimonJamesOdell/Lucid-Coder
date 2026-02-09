@@ -20,7 +20,38 @@
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.10);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.goals-tab-root .goals-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
   margin-bottom: 0.6rem;
+}
+
+.goals-tab-root .goals-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.goals-tab-root .goals-tab-actions-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #b3b3b3);
+  margin-right: 0.15rem;
+}
+
+.goals-tab-root .goals-tab-actions .git-settings-button {
+  padding: 0.25rem 0.45rem;
+  font-size: 0.74rem;
+  min-width: 3.2rem;
 }
 
 .goals-tab-root .goals-tab-filter {
@@ -28,7 +59,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--text-secondary, #b3b3b3);
-  padding: 0.35rem 0.6rem;
+  padding: 0.32rem 0.55rem;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -76,8 +107,29 @@
   color: var(--text-primary, #fff);
 }
 
+.goals-tab-root .goals-modal-goal.is-selected {
+  border-color: var(--accent-color, #007acc);
+  box-shadow: 0 0 0 1px var(--accent-color, #007acc);
+}
+
+.goals-tab-root .goals-inspector-json {
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-primary, #fff);
+  overflow: auto;
+  max-height: 100%;
+}
+
 @media (max-width: 860px) {
   .goals-tab-root .goals-modal-panel.goals-tab-panel {
     border-radius: 0.5rem;
+  }
+
+  .goals-tab-root .goals-tab-header {
+    flex-wrap: wrap;
   }
 }

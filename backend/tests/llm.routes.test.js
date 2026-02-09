@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import llmRoutes from '../routes/llm.js';
+import axios from 'axios';
 import { db_operations } from '../database.js';
 import { encryptApiKey, decryptApiKey } from '../encryption.js';
 import { llmClient } from '../llm-client.js';
@@ -21,13 +22,33 @@ vi.mock('../encryption.js', () => ({
   decryptApiKey: vi.fn((value) => (value ? 'decrypted' : null))
 }));
 
-vi.mock('../llm-client.js', () => ({
-  llmClient: {
-    testConnection: vi.fn(),
-    initialize: vi.fn(),
-    generateResponse: vi.fn(),
-    config: { model: 'gpt-4', provider: 'openai' }
+const mockGenerateResponse = vi.hoisted(() => vi.fn());
+
+vi.mock('../llm-client.js', () => {
+  class MockLLMClient {
+    constructor() {
+      this.generateResponse = mockGenerateResponse;
+      this.config = null;
+      this.apiKey = null;
+    }
   }
+
+  return {
+    llmClient: {
+      testConnection: vi.fn(),
+      initialize: vi.fn(),
+      generateResponse: vi.fn(),
+      config: { model: 'gpt-4', provider: 'openai' }
+    },
+    LLMClient: MockLLMClient
+  };
+});
+
+vi.mock('axios', () => ({
+  default: {
+    get: vi.fn()
+  },
+  get: vi.fn()
 }));
 
 describe('LLM Routes', () => {
@@ -38,6 +59,8 @@ describe('LLM Routes', () => {
     app.use(express.json());
     app.use('/api/llm', llmRoutes);
     vi.clearAllMocks();
+    axios.get.mockResolvedValue({ data: {} });
+    mockGenerateResponse.mockResolvedValue('OK');
 
     // Avoid mock implementation leakage between tests.
     db_operations.getActiveLLMConfig.mockResolvedValue(null);
@@ -332,6 +355,86 @@ describe('LLM Routes', () => {
         error: 'Failed to test configuration'
       });
     });
+
+    it('fails fast when the OpenAI model is unavailable', async () => {
+      llmClient.testConnection.mockResolvedValue({
+        model: 'gpt-4',
+        responseTime: 120
+      });
+      axios.get.mockRejectedValueOnce({
+        response: {
+          status: 404,
+          data: { error: { message: 'The model `gpt-missing` does not exist or you do not have access to it.' } }
+        }
+      });
+
+      const response = await request(app)
+        .post('/api/llm/test')
+        .send({
+          provider: 'openai',
+          apiKey: 'test-key',
+          model: 'gpt-missing',
+          apiUrl: 'https://api.openai.com/v1'
+        })
+        .expect(400);
+
+      expect(response.body).toEqual({
+        success: false,
+        error: 'The model `gpt-missing` does not exist or you do not have access to it.'
+      });
+      expect(llmClient.testConnection).toHaveBeenCalled();
+    });
+
+    it('returns a 404 model lookup message when OpenAI model access lacks details', async () => {
+      llmClient.testConnection.mockResolvedValue({
+        model: 'gpt-4',
+        responseTime: 120
+      });
+      axios.get.mockRejectedValueOnce({
+        response: {
+          status: 404,
+          data: {}
+        }
+      });
+
+      const response = await request(app)
+        .post('/api/llm/test')
+        .send({
+          provider: 'openai',
+          apiKey: 'test-key',
+          model: 'gpt-missing',
+          apiUrl: 'https://api.openai.com/v1/'
+        })
+        .expect(400);
+
+      expect(response.body).toEqual({
+        success: false,
+        error: 'Model lookup failed (404). Check API URL (https://api.openai.com/v1) and model name (gpt-missing).'
+      });
+    });
+
+    it('returns a generic model access message when lookup fails without status', async () => {
+      llmClient.testConnection.mockResolvedValue({
+        model: 'gpt-4',
+        responseTime: 120
+      });
+      axios.get.mockRejectedValueOnce({});
+
+      const response = await request(app)
+        .post('/api/llm/test')
+        .send({
+          provider: 'openai',
+          apiKey: 'test-key',
+          model: 'gpt-missing',
+          apiUrl: 'https://api.openai.com/v1'
+        })
+        .expect(400);
+
+      expect(response.body).toEqual({
+        success: false,
+        error: 'Failed to verify model access.'
+      });
+    });
   });
 
   describe('POST /api/llm/configure', () => {
@@ -555,6 +658,32 @@ describe('LLM Routes', () => {
 
       expect(response.body.success).toBe(false);
       expect(response.body.error).toMatch(/failed to encrypt api key/i);
+      expect(db_operations.saveLLMConfig).not.toHaveBeenCalled();
+      expect(llmClient.initialize).not.toHaveBeenCalled();
+    });
+
+    it('rejects OpenAI models that are unavailable', async () => {
+      axios.get.mockRejectedValueOnce({
+        response: {
+          status: 404,
+          data: { error: { message: 'The model `gpt-missing` does not exist or you do not have access to it.' } }
+        }
+      });
+
+      const response = await request(app)
+        .post('/api/llm/configure')
+        .send({
+          provider: 'openai',
+          apiKey: 'sk-test123',
+          model: 'gpt-missing',
+          apiUrl: 'https://api.openai.com/v1'
+        })
+        .expect(400);
+
+      expect(response.body).toEqual({
+        success: false,
+        error: 'The model `gpt-missing` does not exist or you do not have access to it.'
+      });
       expect(db_operations.saveLLMConfig).not.toHaveBeenCalled();
       expect(llmClient.initialize).not.toHaveBeenCalled();
     });
@@ -1347,6 +1476,33 @@ describe('LLM Routes', () => {
         success: false,
         error: 'Failed to retrieve logs'
       });
+    });
+  });
+
+  describe('LLM route helper hooks', () => {
+    it('normalizes helper inputs for missing values', () => {
+      const hooks = llmRoutes.__testHooks;
+
+      expect(hooks.normalizeApiUrl()).toBe('');
+      expect(hooks.shouldValidateModelAccess()).toBe(false);
+      expect(hooks.shouldValidateModelAccess('openai')).toBe(true);
+      expect(hooks.buildOpenAiModelUrl('https://api.openai.com/v1', null))
+        .toBe('https://api.openai.com/v1/models/');
+    });
+
+    it('formats a 404 model access error with a missing API URL label', () => {
+      const hooks = llmRoutes.__testHooks;
+
+      const message = hooks.formatModelAccessError({
+        response: { status: 404, data: {} }
+      }, {
+        apiUrl: undefined,
+        model: 'gpt-missing'
+      });
+
+      expect(message).toBe(
+        'Model lookup failed (404). Check API URL (missing) and model name (gpt-missing).'
+      );
     });
   });
 });

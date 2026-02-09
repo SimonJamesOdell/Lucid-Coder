@@ -110,6 +110,28 @@
   overflow: auto;
 }
 
+.goals-modal-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.goals-modal-detail-actions .goals-tab-actions-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #b3b3b3);
+  margin-right: 0.15rem;
+}
+
+.goals-modal-detail-actions .git-settings-button {
+  padding: 0.25rem 0.45rem;
+  font-size: 0.74rem;
+  min-width: 3.2rem;
+}
+
 .goals-modal-section-title {
   font-size: 0.85rem;
   font-weight: 600;

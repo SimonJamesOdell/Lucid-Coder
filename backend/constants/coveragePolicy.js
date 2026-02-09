@@ -39,12 +39,16 @@ export const normalizeCoverageThresholds = (input, fallback = DEFAULT_COVERAGE_T
 };
 
 export const resolveCoveragePolicy = (options = {}) => {
-  const globalThresholds = normalizeCoverageThresholds(options.coverageThresholds, DEFAULT_COVERAGE_THRESHOLDS);
+  const enforceFullCoverage = options.enforceFullCoverage === true;
+  const baseThresholds = enforceFullCoverage
+    ? DEFAULT_COVERAGE_THRESHOLDS
+    : normalizeCoverageThresholds(options.coverageThresholds, DEFAULT_COVERAGE_THRESHOLDS);
 
-  const changedFileThresholds = normalizeCoverageThresholds(
-    options.changedFileCoverageThresholds,
-    globalThresholds
-  );
+  const globalThresholds = normalizeCoverageThresholds(baseThresholds, DEFAULT_COVERAGE_THRESHOLDS);
+
+  const changedFileThresholds = enforceFullCoverage
+    ? normalizeCoverageThresholds(DEFAULT_COVERAGE_THRESHOLDS, globalThresholds)
+    : normalizeCoverageThresholds(options.changedFileCoverageThresholds, globalThresholds);
 
   const enforceChangedFileCoverage = options.enforceChangedFileCoverage !== false;
 

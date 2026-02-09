@@ -7,6 +7,75 @@ import { formatPayload, formatPayloadInternal, sanitizePayload } from './llm-cli
 import { getHeaders, getEndpointURL } from './llm-client/http.js';
 import { extractResponse, getErrorMessage } from './llm-client/response.js';
 
+const buildPromptFromMessages = (messages = []) => {
+  if (!Array.isArray(messages)) {
+    return '';
+  }
+
+  return messages
+    .map((msg) => {
+      const role = typeof msg?.role === 'string' ? msg.role.trim() : 'user';
+      const content = typeof msg?.content === 'string' ? msg.content.trim() : '';
+      if (!content) {
+        return '';
+      }
+      return `${role.toUpperCase()}: ${content}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+};
+
+const buildCompletionsPayload = (basePayload, model) => ({
+  model,
+  prompt: buildPromptFromMessages(basePayload?.messages),
+  max_tokens: basePayload?.max_tokens || 1000,
+  temperature: basePayload?.temperature ?? 0.7,
+  top_p: basePayload?.top_p ?? 0.9
+});
+
+const buildResponsesPayload = (basePayload, model) => ({
+  model,
+  input: Array.isArray(basePayload?.messages) ? basePayload.messages : [],
+  max_output_tokens: basePayload?.max_tokens || 1000,
+  temperature: basePayload?.temperature ?? 0.7,
+  top_p: basePayload?.top_p ?? 0.9
+});
+
+const stripUnsupportedParams = (payload, errorMessage) => {
+  if (!payload || typeof payload !== 'object') {
+    return payload;
+  }
+
+  const message = String(errorMessage || '').toLowerCase();
+  if (!message.includes('unsupported parameter')) {
+    return payload;
+  }
+
+  const next = { ...payload };
+  let stripped = false;
+  const drop = (key) => {
+    if (Object.prototype.hasOwnProperty.call(next, key)) {
+      delete next[key];
+      stripped = true;
+    }
+  };
+
+  if (message.includes('temperature')) {
+    drop('temperature');
+  }
+  if (message.includes('top_p') || message.includes('topp')) {
+    drop('top_p');
+  }
+  if (message.includes('max_tokens')) {
+    drop('max_tokens');
+  }
+  if (message.includes('max_output_tokens')) {
+    drop('max_output_tokens');
+  }
+
+  return stripped ? next : payload;
+};
+
 export class LLMClient {
   constructor() {
     this.config = null;
@@ -329,6 +398,26 @@ export class LLMClient {
     return response;
   }
 
+  async makeAPIRequestWithEndpoint(config, apiKey, endpointPath, payload) {
+    const headers = this.getHeaders(config.provider, apiKey);
+    const baseUrl = String(config.api_url || '').replace(/\/+$/, '');
+    const url = `${baseUrl}${endpointPath}`;
+    const requestPayload = this.sanitizePayload(config.provider, payload);
+    const fallbackTimeout = Number.parseInt(process.env.LUCIDCODER_LLM_FALLBACK_TIMEOUT_MS || '', 10);
+    const fallbackTimeoutMs = Number.isFinite(fallbackTimeout) && fallbackTimeout > 0 ? fallbackTimeout : 60000;
+    const timeout = (endpointPath === '/completions' || endpointPath === '/responses')
+      ? fallbackTimeoutMs
+      : 30000;
+
+    return axios({
+      method: 'POST',
+      url,
+      headers,
+      data: requestPayload,
+      timeout
+    });
+  }
+
   getHeaders(provider, apiKey) {
     return getHeaders(provider, apiKey);
   }
@@ -368,13 +457,14 @@ export class LLMClient {
     };
     llmRequestMetrics.record('requested', metricsContext);
 
+    const basePayload = {
+      messages,
+      max_tokens: options.max_tokens || 1000,
+      temperature: options.temperature || 0.7,
+      ...options
+    };
+
     try {
-      const basePayload = {
-        messages,
-        max_tokens: options.max_tokens || 1000,
-        temperature: options.temperature || 0.7,
-        ...options
-      };
 
       let response;
       const request = async (payload) => this._makeDedupedRequest(
@@ -467,6 +557,75 @@ export class LLMClient {
 
     } catch (error) {
       const errorMessage = this.getErrorMessage(error);
+      const provider = String(this.config?.provider || '').toLowerCase();
+      const model = this.config?.model;
+      let fallbackErrorMessage = null;
+
+      const supportsOpenAiFallback = new Set([
+        'openai',
+        'custom',
+        'groq',
+        'together',
+        'perplexity',
+        'mistral'
+      ]).has(provider);
+
+      if (supportsOpenAiFallback) {
+        const message = String(errorMessage || '').toLowerCase();
+        const shouldTryCompletions =
+          message.includes('not a chat model') ||
+          message.includes('chat/completions') ||
+          message.includes('v1/chat/completions');
+        const shouldTryResponses = message.includes('v1/responses') || message.includes('responses endpoint');
+
+        const attemptWithStripping = async (endpointPath, initialPayload) => {
+          let payload = initialPayload;
+          let lastError = null;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              return await this.makeAPIRequestWithEndpoint(
+                this.config,
+                this.apiKey,
+                endpointPath,
+                payload
+              );
+            } catch (fallbackError) {
+              lastError = fallbackError;
+              const fallbackMessage = this.getErrorMessage(fallbackError);
+              const strippedPayload = stripUnsupportedParams(payload, fallbackMessage);
+              if (strippedPayload === payload) {
+                break;
+              }
+              payload = strippedPayload;
+            }
+          }
+          throw lastError;
+        };
+
+        try {
+          if (shouldTryCompletions) {
+            const completionsPayload = buildCompletionsPayload(basePayload, model);
+            const completionResponse = await attemptWithStripping('/completions', completionsPayload);
+            return this.extractResponse(this.config.provider, completionResponse.data);
+          }
+        } catch (fallbackError) {
+          fallbackErrorMessage = this.getErrorMessage(fallbackError);
+        }
+
+        try {
+          if (shouldTryResponses || shouldTryCompletions) {
+            const responsesPayload = buildResponsesPayload(basePayload, model);
+            const responsesResponse = await attemptWithStripping('/responses', responsesPayload);
+            return this.extractResponse(this.config.provider, responsesResponse.data);
+          }
+        } catch (fallbackError) {
+          fallbackErrorMessage = this.getErrorMessage(fallbackError);
+        }
+      }
+
+      const finalErrorMessage = fallbackErrorMessage
+        ? `${errorMessage} (Fallback failed: ${fallbackErrorMessage})`
+        : errorMessage;
       
       // Log failed request
       await db_operations.logAPIRequest({
@@ -475,10 +634,10 @@ export class LLMClient {
         requestType: 'generate',
         responseTime: Date.now() - startTime,
         success: false,
-        errorMessage
+        errorMessage: finalErrorMessage
       });
 
-      throw new Error(`LLM API Error: ${errorMessage}`);
+      throw new Error(`LLM API Error: ${finalErrorMessage}`);
     }
   }
 
@@ -530,3 +689,10 @@ export class LLMClient {
 
 // Create singleton instance
 export const llmClient = new LLMClient();
+
+export const __testing = {
+  buildPromptFromMessages,
+  buildCompletionsPayload,
+  buildResponsesPayload,
+  stripUnsupportedParams
+};

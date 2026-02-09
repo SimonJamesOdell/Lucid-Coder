@@ -15,6 +15,7 @@ import {
   formatLogMessage,
   renderLogLines,
   buildProofFailureMessage,
+  buildCoverageGateMessage,
   buildJobFailureContext,
   buildTestFailureContext,
   getAutofixMaxAttempts,
@@ -22,7 +23,8 @@ import {
   resetClassifyLogTokenOverride,
   setAutofixMaxAttemptsOverride,
   resetAutofixMaxAttemptsOverride,
-  isAutofixHalted
+  isAutofixHalted,
+  isCoverageGateFailed
 } from './test-tab/helpers.jsx';
 import { useSubmitProof } from './test-tab/useSubmitProof';
 import './TestTab.css';
@@ -41,6 +43,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     projectProcesses
   } = useAppState();
   const [localError, setLocalError] = useState(null);
+  const [logFontSize, setLogFontSize] = useState(0.55);
   const [isResultModalOpen, setIsResultModalOpen] = useState(false);
   const [resultModalVariant, setResultModalVariant] = useState('default');
   const [resultModalTitle, setResultModalTitle] = useState('');
@@ -110,8 +113,13 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }, {});
   }, [testJobs, visibleTestConfigs]);
 
-  const triggerTestFix = useCallback(({ origin = 'user' } = {}) => {
-    const planJobs = visibleTestConfigs.map((config) => ({
+  const triggerTestFix = useCallback(({ origin = 'user', jobTypes } = {}) => {
+    const types = Array.isArray(jobTypes) && jobTypes.length
+      ? new Set(jobTypes)
+      : null;
+    const planJobs = visibleTestConfigs
+      .filter((config) => !types || types.has(config.type))
+      .map((config) => ({
       label: config.type.startsWith('backend') ? 'Backend tests' : 'Frontend tests',
       kind: config.type.startsWith('backend') ? 'backend' : 'frontend',
       job: jobsByType[config.type]
@@ -119,6 +127,9 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     const plan = buildTestFixPlan({ jobs: planJobs });
 
     if (typeof window !== 'undefined') {
+      if (origin === 'user') {
+        window.dispatchEvent(new CustomEvent('lucidcoder:autofix-resume'));
+      }
       // Do not route failing-test fixes through the generic agent planner.
       // Instead, emit an event that creates a new goal to fix tests and then re-runs suites.
       window.dispatchEvent(new CustomEvent('lucidcoder:autofix-tests', { detail: { ...plan, origin } }));
@@ -130,6 +141,10 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     [jobsByType, visibleTestConfigs]
   );
 
+  const hasFailedJob = useCallback((job) => (
+    job && (job.status === 'failed' || isCoverageGateFailed(job))
+  ), []);
+
   const allTestsCompleted = useMemo(() => {
     if (!visibleTestConfigs.length) {
       return false;
@@ -140,12 +155,25 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     });
   }, [jobsByType, visibleTestConfigs]);
 
-  const didTestsPass = useMemo(() => {
+  const didTestsMeetGate = useMemo(() => {
     if (!allTestsCompleted) {
       return false;
     }
-    return visibleTestConfigs.every((config) => jobsByType[config.type]?.status === 'succeeded');
+    return visibleTestConfigs.every((config) => {
+      const job = jobsByType[config.type];
+      return job?.status === 'succeeded' && !isCoverageGateFailed(job);
+    });
   }, [allTestsCompleted, jobsByType, visibleTestConfigs]);
+
+  const coverageGateMessage = useMemo(() => {
+    const failingJob = visibleTestConfigs
+      .map((config) => jobsByType[config.type])
+      .find((job) => isCoverageGateFailed(job));
+    if (!failingJob) {
+      return null;
+    }
+    return buildCoverageGateMessage(failingJob.summary);
+  }, [jobsByType, visibleTestConfigs]);
 
   const testsPassedMessage = hasBackend
     ? 'Frontend and backend tests both passed.'
@@ -288,7 +316,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     lastResultModalKeyRef.current = modalKey;
 
     // Clear any in-flight auto-fix loop when tests pass.
-    if (didTestsPass) {
+    if (didTestsMeetGate) {
       autoFixSessionRef.current = {
         active: false,
         origin: 'user',
@@ -297,7 +325,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       };
     }
 
-    if (didTestsPass) {
+    if (didTestsMeetGate) {
       const lastRunSource = typeof testRunIntent?.source === 'string' ? testRunIntent.source : 'unknown';
       const shouldReturnToCommits = Boolean(testRunIntent?.returnToCommits);
 
@@ -590,8 +618,12 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
 
     resetCommitResumeState();
     setResultModalVariant('danger');
-    setResultModalTitle('Tests failed');
-    setResultModalMessage('One or more test suites failed. Want the AI assistant to help you fix them?');
+    setResultModalTitle(coverageGateMessage ? 'Coverage gate failed' : 'Tests failed');
+    setResultModalMessage(
+      coverageGateMessage
+        ? coverageGateMessage
+        : 'One or more test suites failed. Want the AI assistant to help you fix them?'
+    );
     setResultModalConfirmText('Fix with AI');
     setResultModalConfirmAction(() => () => {
       autoFixSessionRef.current = {
@@ -609,7 +641,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     setIsResultModalOpen(true);
   }, [
     allTestsCompleted,
-    didTestsPass,
+    didTestsMeetGate,
     jobsByType,
     onRequestCommitsTab,
     project,
@@ -626,7 +658,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     activeBranchName,
     syncBranchOverview,
     resetCommitResumeState,
-    submitProofIfNeeded
+    submitProofIfNeeded,
+    coverageGateMessage
   ]);
 
   const shouldRunTest = useCallback((type) => {
@@ -821,6 +854,14 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     resultModalProcessing
   ]);
 
+  const handleIncreaseLogFont = useCallback(() => {
+    setLogFontSize((current) => Math.min(1.1, Number((current + 0.05).toFixed(2))));
+  }, []);
+
+  const handleDecreaseLogFont = useCallback(() => {
+    setLogFontSize((current) => Math.max(0.55, Number((current - 0.05).toFixed(2))));
+  }, []);
+
   if (!project) {
     return (
       <div className="test-tab" data-testid="test-tab-empty">
@@ -833,7 +874,11 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   }
 
   return (
-    <div className="test-tab" data-testid="test-tab-automation">
+    <div
+      className="test-tab"
+      data-testid="test-tab-automation"
+      style={{ '--test-log-font-size': `${logFontSize}rem` }}
+    >
       <Modal
         isOpen={isResultModalOpen}
         onClose={() => setIsResultModalOpen(false)}
@@ -900,6 +945,27 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
                         <span className="job-duration">{durationLabel}</span>
                       )}
                     </div>
+                    <div className="job-logs-header">
+                      <span className="job-logs-label">Output</span>
+                      <div className="job-logs-controls">
+                        <button
+                          type="button"
+                          className="job-logs-control"
+                          onClick={handleDecreaseLogFont}
+                          aria-label="Decrease log font size"
+                        >
+                          -
+                        </button>
+                        <button
+                          type="button"
+                          className="job-logs-control"
+                          onClick={handleIncreaseLogFont}
+                          aria-label="Increase log font size"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
                     <div className="job-logs" data-testid={`job-logs-${config.type}`}>
                       {renderLogLines(job)}
                     </div>
@@ -920,6 +986,16 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
                 >
                   {active ? 'Running…' : `Run ${config.label}`}
                 </button>
+                {hasFailedJob(job) && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => triggerTestFix({ origin: 'user', jobTypes: [config.type] })}
+                    data-testid={`fix-with-ai-${config.type}`}
+                  >
+                    Fix with AI
+                  </button>
+                )}
                 {active && (
                   <button
                     type="button"
@@ -955,6 +1031,8 @@ Object.assign(TestTab.__testHooks, {
   buildProofFailureMessage,
    buildJobFailureContext,
    buildTestFailureContext,
+  isCoverageGateFailed,
+  buildCoverageGateMessage,
   getAutofixMaxAttempts,
   setClassifyLogTokenOverride,
   resetClassifyLogTokenOverride,

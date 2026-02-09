@@ -232,6 +232,7 @@ export const createBranchWorkflowTests = (core) => {
       }
 
       const { globalThresholds: thresholds, changedFileThresholds, enforceChangedFileCoverage } = resolveCoveragePolicy(options);
+      const includeCoverageLineRefs = options.includeCoverageLineRefs === true;
       const changedPaths = await resolveChangedPaths({
         options,
         context,
@@ -293,7 +294,8 @@ export const createBranchWorkflowTests = (core) => {
               workspace,
               changedPaths,
               nodeWorkspaceNames,
-              readJsonIfExists
+              readJsonIfExists,
+              includeAllFiles: includeCoverageLineRefs
             });
 
           coverageSummary = nodeCoverageSummary;
