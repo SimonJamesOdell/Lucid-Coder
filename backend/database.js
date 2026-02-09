@@ -186,6 +186,9 @@ export const initializeDatabase = async () => {
       )
     `);
 
+    // Add endpoint_path column for storing the probed API endpoint (e.g. /responses)
+    await ensureTableColumn('llm_config', 'endpoint_path', 'TEXT');
+
     // API Request logs table (for debugging and monitoring)
     await dbRun(`
       CREATE TABLE IF NOT EXISTS api_logs (
@@ -445,16 +448,16 @@ export const getGitSettingsToken = async () => {
 export const db_operations = {
   // LLM Configuration operations
   async saveLLMConfig(config) {
-    const { provider, model, apiUrl, apiKeyEncrypted, requiresApiKey } = config;
+    const { provider, model, apiUrl, apiKeyEncrypted, requiresApiKey, endpointPath } = config;
     
     // First, deactivate any existing active config
     await dbRun('UPDATE llm_config SET is_active = 0 WHERE is_active = 1');
     
     // Insert new config
     await dbRun(`
-      INSERT INTO llm_config (provider, model, api_url, api_key_encrypted, requires_api_key, is_active)
-      VALUES (?, ?, ?, ?, ?, 1)
-    `, [provider, model, apiUrl, apiKeyEncrypted, requiresApiKey]);
+      INSERT INTO llm_config (provider, model, api_url, api_key_encrypted, requires_api_key, is_active, endpoint_path)
+      VALUES (?, ?, ?, ?, ?, 1, ?)
+    `, [provider, model, apiUrl, apiKeyEncrypted, requiresApiKey, endpointPath || null]);
     
     return true;
   },

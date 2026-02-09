@@ -205,3 +205,186 @@ describe('LLMClient fallback routing', () => {
     expect(result).toBe('OK responses');
   });
 });
+
+describe('LLMClient stored endpoint shortcut', () => {
+  beforeEach(() => {
+    axios.mockReset();
+  });
+
+  it('uses stored /responses endpoint directly without hitting /chat/completions', async () => {
+    const endpointsCalled = [];
+    axios.mockImplementation((options) => {
+      endpointsCalled.push(options.url);
+      if (options.url.endsWith('/responses')) {
+        return Promise.resolve({ data: { output_text: 'Direct responses' } });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = {
+      provider: 'openai',
+      model: 'o3',
+      api_url: 'https://api.openai.com/v1',
+      endpoint_path: '/responses'
+    };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(result).toBe('Direct responses');
+    expect(endpointsCalled).toEqual(['https://api.openai.com/v1/responses']);
+  });
+
+  it('uses stored /completions endpoint directly without hitting /chat/completions', async () => {
+    const endpointsCalled = [];
+    axios.mockImplementation((options) => {
+      endpointsCalled.push(options.url);
+      if (options.url.endsWith('/completions')) {
+        return Promise.resolve({ data: { choices: [{ text: 'Direct completions' }] } });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = {
+      provider: 'openai',
+      model: 'legacy-model',
+      api_url: 'https://api.openai.com/v1',
+      endpoint_path: '/completions'
+    };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(result).toBe('Direct completions');
+    expect(endpointsCalled).toEqual(['https://api.openai.com/v1/completions']);
+  });
+
+  it('strips unsupported params on stored endpoint before succeeding', async () => {
+    let calls = 0;
+    axios.mockImplementation((options) => {
+      if (options.url.endsWith('/responses')) {
+        calls += 1;
+        if (calls === 1) {
+          return Promise.reject({
+            response: { data: { error: { message: "Unsupported parameter: 'temperature' is not supported with this model." } } }
+          });
+        }
+        return Promise.resolve({ data: { output_text: 'Stripped ok' } });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = {
+      provider: 'openai',
+      model: 'o4-mini',
+      api_url: 'https://api.openai.com/v1',
+      endpoint_path: '/responses'
+    };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0.7 });
+
+    expect(result).toBe('Stripped ok');
+    expect(calls).toBe(2);
+  });
+
+  it('falls through to default path when stored endpoint fails', async () => {
+    const endpointsCalled = [];
+    axios.mockImplementation((options) => {
+      endpointsCalled.push(options.url);
+      if (options.url.endsWith('/responses')) {
+        return Promise.reject({
+          response: { data: { error: { message: 'Service unavailable' } } }
+        });
+      }
+      if (options.url.endsWith('/chat/completions')) {
+        return Promise.resolve({
+          data: { choices: [{ message: { content: 'Fallback ok' } }] }
+        });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = {
+      provider: 'openai',
+      model: 'o3',
+      api_url: 'https://api.openai.com/v1',
+      endpoint_path: '/responses'
+    };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(result).toBe('Fallback ok');
+    // Should have tried /responses first (stored), then fallen through to /chat/completions
+    expect(endpointsCalled[0]).toBe('https://api.openai.com/v1/responses');
+    expect(endpointsCalled).toContain('https://api.openai.com/v1/chat/completions');
+  });
+
+  it('sets resolvedEndpointPath when fallback discovers working endpoint', async () => {
+    axios.mockImplementation((options) => {
+      if (options.url.endsWith('/chat/completions')) {
+        return Promise.reject({
+          response: { data: { error: { message: 'This is not a chat model and thus not supported in the v1/chat/completions endpoint.' } } }
+        });
+      }
+      if (options.url.endsWith('/responses')) {
+        return Promise.resolve({ data: { output_text: 'Probe result' } });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = { provider: 'openai', model: 'o3', api_url: 'https://api.openai.com/v1' };
+    client.apiKey = 'sk-test';
+
+    expect(client.resolvedEndpointPath).toBeNull();
+
+    await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(client.resolvedEndpointPath).toBe('/responses');
+  });
+
+  it('does not use shortcut when endpoint_path is null', async () => {
+    const endpointsCalled = [];
+    axios.mockImplementation((options) => {
+      endpointsCalled.push(options.url);
+      if (options.url.endsWith('/chat/completions')) {
+        return Promise.resolve({
+          data: { choices: [{ message: { content: 'Normal path' } }] }
+        });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = {
+      provider: 'openai',
+      model: 'gpt-4',
+      api_url: 'https://api.openai.com/v1',
+      endpoint_path: null
+    };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(result).toBe('Normal path');
+    expect(endpointsCalled).toEqual(['https://api.openai.com/v1/chat/completions']);
+  });
+});

@@ -75,7 +75,7 @@ const runRuntimeProbe = async ({ provider, model, apiUrl, apiKey, requiresApiKey
   };
   probeClient.apiKey = apiKey || null;
 
-  await probeClient.generateResponse(
+  const result = await probeClient.generateResponse(
     [{ role: 'user', content: 'Test connection - respond with "OK".' }],
     {
       max_tokens: 12,
@@ -84,6 +84,15 @@ const runRuntimeProbe = async ({ provider, model, apiUrl, apiKey, requiresApiKey
       __lucidcoderPhase: 'llm-config-test'
     }
   );
+
+  // Return the endpoint path that actually succeeded during the probe.
+  // If the probe triggered a fallback (e.g. /responses for non-chat models),
+  // probeClient.resolvedEndpointPath will be set; otherwise the model uses
+  // the default /chat/completions path.
+  return {
+    text: result,
+    endpointPath: probeClient.resolvedEndpointPath || null
+  };
 };
 
 const summarizeSafeConfig = (config) => ({
@@ -93,6 +102,7 @@ const summarizeSafeConfig = (config) => ({
   api_url: config.api_url,
   requires_api_key: Boolean(config.requires_api_key),
   has_api_key: Boolean(config.api_key_encrypted),
+  endpoint_path: config.endpoint_path || null,
   created_at: config.created_at
 });
 
@@ -332,12 +342,21 @@ router.post('/configure', async (req, res) => {
     }
 
     // Save configuration to database
+    const probeResult = await runRuntimeProbe({
+      provider,
+      model,
+      apiUrl,
+      apiKey: providerWithoutKey ? null : effectiveApiKey,
+      requiresApiKey
+    });
+
     const config = {
       provider,
       model,
       apiUrl,
       apiKeyEncrypted: encryptedApiKey,
-      requiresApiKey
+      requiresApiKey,
+      endpointPath: probeResult?.endpointPath || null
     };
 
     await db_operations.saveLLMConfig(config);
