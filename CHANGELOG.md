@@ -1,3 +1,6 @@
+## 0.5.6 (2026-02-09)
+- Return 503 "Preview is starting" responses (with Retry-After) when the preview proxy cannot reach a frontend still booting, instead of a generic 502.
+
 ## 0.5.5 (2026-02-09)
 - Add OpenAI Responses API support for codex-family models: auto-detect codex models, route to `/v1/responses`, convert payloads (system/developer to `instructions`, omit temperature/top_p for reasoning models), and apply 120s timeouts.
 - Cache discovered endpoint paths after fallback probing so subsequent LLM requests skip the retry chain.
