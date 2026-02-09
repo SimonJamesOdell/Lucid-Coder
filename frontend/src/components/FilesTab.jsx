@@ -7,6 +7,9 @@ import FileTreeView from './filesTab/FileTreeView';
 import { buildChildPath, buildSiblingPath, suggestDuplicateName } from './filesTab/filesTabUtils';
 
 const DEFAULT_EXPANDED_FOLDERS = ['src', 'public'];
+const DEFAULT_EXPLORER_WIDTH = 260;
+const MIN_EXPLORER_WIDTH = 180;
+const MAX_EXPLORER_WIDTH = 520;
 
 const FilesTab = ({
   project,
@@ -31,6 +34,11 @@ const FilesTab = ({
   const getFileExplorerStateRef = useRef(getFileExplorerState);
   const initialExplorerState = projectId ? getFileExplorerState?.(projectId) : null;
   const [fileTree, setFileTree] = useState([]);
+  const [explorerWidth, setExplorerWidth] = useState(() => (
+    Number.isFinite(initialExplorerState?.explorerWidth)
+      ? initialExplorerState.explorerWidth
+      : DEFAULT_EXPLORER_WIDTH
+  ));
   const [expandedFolders, setExpandedFolders] = useState(() =>
     new Set(
       initialExplorerState?.expandedFolders?.length
@@ -61,6 +69,10 @@ const FilesTab = ({
   const diffModeByPathRef = useRef(diffModeByPath);
   const diffStatesRef = useRef(diffStates);
   const saveStatusTimeoutRef = useRef(null);
+  const filesTabRef = useRef(null);
+  const explorerWidthRef = useRef(explorerWidth);
+  const dragStateRef = useRef(null);
+  const [isResizingExplorer, setIsResizingExplorer] = useState(false);
   const shuttingDown = isProjectStopping?.(projectId) ?? Boolean(
     projectShutdownState?.isStopping && projectShutdownState?.projectId === projectId
   );
@@ -110,6 +122,10 @@ const FilesTab = ({
   useEffect(() => {
     expandedFoldersRef.current = expandedFolders;
   }, [expandedFolders]);
+
+  useEffect(() => {
+    explorerWidthRef.current = explorerWidth;
+  }, [explorerWidth]);
 
   useEffect(() => {
     diffModeByPathRef.current = diffModeByPath;
@@ -202,6 +218,11 @@ const FilesTab = ({
         storedState?.expandedFolders?.length ? storedState.expandedFolders : DEFAULT_EXPANDED_FOLDERS
       )
     );
+    setExplorerWidth(
+      Number.isFinite(storedState?.explorerWidth)
+        ? storedState.explorerWidth
+        : DEFAULT_EXPLORER_WIDTH
+    );
   }, [projectId]);
 
   useEffect(() => {
@@ -224,6 +245,59 @@ const FilesTab = ({
       });
     }
   };
+
+  const clampExplorerWidth = useCallback((value) => {
+    if (!Number.isFinite(value)) {
+      return DEFAULT_EXPLORER_WIDTH;
+    }
+    return Math.min(Math.max(value, MIN_EXPLORER_WIDTH), MAX_EXPLORER_WIDTH);
+  }, []);
+
+  const handleDividerMouseDown = useCallback((event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    dragStateRef.current = {
+      startX: event.clientX,
+      startWidth: explorerWidthRef.current
+    };
+    setIsResizingExplorer(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizingExplorer) {
+      return undefined;
+    }
+
+    const handleMouseMove = (event) => {
+      if (!dragStateRef.current) {
+        return;
+      }
+      const delta = event.clientX - dragStateRef.current.startX;
+      const nextWidth = clampExplorerWidth(dragStateRef.current.startWidth + delta);
+      setExplorerWidth(nextWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingExplorer(false);
+      dragStateRef.current = null;
+      if (projectId && setFileExplorerState) {
+        setFileExplorerState(projectId, {
+          expandedFolders: Array.from(expandedFoldersRef.current),
+          explorerWidth: explorerWidthRef.current
+        });
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [clampExplorerWidth, isResizingExplorer, projectId, setFileExplorerState]);
 
   const ensureTabForFile = (file) => {
     setOpenFiles((prev) => {
@@ -876,6 +950,7 @@ const FilesTab = ({
       handleToggleDiffMode,
       handleEditorChange,
       handleSaveFile,
+      dragStateRef,
       forceActiveFilePath,
       forceFileState,
       closeTabsForPathPrefix,
@@ -1037,7 +1112,10 @@ const FilesTab = ({
   }, []);
 
   return (
-    <div className={`files-tab${shuttingDown ? ' is-busy' : ''}`}>
+    <div
+      className={`files-tab${shuttingDown ? ' is-busy' : ''}${isResizingExplorer ? ' is-resizing' : ''}`}
+      ref={filesTabRef}
+    >
       {shuttingDown && (
         <div
           className="files-shutdown-overlay"
@@ -1049,7 +1127,11 @@ const FilesTab = ({
           <span>Stopping project processes… Editing temporarily disabled.</span>
         </div>
       )}
-      <div className="file-tree" data-testid="file-tree">
+      <div
+        className="file-tree"
+        data-testid="file-tree"
+        style={{ width: `${explorerWidth}px` }}
+      >
         <div className="file-tree-header">
           <h4>Explorer</h4>
         </div>
@@ -1079,6 +1161,14 @@ const FilesTab = ({
           )}
         </div>
       </div>
+
+      <div
+        className="files-tab-divider"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize file explorer"
+        onMouseDown={handleDividerMouseDown}
+      />
 
       {contextMenu.isOpen && contextMenu.target && (
         <div

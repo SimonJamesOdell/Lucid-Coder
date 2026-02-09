@@ -200,7 +200,7 @@ router.post('/:id/run-tests', async (req, res) => {
 
 router.post('/plan', async (req, res) => {
   try {
-    const { projectId, prompt, childPrompts } = req.body || {};
+    const { projectId, prompt, childPrompts, childPromptMetadata, parentMetadataOverrides } = req.body || {};
 
     if (!projectId) {
       return res.status(400).json({ error: 'projectId is required' });
@@ -209,7 +209,13 @@ router.post('/plan', async (req, res) => {
       return res.status(400).json({ error: 'prompt is required' });
     }
 
-    const result = await createMetaGoalWithChildren({ projectId, prompt, childPrompts });
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt,
+      childPrompts,
+      childPromptMetadata,
+      parentMetadataOverrides
+    });
     res.status(201).json(result);
   } catch (error) {
     if (/childPrompts must be an array/i.test(error.message)) {

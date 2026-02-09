@@ -197,14 +197,15 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
         ...(meta ? { meta } : {})
       };
     } catch (error) {
-      console.error('[Agent] Question agent failed:', error?.message || error);
+      const questionError = error?.message || 'Unknown error';
+      console.error('[Agent] Question agent failed:', questionError);
       return {
         kind: 'question',
-        answer: 'Sorry — the agent is unavailable right now. Please try again.',
+        answer: `Sorry — the agent is unavailable right now. ${questionError}`,
         steps: [],
         meta: {
           ...(meta || {}),
-          questionError: error?.message || 'Unknown error'
+          questionError
         }
       };
     }
@@ -264,8 +265,7 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
         console.error('[Agent] Fallback planning also failed:', fallbackError?.message || fallbackError);
         return {
           kind: 'question',
-          answer:
-            'I could not plan that feature right now (planning failed). Please try again, or simplify the request.',
+          answer: `I could not plan that feature right now (planning failed). ${planningErrorMessage}`,
           steps: [],
           meta: {
             planningError: planningErrorMessage,
@@ -277,8 +277,7 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
 
     return {
       kind: 'question',
-      answer:
-        'I could not plan that feature right now (planning failed). Please try again, or simplify the request.',
+      answer: `I could not plan that feature right now (planning failed). ${planningErrorMessage}`,
       steps: [],
       meta: {
         planningError: planningErrorMessage

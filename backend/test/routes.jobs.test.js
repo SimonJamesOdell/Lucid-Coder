@@ -48,7 +48,7 @@ describe('routes/jobs', () => {
       type: 'frontend:test',
       displayName: 'Frontend tests',
       command: 'npm',
-      args: ['run', 'test'],
+      args: ['run', 'test:coverage'],
       cwd: 'C:/tmp/project/frontend',
       status: 'pending',
       createdAt: '2024-01-01T00:00:00Z',

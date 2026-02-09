@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { AppStateProvider, useAppState } from './context/AppStateContext'
 import Navigation from './components/Navigation'
+import CleanupResumeCoordinator from './components/CleanupResumeCoordinator.jsx'
 import GettingStarted from './components/StatusPanel' // This file contains GettingStarted component now
 import ProjectSelector from './components/ProjectSelector'
 import CreateProject from './components/CreateProject'
@@ -279,6 +280,7 @@ function AppContent() {
   return (
     <div className="App">
       <Navigation versionLabel={backendVersionLabel} />
+      <CleanupResumeCoordinator />
       {showBackendOfflineBanner && (
         <div className="backend-offline-overlay" role="alert" aria-live="assertive" data-testid="backend-offline-overlay">
           <div className="backend-offline-overlay-panel">

@@ -381,6 +381,65 @@ describe('branchWorkflow.js coverage (runTestsForBranch workspace collection)', 
     });
   });
 
+  it('captures uncovered lines for all files when includeCoverageLineRefs is true', async () => {
+    const projectRoot = `C:/tmp/branchworkflow-uncovered-all-${Date.now()}`;
+    const frontendPkg = `${projectRoot}/frontend/package.json`;
+    const frontendSummary = `${projectRoot}/frontend/coverage/coverage-summary.json`;
+    const frontendFinal = `${projectRoot}/frontend/coverage/coverage-final.json`;
+    const filePath = `${projectRoot}/frontend/src/foo.js`;
+
+    const coverageFinal = {
+      [filePath]: {
+        l: { 5: 0 }
+      }
+    };
+
+    const fsMock = makeFsMock({
+      accessible: [frontendPkg],
+      files: {
+        [frontendPkg]: JSON.stringify({ scripts: { 'test:coverage': 'echo ok' } }),
+        [frontendSummary]: coverageSummaryJsonWithFiles({
+          total: { lines: 90, statements: 90, functions: 90, branches: 90 },
+          files: { 'src/foo.js': 90 }
+        }),
+        [frontendFinal]: JSON.stringify(coverageFinal)
+      }
+    });
+
+    const jobRunnerMock = makeJobRunnerMock();
+
+    await runScenario({
+      fsMock,
+      jobRunnerMock,
+      testBody: async ({ branchWorkflow, createProject }) => {
+        const project = await createProject({
+          name: `BranchWorkflow Uncovered All ${Date.now()}`,
+          description: 'Collects uncovered lines for all files when requested',
+          language: 'javascript',
+          framework: 'react',
+          path: projectRoot
+        });
+
+        branchWorkflow.__testing.setGitContextOverride(project.id, projectRoot);
+
+        const result = await branchWorkflow.runTestsForBranch(project.id, null, {
+          real: true,
+          includeCoverageLineRefs: true,
+          changedFiles: [],
+          coverageThresholds: { lines: 0, statements: 0, functions: 0, branches: 0 },
+          changedFileCoverageThresholds: { lines: 0, statements: 0, functions: 0, branches: 0 }
+        });
+
+        expect(result.status).toBe('passed');
+        expect(result.summary?.coverage?.uncoveredLines).toEqual([
+          { workspace: 'frontend', file: 'src/foo.js', lines: [5] }
+        ]);
+
+        branchWorkflow.__testing.setGitContextOverride(project.id, null);
+      }
+    });
+  });
+
   it('extracts uncovered lines from statementMap when line map is missing', async () => {
     const projectRoot = `C:/tmp/branchworkflow-uncovered-statement-map-${Date.now()}`;
     const frontendPkg = `${projectRoot}/frontend/package.json`;

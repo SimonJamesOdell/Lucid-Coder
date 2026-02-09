@@ -343,7 +343,11 @@ describe('branch route error handling', () => {
       .send({ force: true });
 
     expect(response.status).toBe(200);
-    expect(runTestsForBranch).toHaveBeenCalledWith(1, 'feature-tests', { force: true });
+    expect(runTestsForBranch).toHaveBeenCalledWith(1, 'feature-tests', {
+      force: true,
+      enforceFullCoverage: true,
+      includeCoverageLineRefs: true
+    });
     expect(response.body).toEqual({ success: true, testRun });
   });
 
@@ -355,7 +359,10 @@ describe('branch route error handling', () => {
     const response = await request(rawApp).post('/api/projects/1/branches/feature-tests/tests');
 
     expect(response.status).toBe(200);
-    expect(runTestsForBranch).toHaveBeenCalledWith(1, 'feature-tests', {});
+    expect(runTestsForBranch).toHaveBeenCalledWith(1, 'feature-tests', {
+      enforceFullCoverage: true,
+      includeCoverageLineRefs: true
+    });
     expect(response.body).toEqual({ success: true, testRun });
   });
 

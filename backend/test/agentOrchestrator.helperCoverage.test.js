@@ -125,6 +125,124 @@ describe('createMetaGoalWithChildren helper', () => {
     expect(result.children[1].title).toBe('Docs Refresh');
     expect(result.children[2].title).toBe('Add Backend Tests');
   });
+
+  it('ignores child prompt metadata when a non-object is provided', async () => {
+    const projectId = 921;
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt: 'Plan refactor',
+      childPrompts: ['Add docs'],
+      childPromptMetadata: 'nope'
+    });
+
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].prompt).toBe('Add docs');
+  });
+
+  it('filters child prompt metadata keys and applies matching overrides', async () => {
+    const projectId = 922;
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt: 'Plan refactor',
+      childPrompts: ['Add docs', 'Ship UI'],
+      childPromptMetadata: {
+        'Add docs': { acceptanceCriteria: ['  Ship docs  '] },
+        123: { acceptanceCriteria: ['Ignore this'] },
+        '   ': { acceptanceCriteria: ['Ignore this too'] }
+      }
+    });
+
+    const docsChild = result.children.find((child) => child.prompt === 'Add docs');
+    expect(docsChild?.metadata?.acceptanceCriteria).toEqual(['Ship docs']);
+  });
+
+  it('drops metadata entries with empty prompt keys', async () => {
+    const projectId = 923;
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt: 'Plan refactor',
+      childPrompts: ['Add docs'],
+      childPromptMetadata: {
+        '   ': { acceptanceCriteria: ['Ignore'] }
+      }
+    });
+
+    const docsChild = result.children.find((child) => child.prompt === 'Add docs');
+    expect(docsChild?.metadata?.acceptanceCriteria).toBeUndefined();
+  });
+
+  it('matches metadata keys after trimming whitespace', async () => {
+    const projectId = 924;
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt: 'Plan refactor',
+      childPrompts: ['Add docs'],
+      childPromptMetadata: {
+        '  Add docs  ': { acceptanceCriteria: ['Ship docs'] }
+      }
+    });
+
+    const docsChild = result.children.find((child) => child.prompt === 'Add docs');
+    expect(docsChild?.metadata?.acceptanceCriteria).toEqual(['Ship docs']);
+  });
+
+  it('returns existing child goals when a parent already has children', async () => {
+    const projectId = 925;
+    const { goal: parent } = await createGoalFromPrompt({
+      projectId,
+      prompt: 'Parent goal with existing child'
+    });
+
+    await createChildGoal({
+      projectId,
+      parentGoalId: parent.id,
+      prompt: 'Existing child'
+    });
+
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt: 'Plan refactor',
+      parentGoalId: parent.id,
+      childPrompts: ['New child (ignored)']
+    });
+
+    expect(result.parent.id).toBe(parent.id);
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].prompt).toBe('Existing child');
+  });
+});
+
+describe('mergeGoalMetadata suppression', () => {
+  it('suppresses clarifying questions when testFailure metadata is provided', async () => {
+    const projectId = 930;
+    const { goal, tasks } = await createGoalFromPrompt({
+      projectId,
+      prompt: 'Investigate failing test',
+      extraClarifyingQuestions: ['What should happen?'],
+      metadataOverrides: {
+        testFailure: { id: 'test-1' },
+        clarifyingQuestions: ['Do not keep this'],
+        acceptanceCriteria: ['Fix the failing test']
+      }
+    });
+
+    expect(tasks.some((task) => task.type === 'clarification')).toBe(false);
+    expect(tasks.some((task) => task.type === 'analysis')).toBe(true);
+    expect(goal.metadata).toEqual(expect.objectContaining({ testFailure: { id: 'test-1' } }));
+  });
+
+  it('filters non-string and blank metadata values in acceptance criteria', async () => {
+    const projectId = 931;
+    const { goal } = await createGoalFromPrompt({
+      projectId,
+      prompt: 'Ship dashboard',
+      metadataOverrides: {
+        acceptanceCriteria: ['  Valid  ', 123, '   ']
+      }
+    });
+
+    expect(goal.metadata?.acceptanceCriteria).toEqual(['Valid']);
+  });
 });
 
 describe('normalizePlannerPrompt helper', () => {
@@ -136,6 +254,13 @@ describe('normalizePlannerPrompt helper', () => {
   it('returns an empty string for non-string values', () => {
     const { normalizePlannerPrompt } = __testExports__;
     expect(normalizePlannerPrompt({})).toBe('');
+  });
+});
+
+describe('normalizePromptKey helper', () => {
+  it('returns an empty string for non-string values', () => {
+    const { normalizePromptKey } = __testExports__;
+    expect(normalizePromptKey(42)).toBe('');
   });
 });
 
@@ -333,6 +458,7 @@ describe('planGoalFromPrompt', () => {
       process.env.NODE_ENV = originalEnv;
     }
   });
+
 
   it('falls back to heuristic plans when strict planning fails', async () => {
     llmClient.generateResponse

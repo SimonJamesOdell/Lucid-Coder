@@ -1,3 +1,34 @@
+## 0.5.5 (2026-02-09)
+- Add OpenAI Responses API support for codex-family models: auto-detect codex models, route to `/v1/responses`, convert payloads (system/developer to `instructions`, omit temperature/top_p for reasoning models), and apply 120s timeouts.
+- Cache discovered endpoint paths after fallback probing so subsequent LLM requests skip the retry chain.
+- Reorder fallback logic to try `/responses` before `/completions`, and skip legacy `/completions` entirely for codex-only models.
+- Route codex models to `/v1/responses` in endpoint URL resolution.
+- Add a circuit breaker to goal processing that halts after consecutive failures to prevent runaway automation on a broken project.
+- Add transient LLM error detection and automatic retry with backoff during tests and implementation stages of goal processing.
+- Fix ChatPanel clarification prompt to preserve the original user prompt instead of the resolved prompt.
+- Hide the "Assistant is thinking" indicator when the assistant is paused (autopilot or auto-fix).
+- Treat HTTP 400 as a missing-file response and skip directory-like paths when building relevant-files context.
+- Add soft reloads for the Preview iframe to avoid blank flashes, with debounced reload coalescing and safer timeout/error handling.
+- Smooth Preview iframe loading-state transitions with an opacity fade.
+- Extend coverage-focused tests across LLM client (responses API, endpoint caching, fallback routing), goal automation (circuit breaker, transient retries), ChatPanel, PreviewTab, and automation utilities to keep strict coverage gates green.
+
+## 0.5.4 (2026-02-08)
+- Move clarification questions into a modal with per-question inputs, pause/resume/cancel controls, and answer submission back into the agent.
+- Integrate the Runs view into the LLM Usage page via Usage/Runs tabs while keeping the usage summary intact.
+- Refresh Goals immediately after creation and tighten goal automation handling around clarification/goal updates.
+- Make OpenAI-compatible fallback timeouts configurable for /completions and /responses endpoints.
+- Refine clarification prompting behavior to avoid default acceptance-criteria questions unless required.
+- Extend coverage-focused tests across ChatPanel, LLM usage, LLM client, and goal metadata flows to keep strict gates green.
+
+## 0.5.3 (2026-02-08)
+- Introduce the Clean Up tool end-to-end: backend foreground cleanup runner with strict coverage gates, SSE streaming endpoint, and a full UI modal flow (progress logs, cancellation, and branch cleanup decisions).
+- Add cleanup resume coordination + request storage so automation can reopen and resume cleanup after passing test runs.
+- Extend goals APIs with cleanup streaming support and richer meta-goal payloads (child metadata + parent overrides).
+- Add a draggable file explorer divider with clamped widths and per-project persistence.
+- Add TestTab log font size controls (zoom in/out) to improve test output readability.
+- Enforce 100% coverage thresholds and line references in automation/test workflows, including frontend Vitest thresholds and autopilot/test route coverage enforcement.
+- Harden version bump tooling for CRLF/no-op runs and add guard tests for cleanup/coverage utilities, goal automation, ChatPanel/TestTab flows, and branch state edge cases.
+
 ## 0.5.2 (2026-02-04)
 - Split Create New Project into a two-step wizard (Project Details → Git Setup) with Next/Back navigation, while preserving local/global/custom git workflows and remote create/connect options.
 - Fix Preview tab blank page regressions by making backend-origin resolution SSR-safe, adding `VITE_API_TARGET` support, and proxying `/preview` to the backend in Vite dev.

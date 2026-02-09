@@ -4,6 +4,42 @@ const coerceString = (value) => (typeof value === 'string' ? value : '');
 
 const FAILURE_PATTERNS = [/\bfail(?:ed|ure)?\b/i, /\berror\b/i, /\bexception\b/i];
 
+const formatCoverageLineRefs = (coverage) => {
+  if (!coverage || typeof coverage !== 'object') {
+    return '';
+  }
+
+  const uncovered = Array.isArray(coverage.uncoveredLines) ? coverage.uncoveredLines : [];
+  if (!uncovered.length) {
+    return '';
+  }
+
+  const lines = ['Coverage gaps (line references):'];
+  for (const entry of uncovered) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const workspace = coerceString(entry.workspace);
+    const file = coerceString(entry.file);
+    const rawLines = Array.isArray(entry.lines) ? entry.lines : [];
+    const lineNums = rawLines.filter((line) => Number.isFinite(Number(line))).map((line) => Number(line));
+    if (!file || lineNums.length === 0) {
+      continue;
+    }
+    const limited = lineNums.slice(0, 12);
+    const suffix = lineNums.length > limited.length ? ', ...' : '';
+    const location = workspace ? `${workspace}/${file}` : file;
+    lines.push(`- ${location}: ${limited.join(', ')}${suffix}`);
+  }
+
+  if (lines.length === 1) {
+    return '';
+  }
+
+  lines.push('Instruction: add or adjust tests to execute the exact lines above so coverage reaches 100%.');
+  return lines.join('\n');
+};
+
 export const splitLogsByStream = (workspaceRuns = []) => {
   return asArray(workspaceRuns).map((run) => {
     const stdout = [];
@@ -144,6 +180,11 @@ export const summarizeTestRunForPrompt = (run) => {
     }
     if (totals.length) {
       lines.push(`Summary: ${totals.join(' | ')}`);
+    }
+
+    const coverageRefs = formatCoverageLineRefs(summary.coverage);
+    if (coverageRefs) {
+      lines.push(coverageRefs);
     }
   }
 

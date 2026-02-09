@@ -13,7 +13,7 @@ const normalizePreviewTab = (value) => {
     tests: 'test',
     branches: 'branch',
     goals: 'goals',
-    runs: 'runs',
+    runs: 'llm-usage',
     'llm usage': 'llm-usage',
     llmusage: 'llm-usage'
   };
@@ -22,7 +22,6 @@ const normalizePreviewTab = (value) => {
   const allowed = new Set([
     'preview',
     'goals',
-    'runs',
     'files',
     'branch',
     'test',

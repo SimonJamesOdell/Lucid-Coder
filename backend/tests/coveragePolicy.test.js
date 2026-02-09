@@ -63,4 +63,16 @@ describe('coveragePolicy', () => {
       branches: 90
     });
   });
+
+  it('resolveCoveragePolicy forces 100% thresholds when enforceFullCoverage is true', () => {
+    const policy = resolveCoveragePolicy({
+      coverageThresholds: { lines: 70, statements: 70, functions: 70, branches: 70 },
+      changedFileCoverageThresholds: { lines: 50, statements: 50, functions: 50, branches: 50 },
+      enforceFullCoverage: true
+    });
+
+    expect(policy.globalThresholds).toEqual(DEFAULT_COVERAGE_THRESHOLDS);
+    expect(policy.changedFileThresholds).toEqual(DEFAULT_COVERAGE_THRESHOLDS);
+    expect(policy.enforceChangedFileCoverage).toBe(true);
+  });
 });

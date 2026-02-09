@@ -21,6 +21,15 @@ if (args.length === 0) {
 const projectRoot = path.join(__dirname, '..');
 const outDir = path.join(projectRoot, 'coverage');
 
+const sleepSync = (ms) => {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+
+  // Node-compatible synchronous sleep.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
 const normalizeCoverageJson = (json, { label } = {}) => {
   let normalized = 0;
 
@@ -62,8 +71,20 @@ const normalizeCoverageJson = (json, { label } = {}) => {
 
 const readCoverage = (dir) => {
   const coveragePath = path.join(projectRoot, dir, 'coverage-final.json');
-  if (!fs.existsSync(coveragePath)) {
-    throw new Error(`Missing coverage-final.json at ${coveragePath}`);
+  // On Windows (especially with fork pools), Vitest can finish the main process
+  // slightly before the coverage JSON lands on disk. Retry briefly to avoid
+  // flaky merge failures.
+  const maxAttempts = 40;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (fs.existsSync(coveragePath)) {
+      break;
+    }
+
+    if (attempt === maxAttempts) {
+      throw new Error(`Missing coverage-final.json at ${coveragePath}`);
+    }
+
+    sleepSync(50);
   }
   const raw = fs.readFileSync(coveragePath, 'utf-8');
   return normalizeCoverageJson(JSON.parse(raw), { label: dir });

@@ -14,6 +14,7 @@ import {
   deleteGoal
 } from '../utils/goalsApi';
 import AutopilotTimeline from './AutopilotTimeline.jsx';
+import SettingsModal from './SettingsModal';
 import { handlePlanOnlyFeature, handleRegularFeature, processGoals } from '../services/goalAutomationService';
 import { isNaturalLanguageCancel, isNaturalLanguagePause, isNaturalLanguageResume, handleChatCommand } from '../utils/chatCommandHelpers';
 import { shouldSkipAutomationTests as shouldSkipAutomationTestsHelper } from './chatPanelCssOnly';
@@ -43,6 +44,8 @@ const ChatPanel = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [showAgentDebug, setShowAgentDebug] = useState(false);
   const [pendingClarification, setPendingClarification] = useState(null);
+  const [clarificationAnswers, setClarificationAnswers] = useState([]);
+  const [clarificationPaused, setClarificationPaused] = useState(false);
   const [autoFixHalted, setAutoFixHalted] = useState(() => {
     /* c8 ignore next 3 */
     if (typeof window === 'undefined') {
@@ -50,6 +53,7 @@ const ChatPanel = ({
     }
     return window.__lucidcoderAutofixHalted === true;
   });
+  const autoFixHaltedRef = useRef(autoFixHalted);
   const {
     currentProject,
     stageAiChange,
@@ -190,6 +194,16 @@ const ChatPanel = ({
     streamingTextRef.current = '';
   }, []);
 
+  useEffect(() => {
+    if (!pendingClarification?.questions?.length) {
+      setClarificationAnswers([]);
+      setClarificationPaused(false);
+      return;
+    }
+    setClarificationAnswers(pendingClarification.questions.map(() => ''));
+    setClarificationPaused(false);
+  }, [pendingClarification]);
+
   const appendStreamingChunk = useCallback((chunk) => {
     if (typeof chunk !== 'string' || !chunk) {
       return;
@@ -224,11 +238,13 @@ const ChatPanel = ({
     if (typeof window !== 'undefined') {
       window.__lucidcoderAutofixHalted = next;
     }
+    autoFixHaltedRef.current = next;
     setAutoFixHalted(next);
-    if (next) {
-      autoFixCancelRef.current = true;
-    }
   }, []);
+
+  useEffect(() => {
+    autoFixHaltedRef.current = autoFixHalted;
+  }, [autoFixHalted]);
 
   const readStoredChat = useCallback((projectId) => {
     return readStoredChatMessages(projectId);
@@ -398,6 +414,7 @@ const ChatPanel = ({
     handleAutopilotControl,
     appendStreamingChunk,
     autopilotResumeAttemptedRef,
+    autoFixCancelRef,
     isMessagesScrolledToBottom,
     messagesRef,
     messagesContainerRef,
@@ -408,6 +425,9 @@ const ChatPanel = ({
     stopAutopilotPoller,
     setAutopilotSession,
     setAutopilotEvents,
+    setClarificationAnswers,
+    setPendingClarification,
+    setClarificationPaused,
     clearStoredAutopilotSession,
     persistAutopilotSession,
     loadStoredAutopilotSession,
@@ -432,6 +452,25 @@ const ChatPanel = ({
   const autopilotStatusValue = autopilotSession?.status || 'idle';
   const autopilotCanPause = autopilotStatusValue === 'running';
   const autopilotCanResume = autopilotStatusValue === 'paused';
+  const assistantToggleLabel = autopilotIsActive
+    ? (autopilotCanResume ? 'Resume' : 'Pause')
+    : (autoFixHalted ? 'Resume' : '■');
+  const assistantToggleTitle = autopilotIsActive
+    ? (autopilotCanResume ? 'Resume autopilot' : 'Pause autopilot')
+    : (autoFixHalted ? 'Resume automated test fixing' : 'Stop automated test fixing');
+  const assistantToggleDisabled = autopilotIsActive && !autopilotCanPause && !autopilotCanResume;
+
+  const handleAssistantToggle = async () => {
+    if (autopilotIsActive) {
+      if (autopilotCanResume) {
+        await handleAutopilotControl('resume');
+      } else if (autopilotCanPause) {
+        await handleAutopilotControl('pause');
+      }
+      return;
+    }
+    setAutofixHaltFlag(!autoFixHalted);
+  };
 
   const panelClassName = `chat-panel ${side === 'right' ? 'chat-panel--right' : 'chat-panel--left'} ${isResizing ? 'chat-panel--resizing' : ''}`;
   const panelStyle = {
@@ -880,14 +919,12 @@ const ChatPanel = ({
     const childPrompts = Array.isArray(payload?.childPrompts)
       ? payload.childPrompts.map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean)
       : [];
+    const childPromptMetadata = payload && typeof payload.childPromptMetadata === 'object'
+      ? payload.childPromptMetadata
+      : null;
     const failureContext = payload && typeof payload.failureContext === 'object' ? payload.failureContext : null;
 
     if (!prompt || !currentProject?.id) {
-      return;
-    }
-
-    // When halted, ignore automation-driven retries (but still allow user-driven fixes).
-    if (autoFixHalted && origin === 'automation') {
       return;
     }
 
@@ -917,7 +954,9 @@ const ChatPanel = ({
         const planned = await createMetaGoalWithChildren({
           projectId: currentProject.id,
           prompt,
-          childPrompts
+          childPrompts,
+          childPromptMetadata,
+          parentMetadataOverrides: { suppressClarifyingQuestions: true }
         });
         const children = Array.isArray(planned?.children) ? planned.children : [];
         goalsToProcess = children;
@@ -967,7 +1006,9 @@ const ChatPanel = ({
         {
           requestEditorFocus,
           syncBranchOverview,
-          testFailureContext: failureContext
+          testFailureContext: childPromptMetadata ? null : failureContext,
+          shouldPause: () => autoFixHaltedRef.current,
+          shouldCancel: () => autoFixCancelRef.current
         }
       );
 
@@ -1057,13 +1098,6 @@ const ChatPanel = ({
     syncBranchOverview
   ]);
 
-  if (ChatPanel.__testHooks?.handlers) {
-    ChatPanel.__testHooks.handlers.submitPrompt = submitPrompt;
-    ChatPanel.__testHooks.handlers.runAutomatedTestFixGoal = runAutomatedTestFixGoal;
-    ChatPanel.__testHooks.handlers.runAgentRequestStream = runAgentRequestStream;
-    ChatPanel.__testHooks.handlers.handleAgentResult = handleAgentResult;
-  }
-
   useEffect(() => {
     if (
       typeof window === 'undefined' ||
@@ -1097,6 +1131,12 @@ const ChatPanel = ({
       return undefined;
     }
 
+    const handleAutoFixResume = () => {
+      if (autoFixHaltedRef.current) {
+        setAutofixHaltFlag(false);
+      }
+    };
+
     const handleAutoFixTests = (event) => {
       const payload = event?.detail;
       const prompt = payload?.prompt;
@@ -1106,14 +1146,19 @@ const ChatPanel = ({
       const origin = event?.detail?.origin;
 
       const normalizedOrigin = origin === 'automation' ? 'automation' : 'user';
+      if (normalizedOrigin === 'user' && autoFixHaltedRef.current) {
+        setAutofixHaltFlag(false);
+      }
       runAutomatedTestFixGoal(payload, { origin: normalizedOrigin });
     };
 
+    window.addEventListener('lucidcoder:autofix-resume', handleAutoFixResume);
     window.addEventListener('lucidcoder:autofix-tests', handleAutoFixTests);
     return () => {
+      window.removeEventListener('lucidcoder:autofix-resume', handleAutoFixResume);
       window.removeEventListener('lucidcoder:autofix-tests', handleAutoFixTests);
     };
-  }, [autoFixHalted, runAutomatedTestFixGoal]);
+  }, [autoFixHalted, runAutomatedTestFixGoal, setAutofixHaltFlag]);
 
   const handleSendMessage = async () => {
     await submitPrompt(inputValue, { origin: 'user' });
@@ -1126,6 +1171,42 @@ const ChatPanel = ({
     }
   };
 
+  const handleClarificationAnswerChange = (index, value) => {
+    setClarificationAnswers((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+  };
+
+  const handleClarificationOptionPick = (index, option) => {
+    handleClarificationAnswerChange(index, option);
+  };
+
+  const handleClarificationSubmit = async () => {
+    if (!pendingClarification) {
+      return;
+    }
+    const answerText = pendingClarification.questions
+      .map((question, index) => {
+        const answer = typeof clarificationAnswers[index] === 'string'
+          ? clarificationAnswers[index].trim()
+          : '';
+        return `Q: ${question}\nA: ${answer || '(no answer provided)'}`;
+      })
+      .join('\n\n');
+
+    await submitPrompt(answerText, { origin: 'clarification' });
+  };
+
+  if (ChatPanel.__testHooks?.handlers) {
+    ChatPanel.__testHooks.handlers.submitPrompt = submitPrompt;
+    ChatPanel.__testHooks.handlers.handleClarificationSubmit = handleClarificationSubmit;
+    ChatPanel.__testHooks.handlers.runAutomatedTestFixGoal = runAutomatedTestFixGoal;
+    ChatPanel.__testHooks.handlers.runAgentRequestStream = runAgentRequestStream;
+    ChatPanel.__testHooks.handlers.handleAgentResult = handleAgentResult;
+  }
+
   return (
     <div className={panelClassName} style={panelStyle} data-testid="chat-panel">
       <div className="chat-header">
@@ -1135,10 +1216,11 @@ const ChatPanel = ({
             type="button"
             className="chat-autofix-toggle"
             data-testid="chat-autofix-toggle"
-            onClick={() => setAutofixHaltFlag(!autoFixHalted)}
-            title={autoFixHalted ? 'Resume automated test fixing' : 'Stop automated test fixing'}
+            onClick={handleAssistantToggle}
+            title={assistantToggleTitle}
+            disabled={assistantToggleDisabled}
           >
-            {autoFixHalted ? 'Resume' : '■'}
+            {assistantToggleLabel}
           </button>
           <button
             type="button"
@@ -1163,16 +1245,6 @@ const ChatPanel = ({
             </button>
           )}
         </div>
-        {isSending ? (
-          <div className="chat-typing" data-testid="chat-typing">
-            <span className="chat-typing__label">Assistant is thinking</span>
-            <span className="chat-typing__dots" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </span>
-          </div>
-        ) : null}
       </div>
       
       <div
@@ -1206,6 +1278,16 @@ const ChatPanel = ({
             </div>
           ))
         )}
+        {isSending ? (
+          <div className="chat-typing" data-testid="chat-typing">
+            <span className="chat-typing__label">Assistant is thinking</span>
+            <span className="chat-typing__dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        ) : null}
       </div>
       {showScrollToBottom ? (
         <button
@@ -1265,31 +1347,93 @@ const ChatPanel = ({
         </div>
       )}
 
-      {pendingClarification ? (
-        <div className="chat-clarification" data-testid="chat-clarification">
-          <div className="chat-clarification__title">Clarification needed</div>
-          {pendingClarification.questions.map((question, index) => {
-            const options = extractClarificationOptions(question);
-            return (
-              <div key={`clarify-${index}`} className="chat-clarification__question">
-                <div className="chat-clarification__text">{question}</div>
-                {options.length > 0 ? (
-                  <div className="chat-clarification__options">
-                    {options.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        className="chat-clarification__option"
-                        onClick={() => submitPrompt(option, { origin: 'clarification-option' })}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
+      {pendingClarification && !clarificationPaused ? (
+        <SettingsModal
+          isOpen={true}
+          onClose={() => setClarificationPaused(true)}
+          title="Clarification needed"
+          subtitle="Answer each question so I can continue with the task."
+          panelClassName="chat-clarification-modal"
+          bodyClassName="chat-clarification-body"
+          testId="chat-clarification-modal"
+          closeTestId="chat-clarification-close"
+        >
+          <div className="chat-clarification" data-testid="chat-clarification">
+            {pendingClarification.questions.map((question, index) => {
+              const options = extractClarificationOptions(question);
+              return (
+                <div key={`clarify-${index}`} className="chat-clarification__question">
+                  <div className="chat-clarification__text">{question}</div>
+                  {options.length > 0 ? (
+                    <div className="chat-clarification__options">
+                      {options.map((option) => (
+                        <button
+                          key={option}
+                          type="button"
+                          className="chat-clarification__option"
+                          onClick={() => handleClarificationOptionPick(index, option)}
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <label className="chat-clarification__input-label" htmlFor={`clarification-input-${index}`}>
+                    Your answer
+                  </label>
+                  <textarea
+                    id={`clarification-input-${index}`}
+                    className="chat-clarification__input"
+                    rows={2}
+                    value={clarificationAnswers[index] || ''}
+                    onChange={(event) => handleClarificationAnswerChange(index, event.target.value)}
+                  />
+                </div>
+              );
+            })}
+            <div className="chat-clarification__footer">
+              <button
+                type="button"
+                className="chat-clarification__cancel"
+                onClick={() => setClarificationPaused(true)}
+              >
+                Close for now
+              </button>
+              <button
+                type="button"
+                className="chat-clarification__submit"
+                onClick={handleClarificationSubmit}
+                disabled={clarificationAnswers.some((answer) => !String(answer || '').trim())}
+              >
+                Submit answers
+              </button>
+            </div>
+          </div>
+        </SettingsModal>
+      ) : null}
+
+      {pendingClarification && clarificationPaused ? (
+        <div className="chat-clarification-paused" data-testid="chat-clarification-paused">
+          <span>Clarification paused.</span>
+          <div className="chat-clarification-paused__actions">
+            <button
+              type="button"
+              className="chat-clarification-cancel"
+              onClick={() => {
+                setPendingClarification(null);
+                setClarificationPaused(false);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="chat-clarification-resume"
+              onClick={() => setClarificationPaused(false)}
+            >
+              Resume clarification
+            </button>
+          </div>
         </div>
       ) : null}
 

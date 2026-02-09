@@ -61,6 +61,69 @@ const buildEmptyEditsError = (stage) => {
 
 const isEmptyEditsError = (error) => Boolean(error?.__lucidcoderEmptyEditsStage);
 
+const isGoalNotFoundError = (error) => (
+  error?.response?.status === 404 || /Goal not found/i.test(error?.message || '')
+);
+
+const isFileOpFailure = (error) => Boolean(error?.__lucidcoderFileOpFailure);
+
+const buildFileOpRetryContext = (error, knownPathsSet) => {
+  const failure = error?.__lucidcoderFileOpFailure || {};
+  const path = typeof failure.path === 'string' ? failure.path : null;
+  const status = typeof failure.status === 'number' ? failure.status : null;
+  const message = failure.message || error?.message || 'File operation failed.';
+  const suggestions = (() => {
+    if (!path || !(knownPathsSet instanceof Set) || knownPathsSet.size === 0) {
+      return [];
+    }
+    const parts = path.split('/').filter(Boolean);
+    const baseName = parts[parts.length - 1] || '';
+    if (!baseName) {
+      return [];
+    }
+    const matches = [];
+    for (const candidate of knownPathsSet) {
+      if (typeof candidate !== 'string') {
+        continue;
+      }
+      if (candidate.endsWith(`/${baseName}`) || candidate === baseName) {
+        matches.push(candidate);
+      }
+      if (matches.length >= 4) {
+        break;
+      }
+    }
+    return matches;
+  })();
+
+  return {
+    path,
+    message: status ? `${message} (status ${status})` : message,
+    scopeWarning: path
+      ? `Use an existing path or directory for ${path}. If creating a new file, pick a folder that exists in the repo tree.`
+      : 'Use existing paths and directories from the repo tree.',
+    suggestedPaths: suggestions
+  };
+};
+
+const isTestFilePath = (path) => /__tests__\//.test(path) || /\.(test|spec)\.[jt]sx?$/.test(path);
+
+const buildCoverageScope = (entries) => {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return null;
+  }
+  const workspacePrefixes = new Set();
+  entries.forEach((entry) => {
+    const workspace = typeof entry?.workspace === 'string' ? entry.workspace.trim() : '';
+    const file = typeof entry?.file === 'string' ? entry.file.trim() : '';
+    normalizeRepoPath([workspace, file].filter(Boolean).join('/'));
+    if (workspace) {
+      workspacePrefixes.add(`${workspace}/`);
+    }
+  });
+  return { workspacePrefixes, allowedFiles: new Set() };
+};
+
 const formatGoalLabel = (value) => {
   const raw = typeof value === 'string' ? value : '';
   const lines = raw.split(/\r?\n/).map((line) => line.trim());
@@ -106,6 +169,18 @@ export async function processGoal(
     const allowEmptyStageEdits =
       typeof globalThis !== 'undefined' && globalThis.__LUCIDCODER_ALLOW_EMPTY_STAGE === true;
 
+    const shouldPause = typeof options?.shouldPause === 'function' ? options.shouldPause : () => false;
+    const shouldCancel = typeof options?.shouldCancel === 'function' ? options.shouldCancel : () => false;
+    const waitWhilePaused = async () => {
+      while (shouldPause()) {
+        if (shouldCancel()) {
+          return false;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return !shouldCancel();
+    };
+
     automationLog('processGoal:start', {
       projectId,
       goalId: goal?.id,
@@ -114,16 +189,40 @@ export async function processGoal(
 
     const requestEditorFocus = typeof options?.requestEditorFocus === 'function' ? options.requestEditorFocus : null;
     const syncBranchOverview = typeof options?.syncBranchOverview === 'function' ? options.syncBranchOverview : null;
-    const testFailureContext = options?.testFailureContext || null;
+    const testFailureContext = options?.testFailureContext || goal?.metadata?.testFailureContext || null;
     const testsAttemptSequence = resolveAttemptSequence(options?.testsAttemptSequence);
     const implementationAttemptSequence = resolveAttemptSequence(options?.implementationAttemptSequence);
 
-    const ensurePhasesAdvanced = async (phases) => {
-      for (const phase of phases) {
+    const safeAdvanceGoalPhase = async (phase) => {
+      try {
         await advanceGoalPhase(goal.id, phase);
         notifyGoalsUpdated(projectId);
         automationLog('processGoal:phase', { goalId: goal?.id, phase });
+        return true;
+      } catch (error) {
+        if (isGoalNotFoundError(error)) {
+          automationLog('processGoal:goalMissing', { goalId: goal?.id, phase });
+          try {
+            const refreshedGoals = await fetchGoals(projectId);
+            setGoalCount(Array.isArray(refreshedGoals) ? refreshedGoals.length : 0);
+            notifyGoalsUpdated(projectId);
+          } catch (refreshError) {
+            automationLog('processGoal:goalMissing:refreshError', { message: refreshError?.message });
+          }
+          return false;
+        }
+        throw error;
       }
+    };
+
+    const ensurePhasesAdvanced = async (phases) => {
+      for (const phase of phases) {
+        const advanced = await safeAdvanceGoalPhase(phase);
+        if (!advanced) {
+          return false;
+        }
+      }
+      return true;
     };
 
     const completeInstructionOnlyGoal = async (type) => {
@@ -158,18 +257,125 @@ export async function processGoal(
       return completeInstructionOnlyGoal(instructionOnlyType);
     }
 
+    const coverageEntries = Array.isArray(goal?.metadata?.uncoveredLines)
+      ? goal.metadata.uncoveredLines.filter(Boolean)
+      : [];
+    const isCoverageGoal = coverageEntries.length > 0;
+    const coverageScope = isCoverageGoal ? buildCoverageScope(coverageEntries) : null;
+
+    const validateCoverageScope = (edits) => {
+      if (!coverageScope || !Array.isArray(edits)) {
+        return null;
+      }
+      const { workspacePrefixes } = coverageScope;
+      const allowedTestPrefixes = [];
+      if (workspacePrefixes.has('frontend/')) {
+        allowedTestPrefixes.push(
+          'frontend/src/test/',
+          'frontend/src/__tests__/',
+          'frontend/src/components/__tests__/',
+          'frontend/src/services/__tests__/',
+          'frontend/src/utils/__tests__/'
+        );
+      }
+      if (workspacePrefixes.has('backend/')) {
+        allowedTestPrefixes.push(
+          'backend/tests/',
+          'backend/test/',
+          'backend/__tests__/'
+        );
+      }
+      const normalizedAllowedPrefixes = allowedTestPrefixes
+        .map((prefix) => normalizeRepoPath(prefix))
+        .filter(Boolean);
+      const existingTestDirs = (() => {
+        if (!knownDirsSet || knownDirsSet.size === 0 || normalizedAllowedPrefixes.length === 0) {
+          return [];
+        }
+        const matches = [];
+        for (const dir of knownDirsSet) {
+          if (normalizedAllowedPrefixes.some((prefix) => dir.startsWith(prefix))) {
+            matches.push(dir);
+          }
+          if (matches.length >= 6) {
+            break;
+          }
+        }
+        return matches;
+      })();
+      for (const edit of edits) {
+        const normalizedPath = normalizeRepoPath(edit?.path);
+        if (!normalizedPath) {
+          continue;
+        }
+        if (!isTestFilePath(normalizedPath)) {
+          return {
+            type: 'coverage-scope',
+            path: normalizedPath,
+            rule: 'coverage-scope',
+            message: 'Coverage fixes are limited to test files only.'
+          };
+        }
+
+        if (normalizedAllowedPrefixes.length > 0) {
+          const matchesAllowed = normalizedAllowedPrefixes.some((prefix) => normalizedPath.startsWith(prefix));
+          if (matchesAllowed) {
+            if (edit?.type === 'upsert' && knownDirsSet && knownDirsSet.size > 0) {
+              const parentDir = normalizedPath.slice(0, Math.max(0, normalizedPath.lastIndexOf('/')));
+              if (parentDir && !knownDirsSet.has(parentDir)) {
+                const suggestionText = existingTestDirs.length > 0
+                  ? ` Suggested test folders: ${existingTestDirs.join(', ')}.`
+                  : '';
+                return {
+                  type: 'coverage-scope',
+                  path: normalizedPath,
+                  rule: 'coverage-scope',
+                  message: `Coverage tests must be placed in existing test directories.${suggestionText}`
+                };
+              }
+            }
+            continue;
+          }
+        } else if (workspacePrefixes.size > 0) {
+          const matchesWorkspace = Array.from(workspacePrefixes).some((prefix) => normalizedPath.startsWith(prefix));
+          if (matchesWorkspace) {
+            continue;
+          }
+        } else {
+          continue;
+        }
+        return {
+          type: 'coverage-scope',
+          path: normalizedPath,
+          rule: 'coverage-scope',
+          message: 'Coverage fixes must stay within dedicated test folders for the target workspace.'
+        };
+      }
+      return null;
+    };
+
     const scopeReflectionEnabled =
       typeof options?.enableScopeReflection === 'boolean'
         ? options.enableScopeReflection
         : !scopeReflectionGloballyDisabled;
     let scopeReflection = null;
+    const cloneScopeReflection = (reflection) => {
+      if (!reflection || typeof reflection !== 'object') {
+        return reflection;
+      }
+      return {
+        ...reflection,
+        mustChange: Array.isArray(reflection.mustChange) ? [...reflection.mustChange] : reflection.mustChange,
+        mustAvoid: Array.isArray(reflection.mustAvoid) ? [...reflection.mustAvoid] : reflection.mustAvoid
+      };
+    };
     if (scopeReflectionEnabled) {
       try {
         const reflectionResponse = await axios.post(
           '/api/llm/generate',
           buildScopeReflectionPrompt({ projectInfo, goalPrompt: goal?.prompt })
         );
-        scopeReflection = parseScopeReflectionResponse(reflectionResponse);
+        scopeReflection = cloneScopeReflection(parseScopeReflectionResponse(reflectionResponse));
         const normalizedPrompt = typeof goal?.prompt === 'string' ? goal.prompt.toLowerCase() : '';
         const isTestFixGoal = /fix\s+failing\s+test|failing\s+test|test\s+failure/.test(normalizedPrompt);
         if (scopeReflection && (testFailureContext || isTestFixGoal)) {
@@ -188,13 +394,17 @@ export async function processGoal(
 
     const testsStageEnabled = scopeReflection?.testsNeeded !== false;
 
-    await ensurePhasesAdvanced(['testing']);
+    if (!(await waitWhilePaused())) {
+      return { success: false, cancelled: true };
+    }
+
+    if (!(await ensurePhasesAdvanced(['testing']))) {
+      return { success: false, skipped: true };
+    }
 
     const updatedGoals = await fetchGoals(projectId);
     setGoalCount(Array.isArray(updatedGoals) ? updatedGoals.length : 0);
     notifyGoalsUpdated(projectId);
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
 
     setPreviewPanelTab?.('files', { source: 'automation' });
 
@@ -210,6 +420,7 @@ export async function processGoal(
     let fileTreeContext = '';
     let relevantFilesContext = '';
     let knownPathsSet = new Set();
+    let knownDirsSet = new Set();
 
     const mergeKnownPathsFromTree = (paths) => {
       if (!Array.isArray(paths) || paths.length === 0) {
@@ -218,6 +429,23 @@ export async function processGoal(
       const normalizedPaths = paths.map((p) => normalizeRepoPath(p)).filter(Boolean);
       for (const normalized of normalizedPaths) {
         knownPathsSet.add(normalized);
+      }
+    };
+
+    const mergeKnownDirsFromTree = (paths) => {
+      if (!Array.isArray(paths) || paths.length === 0) {
+        return;
+      }
+      const normalizedPaths = paths.map((p) => normalizeRepoPath(p)).filter(Boolean);
+      for (const normalized of normalizedPaths) {
+        let current = normalized;
+        while (current.includes('/')) {
+          current = current.slice(0, current.lastIndexOf('/'));
+          if (!current) {
+            break;
+          }
+          knownDirsSet.add(current);
+        }
       }
     };
 
@@ -257,8 +485,12 @@ export async function processGoal(
       });
 
       mergeKnownPathsFromTree(fileTreePaths);
+      mergeKnownDirsFromTree(fileTreePaths);
     };
 
+    if (!(await waitWhilePaused())) {
+      return { success: false, cancelled: true };
+    }
     await refreshRepoContext();
 
     let totalEditsReceived = 0;
@@ -269,6 +501,9 @@ export async function processGoal(
     if (testsStageEnabled) {
       const lastTestsAttempt = testsAttemptSequence[testsAttemptSequence.length - 1];
       for (const attempt of testsAttemptSequence) {
+        if (!(await waitWhilePaused())) {
+          return { success: false, cancelled: true };
+        }
         const llmTestsResponse = await axios.post(
           '/api/llm/generate',
           buildEditsPrompt({
@@ -312,11 +547,19 @@ export async function processGoal(
             throw buildEmptyEditsError('tests');
           }
 
+          const coverageViolation = validateCoverageScope(edits);
+          if (coverageViolation) {
+            throw buildScopeViolationError(coverageViolation);
+          }
+
           const scopeViolation = validateEditsAgainstReflection(edits, scopeReflection);
           if (scopeViolation) {
             throw buildScopeViolationError(scopeViolation);
           }
 
+          if (!(await waitWhilePaused())) {
+            return { success: false, cancelled: true };
+          }
           const appliedSummary = await applyEdits({
             projectId,
             edits,
@@ -345,6 +588,18 @@ export async function processGoal(
           if (isReplacementResolutionError(error) && attempt < lastTestsAttempt) {
             const retryContext = buildReplacementRetryContext(error);
             automationLog('processGoal:llm:tests:replacementRetry', {
+              attempt,
+              path: retryContext.path || null,
+              message: retryContext.message
+            });
+            await refreshRepoContext();
+            testsRetryContext = retryContext;
+            continue;
+          }
+
+          if (isFileOpFailure(error) && attempt < lastTestsAttempt) {
+            const retryContext = buildFileOpRetryContext(error, knownPathsSet);
+            automationLog('processGoal:llm:tests:fileOpRetry', {
               attempt,
               path: retryContext.path || null,
               message: retryContext.message
@@ -404,17 +659,33 @@ export async function processGoal(
       });
     }
 
+    if (!(await waitWhilePaused())) {
+      return { success: false, cancelled: true };
+    }
     await refreshRepoContext();
 
-    await advanceGoalPhase(goal.id, 'implementing');
-    notifyGoalsUpdated(projectId);
+    if (!(await waitWhilePaused())) {
+      return { success: false, cancelled: true };
+    }
+    if (!(await safeAdvanceGoalPhase('implementing'))) {
+      return { success: false, skipped: true };
+    }
 
-    automationLog('processGoal:phase', { goalId: goal?.id, phase: 'implementing' });
+    const skipImplementationStage = isCoverageGoal && !options?.__forceImplementationStage;
+    if (skipImplementationStage) {
+      automationLog('processGoal:impl:skipped', { goalId: goal?.id, reason: 'coverage-goal' });
+    }
 
-    let implAttemptSucceeded = false;
+    let implAttemptSucceeded = skipImplementationStage;
     let implRetryContext = null;
     const lastImplAttempt = implementationAttemptSequence[implementationAttemptSequence.length - 1];
     for (const attempt of implementationAttemptSequence) {
+      if (skipImplementationStage) {
+        break;
+      }
+      if (!(await waitWhilePaused())) {
+        return { success: false, cancelled: true };
+      }
       const llmImplResponse = await axios.post(
         '/api/llm/generate',
         buildEditsPrompt({
@@ -463,11 +734,19 @@ export async function processGoal(
           throw buildEmptyEditsError('implementation');
         }
 
+        const coverageViolation = validateCoverageScope(edits);
+        if (coverageViolation) {
+          throw buildScopeViolationError(coverageViolation);
+        }
+
         const scopeViolation = validateEditsAgainstReflection(edits, scopeReflection);
         if (scopeViolation) {
           throw buildScopeViolationError(scopeViolation);
         }
 
+        if (!(await waitWhilePaused())) {
+          return { success: false, cancelled: true };
+        }
         const appliedSummary = await applyEdits({
           projectId,
           edits,
@@ -496,6 +775,18 @@ export async function processGoal(
         if (isReplacementResolutionError(error) && attempt < lastImplAttempt) {
           const retryContext = buildReplacementRetryContext(error);
           automationLog('processGoal:llm:impl:replacementRetry', {
+            attempt,
+            path: retryContext.path || null,
+            message: retryContext.message
+          });
+          await refreshRepoContext();
+          implRetryContext = retryContext;
+          continue;
+        }
+
+        if (isFileOpFailure(error) && attempt < lastImplAttempt) {
+          const retryContext = buildFileOpRetryContext(error, knownPathsSet);
+          automationLog('processGoal:llm:impl:fileOpRetry', {
             attempt,
             path: retryContext.path || null,
             message: retryContext.message
@@ -560,22 +851,23 @@ export async function processGoal(
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 80));
-
+    if (!(await waitWhilePaused())) {
+      return { success: false, cancelled: true };
+    }
     setPreviewPanelTab?.('goals', { source: 'automation' });
 
-    await advanceGoalPhase(goal.id, 'verifying');
-    notifyGoalsUpdated(projectId);
-    await advanceGoalPhase(goal.id, 'ready');
-    notifyGoalsUpdated(projectId);
+    if (!(await safeAdvanceGoalPhase('verifying'))) {
+      return { success: false, skipped: true };
+    }
+    if (!(await safeAdvanceGoalPhase('ready'))) {
+      return { success: false, skipped: true };
+    }
 
     automationLog('processGoal:phase', { goalId: goal?.id, phase: 'ready' });
 
     const finalGoals = await fetchGoals(projectId);
     setGoalCount(Array.isArray(finalGoals) ? finalGoals.length : 0);
     notifyGoalsUpdated(projectId);
-
-    await new Promise((resolve) => setTimeout(resolve, 80));
 
     const completionLabel = formatGoalLabel(goal?.title || goal?.prompt || 'Goal');
     setMessages((prev) => [
@@ -594,6 +886,10 @@ export async function processGoal(
       status: error?.response?.status
     });
 
+    if (isGoalNotFoundError(error)) {
+      return { success: false, skipped: true, error: 'Goal not found' };
+    }
+
     setMessages((prev) => [
       ...prev,
       createMessage('assistant', `Error processing goal: ${errorMsg}`, { variant: 'error' })
@@ -608,5 +904,7 @@ export const __processGoalTestHooks = {
   buildScopeViolationError,
   isScopeViolationError,
   buildEmptyEditsError,
-  isEmptyEditsError
+  isEmptyEditsError,
+  buildFileOpRetryContext,
+  buildCoverageScope
 };
