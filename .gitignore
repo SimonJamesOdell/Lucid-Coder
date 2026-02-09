@@ -60,6 +60,10 @@ coverage-tmp/
 *-target-lines.txt
 tmp-*
 tmp_*
+backend-vitest-log.txt
+branchTargets.json
+goalsApi-vitest.json
+testsApi-lines-*.txt
 
 # Playwright artifacts
 playwright-report/
