@@ -578,6 +578,12 @@ export class LLMClient {
           message.includes('v1/chat/completions');
         const shouldTryResponses = message.includes('v1/responses') || message.includes('responses endpoint');
 
+        // When the error says "not a chat model", the model almost certainly
+        // uses the Responses API (e.g. o3, o4-mini).  Try /responses first so
+        // we don't waste 60 s on a /completions timeout before reaching the
+        // correct endpoint.
+        const preferResponsesFirst = message.includes('not a chat model');
+
         const attemptWithStripping = async (endpointPath, initialPayload) => {
           let payload = initialPayload;
           let lastError = null;
@@ -602,24 +608,32 @@ export class LLMClient {
           throw lastError;
         };
 
-        try {
-          if (shouldTryCompletions) {
-            const completionsPayload = buildCompletionsPayload(basePayload, model);
-            const completionResponse = await attemptWithStripping('/completions', completionsPayload);
-            return this.extractResponse(this.config.provider, completionResponse.data);
+        // Build the ordered fallback chain.
+        const fallbackChain = [];
+        if (preferResponsesFirst) {
+          if (shouldTryResponses || shouldTryCompletions) {
+            fallbackChain.push({ endpoint: '/responses', buildPayload: () => buildResponsesPayload(basePayload, model) });
           }
-        } catch (fallbackError) {
-          fallbackErrorMessage = this.getErrorMessage(fallbackError);
+          if (shouldTryCompletions) {
+            fallbackChain.push({ endpoint: '/completions', buildPayload: () => buildCompletionsPayload(basePayload, model) });
+          }
+        } else {
+          if (shouldTryCompletions) {
+            fallbackChain.push({ endpoint: '/completions', buildPayload: () => buildCompletionsPayload(basePayload, model) });
+          }
+          if (shouldTryResponses || shouldTryCompletions) {
+            fallbackChain.push({ endpoint: '/responses', buildPayload: () => buildResponsesPayload(basePayload, model) });
+          }
         }
 
-        try {
-          if (shouldTryResponses || shouldTryCompletions) {
-            const responsesPayload = buildResponsesPayload(basePayload, model);
-            const responsesResponse = await attemptWithStripping('/responses', responsesPayload);
-            return this.extractResponse(this.config.provider, responsesResponse.data);
+        for (const { endpoint, buildPayload } of fallbackChain) {
+          try {
+            const fallbackPayload = buildPayload();
+            const fallbackResponse = await attemptWithStripping(endpoint, fallbackPayload);
+            return this.extractResponse(this.config.provider, fallbackResponse.data);
+          } catch (fallbackError) {
+            fallbackErrorMessage = this.getErrorMessage(fallbackError);
           }
-        } catch (fallbackError) {
-          fallbackErrorMessage = this.getErrorMessage(fallbackError);
         }
       }
 

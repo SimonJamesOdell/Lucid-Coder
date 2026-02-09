@@ -28,6 +28,10 @@ describe('LLMClient fallback routing', () => {
       if (options.url.endsWith('/completions')) {
         return Promise.resolve({ data: { choices: [{ text: 'OK' }] } });
       }
+      // /responses is tried first for "not a chat model" — let it fail
+      if (options.url.endsWith('/responses')) {
+        return Promise.reject({ response: { data: { error: { message: 'Not available' } } } });
+      }
       return Promise.reject(new Error('Unexpected endpoint'));
     });
 
@@ -40,6 +44,37 @@ describe('LLMClient fallback routing', () => {
     ], { max_tokens: 10, temperature: 0 });
 
     expect(result).toBe('OK');
+  });
+
+  it('tries /responses first for "not a chat model" and succeeds immediately', async () => {
+    const endpointsCalled = [];
+    axios.mockImplementation((options) => {
+      if (options.url.endsWith('/chat/completions')) {
+        return Promise.reject({
+          response: { data: { error: { message: 'This is not a chat model and thus not supported in the v1/chat/completions endpoint.' } } }
+        });
+      }
+      endpointsCalled.push(options.url);
+      if (options.url.endsWith('/responses')) {
+        return Promise.resolve({ data: { output_text: 'OK responses' } });
+      }
+      if (options.url.endsWith('/completions')) {
+        return Promise.resolve({ data: { choices: [{ text: 'OK completions' }] } });
+      }
+      return Promise.reject(new Error('Unexpected endpoint'));
+    });
+
+    const client = new LLMClient();
+    client.config = { provider: 'openai', model: 'o3', api_url: 'https://api.openai.com/v1' };
+    client.apiKey = 'sk-test';
+
+    const result = await client.generateResponse([
+      { role: 'user', content: 'Hello' }
+    ], { max_tokens: 10, temperature: 0 });
+
+    expect(result).toBe('OK responses');
+    // /responses should have been the first (and only) fallback endpoint tried
+    expect(endpointsCalled).toEqual(['https://api.openai.com/v1/responses']);
   });
 
   it('falls back to /responses when completions also fails', async () => {
