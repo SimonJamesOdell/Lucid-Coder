@@ -14,6 +14,23 @@ $ErrorActionPreference = "Continue"
 $backendSuccess = $true
 $frontendSuccess = $true
 
+function Cleanup-TempArtifacts {
+    $targets = @(
+        (Join-Path $PSScriptRoot "tmp-*"),
+        (Join-Path $PSScriptRoot "frontend\tmp-*")
+    )
+
+    foreach ($pattern in $targets) {
+        Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                Remove-Item -Force $_.FullName -ErrorAction Stop
+            } catch {
+                Write-Host "Warning: Unable to remove temp file $($_.FullName)" -ForegroundColor DarkYellow
+            }
+        }
+    }
+}
+
 function Ensure-Dependencies {
     param(
         [string]$Label
@@ -50,6 +67,8 @@ if (-not (Ensure-Dependencies -Label "backend")) {
 }
 
 Pop-Location
+
+Cleanup-TempArtifacts
 
 # Frontend Tests
 Write-Host "`n⚛️ Running Frontend Tests..." -ForegroundColor Yellow
