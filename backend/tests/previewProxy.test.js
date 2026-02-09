@@ -1315,6 +1315,32 @@ describe('previewProxy', () => {
     expect(res.end).toHaveBeenCalledWith('Preview proxy error');
   });
 
+  test('proxy error handler responds 503 when frontend is starting', async () => {
+    const warn = vi.fn();
+    const { createPreviewProxy } = await import('../routes/previewProxy.js');
+    createPreviewProxy({ logger: { warn } });
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: null, backend: { port: 3000 } },
+      state: 'idle'
+    });
+
+    const errorHandler = getProxyHandler('error');
+    expect(typeof errorHandler).toBe('function');
+
+    const req = createReq('/preview/12/');
+    req.__lucidcoderPreviewProxy = { projectId: 12, port: 5173 };
+    const res = createRes();
+
+    const err = new Error('ECONNREFUSED');
+    err.code = 'ECONNREFUSED';
+    errorHandler(err, req, res);
+
+    expect(warn).toHaveBeenCalled();
+    expect(res.writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    expect(res.end).toHaveBeenCalledWith('Preview is starting');
+  });
+
   test('proxy error handler clears frontend process on ECONNREFUSED', async () => {
     const warn = vi.fn();
     const { createPreviewProxy } = await import('../routes/previewProxy.js');

@@ -643,16 +643,22 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
     const context = req?.__lucidcoderPreviewProxy;
     const contextProjectId = context?.projectId;
     const isConnectionFailure = Boolean(contextProjectId && isProxyConnectionFailure(error));
+    const runningEntry = contextProjectId ? getRunningProcessEntry(contextProjectId) : null;
+    const runningProcesses = runningEntry?.processes || null;
+    const isFrontendStarting = Boolean(
+      isConnectionFailure &&
+      runningEntry &&
+      (runningEntry.state !== 'running' || !runningProcesses?.frontend)
+    );
 
     if (isConnectionFailure) {
       if (context?.port) {
         rememberBadFrontendPort(contextProjectId, context.port);
       }
 
-      const { processes } = getRunningProcessEntry(contextProjectId);
-      if (processes?.frontend) {
-        const nextProcesses = { ...processes, frontend: null };
-        const nextState = processes?.backend ? 'running' : 'stopped';
+      if (runningProcesses?.frontend) {
+        const nextProcesses = { ...runningProcesses, frontend: null };
+        const nextState = runningProcesses?.backend ? 'running' : 'stopped';
         storeRunningProcesses(contextProjectId, nextProcesses, nextState, { exposeSnapshot: true });
       }
     }
@@ -674,22 +680,26 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       '<html><head><meta charset="utf-8" />' +
       '<meta name="viewport" content="width=device-width, initial-scale=1" />' +
       // Keep title stable so the frontend can detect this placeholder page.
-      '<title>Preview proxy error</title>' +
+      `<title>${isFrontendStarting ? 'Preview starting' : 'Preview proxy error'}</title>` +
       '<style>' +
       'html,body{height:100%;margin:0;padding:0;}' +
       'body{background:#0b0f1a;color:#e7eaf1;}' +
+      '.message{font:16px/1.4 "Segoe UI",system-ui,Arial,sans-serif;padding:24px;}' +
       '</style>' +
       '</head><body aria-busy="true">' +
+      `<div class="message">${isFrontendStarting ? 'Preview is starting. Retrying...' : 'Preview proxy error.'}</div>` +
       '<script>setTimeout(function(){try{location.reload();}catch(e){}},900);</script>' +
       '</body></html>';
 
-    const textBody = 'Preview proxy error';
+    const textBody = isFrontendStarting ? 'Preview is starting' : 'Preview proxy error';
 
     if (res && typeof res.writeHead === 'function') {
       if (!res.headersSent) {
-        res.writeHead(502, {
+        const statusCode = isFrontendStarting ? 503 : 502;
+        res.writeHead(statusCode, {
           'Content-Type': wantsHtml ? 'text/html; charset=utf-8' : 'text/plain',
-          'Cache-Control': 'no-store'
+          'Cache-Control': 'no-store',
+          ...(isFrontendStarting ? { 'Retry-After': '1' } : {})
         });
       }
 
