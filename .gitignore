@@ -58,10 +58,8 @@ coverage-tmp/
 *-coverage.json
 *-vitest.json
 *-target-lines.txt
-tmp-*.txt
-tmp-*.json
-tmp_*.txt
-tmp_*.json
+tmp-*
+tmp_*
 
 # Playwright artifacts
 playwright-report/
