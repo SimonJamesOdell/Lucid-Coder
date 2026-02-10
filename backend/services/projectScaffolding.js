@@ -25,6 +25,12 @@ import {
   templates
 } from './projectScaffolding/generate.js';
 import { initializeGitRepository } from './projectScaffolding/git.js';
+import { buildCloneUrl } from '../utils/gitUrl.js';
+import {
+  runGitCommand,
+  getCurrentBranch,
+  configureGitUser
+} from '../utils/git.js';
 
 const execAsync = promisify(exec);
 const FORCE_REAL_START = process.env.LUCIDCODER_FORCE_REAL_START === 'true';
@@ -423,6 +429,141 @@ export const createProjectWithFiles = async (projectConfig, options = {}) => {
     };
   } catch (error) {
     console.error('❌ Project creation failed:', error.message);
+    throw error;
+  }
+};
+
+const CLONE_STEP_NAMES = [
+  'Cloning repository',
+  'Project files ready',
+  'Configuring git',
+  'Installing dependencies',
+  'Starting development servers'
+];
+
+export const cloneProjectFromRemote = async (projectConfig, options = {}) => {
+  const { onProgress, cloneOptions = {}, portSettings = null } = options;
+  const totalSteps = CLONE_STEP_NAMES.length;
+  const emitProgress = typeof onProgress === 'function'
+    ? (payload) => {
+        try {
+          onProgress({ ...payload, updatedAt: new Date().toISOString() });
+        } catch (error) {
+          console.warn('Progress reporter failed:', error.message);
+        }
+      }
+    : null;
+
+  const reportProgress = (completedCount, statusMessage) => {
+    if (!emitProgress) return;
+    const status = completedCount >= totalSteps ? 'completed' : 'in-progress';
+    const completion = Math.round((Math.min(totalSteps, Math.max(0, completedCount)) / totalSteps) * 100);
+    emitProgress({
+      steps: CLONE_STEP_NAMES.map((name, i) => ({ name, completed: i < completedCount })),
+      completion,
+      status,
+      statusMessage
+    });
+  };
+
+  const reportMessage = (statusMessage, completedCount) => {
+    if (!emitProgress) return;
+    const completion = Math.round((Math.min(totalSteps, Math.max(0, completedCount)) / totalSteps) * 100);
+    emitProgress({
+      steps: CLONE_STEP_NAMES.map((name, i) => ({ name, completed: i < completedCount })),
+      completion,
+      status: 'in-progress',
+      statusMessage
+    });
+  };
+
+  if (isTestMode) {
+    reportMessage('Cloning remote repository...', 0);
+    await fs.mkdir(projectConfig.path, { recursive: true });
+    reportProgress(1, 'Repository cloned');
+    reportProgress(2, 'Project files ready');
+    reportMessage('Configuring git...', 2);
+    reportProgress(3, 'Git configured');
+    reportMessage('Installing dependencies...', 3);
+    reportProgress(4, 'Dependencies installed');
+    reportMessage('Starting development servers...', 4);
+    const portOverrides = buildPortOverrideOptions(portSettings);
+    const startResult = await startProject(projectConfig.path, portOverrides);
+    reportProgress(totalSteps, 'Development servers running');
+
+    return {
+      success: true,
+      processes: startResult.processes,
+      progress: {
+        steps: CLONE_STEP_NAMES.map((name) => ({ name, completed: true })),
+        completion: 100,
+        status: 'completed',
+        statusMessage: 'Development servers running'
+      },
+      cloned: true,
+      branch: cloneOptions.defaultBranch || 'main',
+      remote: cloneOptions.remoteUrl || null
+    };
+  }
+
+  try {
+    reportMessage('Cloning remote repository...', 0);
+
+    const { cloneUrl, safeUrl } = buildCloneUrl({
+      url: cloneOptions.remoteUrl,
+      authMethod: cloneOptions.authMethod,
+      token: cloneOptions.token,
+      username: cloneOptions.username,
+      provider: cloneOptions.provider
+    });
+
+    const parentDir = path.dirname(projectConfig.path);
+    await fs.mkdir(parentDir, { recursive: true });
+    await runGitCommand(parentDir, ['clone', cloneUrl, projectConfig.path]);
+
+    // Strip embedded credentials from the stored remote URL
+    await runGitCommand(projectConfig.path, ['remote', 'set-url', 'origin', safeUrl], { allowFailure: true });
+    reportProgress(1, 'Repository cloned');
+    reportProgress(2, 'Project files ready');
+
+    reportMessage('Configuring git...', 2);
+    await configureGitUser(projectConfig.path, {
+      name: cloneOptions.username,
+      email: cloneOptions.username ? `${cloneOptions.username}@users.noreply.github.com` : undefined
+    });
+
+    let clonedBranch;
+    try {
+      clonedBranch = await getCurrentBranch(projectConfig.path);
+    } catch {
+      clonedBranch = cloneOptions.defaultBranch || 'main';
+    }
+    reportProgress(3, 'Git configured');
+
+    reportMessage('Installing dependencies...', 3);
+    await installDependencies(projectConfig.path);
+    reportProgress(4, 'Dependencies installed');
+
+    reportMessage('Starting development servers...', 4);
+    const portOverrides = buildPortOverrideOptions(portSettings);
+    const startResult = await startProject(projectConfig.path, portOverrides);
+    reportProgress(totalSteps, 'Development servers running');
+
+    return {
+      success: true,
+      processes: startResult.processes,
+      progress: {
+        steps: CLONE_STEP_NAMES.map((name) => ({ name, completed: true })),
+        completion: 100,
+        status: 'completed',
+        statusMessage: 'Development servers running'
+      },
+      cloned: true,
+      branch: clonedBranch,
+      remote: safeUrl
+    };
+  } catch (error) {
+    console.error('❌ Project clone failed:', error.message);
     throw error;
   }
 };

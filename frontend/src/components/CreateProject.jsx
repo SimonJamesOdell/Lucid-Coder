@@ -92,8 +92,7 @@ const CreateProject = () => {
     showMain,
     fetchProjects,
     gitSettings,
-    createProjectRemoteRepository,
-    updateProjectGitSettings
+    createProjectRemoteRepository
   } = useAppState();
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -454,8 +453,16 @@ const CreateProject = () => {
     try {
       setCreateLoading(true);
       setCreateError('');
-      
-      const response = await axios.post('/api/projects', {
+
+      const isCloudWorkflow = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
+      const isConnectExisting = isCloudWorkflow && gitCloudMode === 'connect';
+
+      const providerFromGlobal = (gitSettings?.provider || 'github').toLowerCase();
+      const normalizedProvider = (gitWorkflowMode === 'custom' ? gitProvider : providerFromGlobal) || 'github';
+      const defaultBranch = (gitSettings?.defaultBranch || 'main').trim() || 'main';
+      const username = typeof gitSettings?.username === 'string' ? gitSettings.username.trim() : '';
+
+      const postBody = {
         name: newProject.name.trim(),
         description: newProject.description.trim(),
         frontend: {
@@ -467,7 +474,24 @@ const CreateProject = () => {
           framework: newProject.backend.framework
         },
         progressKey: newProgressKey
-      });
+      };
+
+      // When connecting to an existing repo, include git params so the backend
+      // clones instead of scaffolding a new project from scratch.
+      if (isConnectExisting) {
+        postBody.gitCloudMode = 'connect';
+        postBody.gitRemoteUrl = gitRemoteUrl.trim();
+        postBody.gitProvider = normalizedProvider;
+        postBody.gitDefaultBranch = defaultBranch;
+        if (username) {
+          postBody.gitUsername = username;
+        }
+        if (gitWorkflowMode === 'custom') {
+          postBody.gitToken = gitToken.trim();
+        }
+      }
+
+      const response = await axios.post('/api/projects', postBody);
       
       if (response.data && response.data.success) {
         const projectData = response.data.project;
@@ -485,7 +509,10 @@ const CreateProject = () => {
           });
         }
 
-        if (isCloudWorkflow && projectData?.id) {
+        // For "create new repo" flows, create the remote repo and push after
+        // the project has been scaffolded.  The "connect existing" flow is
+        // handled entirely server-side via the clone path above.
+        if (isCloudWorkflow && !isConnectExisting && gitCloudMode === 'create' && projectData?.id) {
           setProgress((prev) => {
             return Object.assign(
               {
@@ -500,47 +527,23 @@ const CreateProject = () => {
             );
           });
 
-          const providerFromGlobal = (gitSettings?.provider || 'github').toLowerCase();
-          const normalizedProvider = (gitWorkflowMode === 'custom' ? gitProvider : providerFromGlobal) || 'github';
-          const defaultBranch = (gitSettings?.defaultBranch || 'main').trim() || 'main';
-          const username = typeof gitSettings?.username === 'string' ? gitSettings.username.trim() : '';
+          const options = {
+            provider: normalizedProvider,
+            name: (gitRepoName.trim() || newProject.name.trim()),
+            owner: gitRepoOwner.trim(),
+            visibility: gitRepoVisibility,
+            description: newProject.description.trim()
+          };
 
-          if (gitCloudMode === 'create') {
-            const options = {
-              provider: normalizedProvider,
-              name: (gitRepoName.trim() || newProject.name.trim()),
-              owner: gitRepoOwner.trim(),
-              visibility: gitRepoVisibility,
-              description: newProject.description.trim()
-            };
-
-            if (username) {
-              options.username = username;
-            }
-
-            if (gitWorkflowMode === 'custom') {
-              options.token = gitToken.trim();
-            }
-
-            await createProjectRemoteRepository(projectData.id, options);
-          } else if (gitCloudMode === 'connect') {
-            const updates = {
-              workflow: 'cloud',
-              provider: normalizedProvider,
-              remoteUrl: gitRemoteUrl.trim(),
-              defaultBranch
-            };
-
-            if (username) {
-              updates.username = username;
-            }
-
-            if (gitWorkflowMode === 'custom') {
-              updates.token = gitToken.trim();
-            }
-
-            await updateProjectGitSettings(projectData.id, updates);
+          if (username) {
+            options.username = username;
           }
+
+          if (gitWorkflowMode === 'custom') {
+            options.token = gitToken.trim();
+          }
+
+          await createProjectRemoteRepository(projectData.id, options);
         }
 
         setProgressKey(null);

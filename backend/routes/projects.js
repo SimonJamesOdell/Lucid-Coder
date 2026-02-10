@@ -12,8 +12,9 @@ import {
   getPortSettings,
   saveProjectGitSettings
 } from '../database.js';
-import { createProjectWithFiles } from '../services/projectScaffolding.js';
+import { createProjectWithFiles, cloneProjectFromRemote } from '../services/projectScaffolding.js';
 import { resolveProjectPath, getProjectsDir } from '../utils/projectPaths.js';
+import { buildCloneUrl, stripGitCredentials } from '../utils/gitUrl.js';
 import {
   runGitCommand,
   getCurrentBranch,
@@ -78,55 +79,7 @@ const extractRepoName = (value) => {
   return candidate.replace(/\.git$/i, '');
 };
 
-const stripGitCredentials = (value) => {
-  const raw = safeTrim(value);
-  if (!raw) {
-    return '';
-  }
-
-  try {
-    const parsed = new URL(raw);
-    if (parsed.username || parsed.password) {
-      parsed.username = '';
-      parsed.password = '';
-      return parsed.toString();
-    }
-    return parsed.toString();
-  } catch {
-    return raw;
-  }
-};
-
-const buildCloneUrl = ({ url, authMethod, token, username, provider }) => {
-  const rawUrl = safeTrim(url);
-  const trimmedToken = safeTrim(token);
-  const normalizedAuth = authMethod === 'ssh' ? 'ssh' : 'pat';
-  const normalizedProvider = safeTrim(provider).toLowerCase();
-
-  if (normalizedAuth !== 'pat' || !trimmedToken) {
-    return {
-      cloneUrl: rawUrl,
-      safeUrl: stripGitCredentials(rawUrl)
-    };
-  }
-
-  try {
-    const parsed = new URL(rawUrl);
-    const fallbackUser = normalizedProvider === 'gitlab' ? 'oauth2' : 'x-access-token';
-    const authUser = safeTrim(username) || fallbackUser;
-    parsed.username = authUser;
-    parsed.password = trimmedToken;
-    return {
-      cloneUrl: parsed.toString(),
-      safeUrl: stripGitCredentials(parsed.toString())
-    };
-  } catch {
-    return {
-      cloneUrl: rawUrl,
-      safeUrl: stripGitCredentials(rawUrl)
-    };
-  }
-};
+// buildCloneUrl and stripGitCredentials imported from ../utils/gitUrl.js
 
 const assertDirectoryExists = async (targetPath) => {
   const stats = await fs.stat(targetPath);
@@ -852,6 +805,11 @@ router.post('/', async (req, res) => {
     const gitSettings = await getGitSettings();
     const portSettings = await getPortSettings();
 
+    // Determine if this is a "connect existing repo" flow
+    const gitCloudMode = safeTrim(req.body.gitCloudMode);
+    const gitRemoteUrl = safeTrim(req.body.gitRemoteUrl);
+    const isCloneFlow = gitCloudMode === 'connect' && Boolean(gitRemoteUrl);
+
     const skipScaffolding =
       (process.env.E2E_SKIP_SCAFFOLDING === 'true' || process.env.E2E_SKIP_SCAFFOLDING === '1') &&
       process.env.NODE_ENV !== 'production';
@@ -870,6 +828,21 @@ router.post('/', async (req, res) => {
       };
 
       const project = await createProject(dbProjectData);
+
+      if (isCloneFlow && project?.id) {
+        const gitProvider = safeTrim(req.body.gitProvider) || safeTrim(gitSettings?.provider) || 'github';
+        const gitDefaultBranch = safeTrim(req.body.gitDefaultBranch) || safeTrim(gitSettings?.defaultBranch) || 'main';
+        const gitUsername = safeTrim(req.body.gitUsername) || safeTrim(gitSettings?.username) || '';
+        const gitToken = safeTrim(req.body.gitToken) || '';
+        await saveProjectGitSettings(project.id, {
+          workflow: 'cloud',
+          provider: gitProvider,
+          remoteUrl: stripGitCredentials(gitRemoteUrl),
+          defaultBranch: gitDefaultBranch,
+          ...(gitUsername ? { username: gitUsername } : {}),
+          ...(gitToken ? { token: gitToken } : {})
+        });
+      }
 
       const enhancedProject = {
         ...project,
@@ -893,19 +866,47 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    // Create project with full scaffolding
-    let scaffoldResult;
-    if (progressKey) {
-      scaffoldResult = await createProjectWithFiles(projectConfig, {
-        gitSettings,
-        portSettings,
-        onProgress: (payload) => updateProgress(progressKey, payload)
-      });
+    let result;
+
+    if (isCloneFlow) {
+      // Clone existing remote repository instead of scaffolding
+      const gitProvider = safeTrim(req.body.gitProvider) || safeTrim(gitSettings?.provider) || 'github';
+      const gitDefaultBranch = safeTrim(req.body.gitDefaultBranch) || safeTrim(gitSettings?.defaultBranch) || 'main';
+      const gitUsername = safeTrim(req.body.gitUsername) || safeTrim(gitSettings?.username) || '';
+      const gitToken = safeTrim(req.body.gitToken) || '';
+
+      const cloneOptions = {
+        remoteUrl: gitRemoteUrl,
+        provider: gitProvider,
+        defaultBranch: gitDefaultBranch,
+        username: gitUsername,
+        token: gitToken,
+        authMethod: 'pat'
+      };
+
+      if (progressKey) {
+        result = await cloneProjectFromRemote(projectConfig, {
+          cloneOptions,
+          portSettings,
+          onProgress: (payload) => updateProgress(progressKey, payload)
+        });
+      } else {
+        result = await cloneProjectFromRemote(projectConfig, { cloneOptions, portSettings });
+      }
     } else {
-      scaffoldResult = await createProjectWithFiles(projectConfig, { gitSettings, portSettings });
+      // Generate a new project with scaffolding
+      if (progressKey) {
+        result = await createProjectWithFiles(projectConfig, {
+          gitSettings,
+          portSettings,
+          onProgress: (payload) => updateProgress(progressKey, payload)
+        });
+      } else {
+        result = await createProjectWithFiles(projectConfig, { gitSettings, portSettings });
+      }
     }
 
-    const processPorts = extractProcessPorts(scaffoldResult.processes);
+    const processPorts = extractProcessPorts(result.processes);
     
     // Save to database with enhanced data
     const dbProjectData = {
@@ -919,10 +920,26 @@ router.post('/', async (req, res) => {
     };
     
     const project = await createProject(dbProjectData);
+
+    // Save project git settings when cloning from a remote
+    if (isCloneFlow && project?.id) {
+      const gitProvider = safeTrim(req.body.gitProvider) || safeTrim(gitSettings?.provider) || 'github';
+      const gitDefaultBranch = result.branch || safeTrim(req.body.gitDefaultBranch) || safeTrim(gitSettings?.defaultBranch) || 'main';
+      const gitUsername = safeTrim(req.body.gitUsername) || safeTrim(gitSettings?.username) || '';
+      const gitToken = safeTrim(req.body.gitToken) || '';
+      await saveProjectGitSettings(project.id, {
+        workflow: 'cloud',
+        provider: gitProvider,
+        remoteUrl: result.remote || stripGitCredentials(gitRemoteUrl),
+        defaultBranch: gitDefaultBranch,
+        ...(gitUsername ? { username: gitUsername } : {}),
+        ...(gitToken ? { token: gitToken } : {})
+      });
+    }
     
     // Store process information
-    if (scaffoldResult.processes) {
-      storeRunningProcesses(project.id, scaffoldResult.processes, 'running', { launchType: 'auto' });
+    if (result.processes) {
+      storeRunningProcesses(project.id, result.processes, 'running', { launchType: 'auto' });
     }
     
     // Enhance project data with scaffolding info
@@ -936,9 +953,9 @@ router.post('/', async (req, res) => {
     res.status(201).json({
       success: true,
       project: enhancedProject,
-      processes: scaffoldResult.processes,
-      progress: scaffoldResult.progress,
-      message: 'Project created and started successfully'
+      processes: result.processes,
+      progress: result.progress,
+      message: isCloneFlow ? 'Project cloned and started successfully' : 'Project created and started successfully'
     });
 
     if (progressKey) {

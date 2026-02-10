@@ -1,3 +1,8 @@
+## 0.5.8 (2026-02-10)
+- Add clone-project flow handling and git URL helpers to support connect-existing-repo creation, including credential stripping and remote/branch persistence.
+- Extend backend clone/scaffolding coverage for fallback branches, progress piping, and skip-scaffolding clone settings.
+- Update Create Project connect flow to pass git parameters on create and align tests with the new clone-backed path.
+
 ## 0.5.7 (2026-02-10)
 - Harden git fetch/pull/status routes to auto-seed the `origin` remote from saved settings when it is missing locally (`ensureRemoteOrigin`), with `remote add` → `set-url` fallback.
 - Show the project path in the Files tab explorer header and remove the static "Explorer" label.

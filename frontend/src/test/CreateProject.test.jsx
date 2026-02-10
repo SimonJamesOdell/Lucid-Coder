@@ -652,7 +652,6 @@ describe('CreateProject Component', () => {
     test('connects existing repo when using global cloud workflow', async () => {
       const { user } = renderComponent();
       mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-global', name: 'My Project' } }));
-      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
       await goToGitStep(user, 'My Project');
@@ -663,13 +662,13 @@ describe('CreateProject Component', () => {
       await user.click(getCreateProjectButton());
 
       await waitFor(() => {
-        expect(mockUpdateProjectGitSettings).toHaveBeenCalledWith(
-          'proj-cloud-global',
+        expect(mockAxios.post).toHaveBeenCalledWith(
+          '/api/projects',
           expect.objectContaining({
-            workflow: 'cloud',
-            provider: 'github',
-            remoteUrl: 'https://github.com/octocat/my-project.git',
-            defaultBranch: 'main'
+            gitCloudMode: 'connect',
+            gitRemoteUrl: 'https://github.com/octocat/my-project.git',
+            gitProvider: 'github',
+            gitDefaultBranch: 'main'
           })
         );
       });
@@ -685,7 +684,6 @@ describe('CreateProject Component', () => {
 
       const { user } = renderComponent();
       mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-fallbacks', name: 'My Project' } }));
-      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
       await goToGitStep(user, 'My Project');
@@ -696,13 +694,15 @@ describe('CreateProject Component', () => {
       await user.click(getCreateProjectButton());
 
       await waitFor(() => {
-        expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
+        expect(mockAxios.post).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
+          gitCloudMode: 'connect'
+        }));
       });
 
-      const updates = mockUpdateProjectGitSettings.mock.calls[0][1];
-      expect(updates.provider).toBe('github');
-      expect(updates.defaultBranch).toBe('main');
-      expect('username' in updates).toBe(false);
+      const postBody = mockAxios.post.mock.calls[0][1];
+      expect(postBody.gitProvider).toBe('github');
+      expect(postBody.gitDefaultBranch).toBe('main');
+      expect(postBody.gitUsername).toBeUndefined();
     });
 
     test('defaults to main branch when global defaultBranch is blank', async () => {
@@ -713,7 +713,6 @@ describe('CreateProject Component', () => {
 
       const { user } = renderComponent();
       mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-defaultbranch-empty', name: 'My Project' } }));
-      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
       await goToGitStep(user, 'My Project');
@@ -724,17 +723,18 @@ describe('CreateProject Component', () => {
       await user.click(getCreateProjectButton());
 
       await waitFor(() => {
-        expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
+        expect(mockAxios.post).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
+          gitCloudMode: 'connect'
+        }));
       });
 
-      const updates = mockUpdateProjectGitSettings.mock.calls[0][1];
-      expect(updates.defaultBranch).toBe('main');
+      const postBody = mockAxios.post.mock.calls[0][1];
+      expect(postBody.gitDefaultBranch).toBe('main');
     });
 
     test('falls back to github provider when custom provider is blank', async () => {
       const { user } = renderComponent();
       mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-custom-blank-provider', name: 'My Project' } }));
-      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
       await goToGitStep(user, 'My Project');
@@ -749,17 +749,18 @@ describe('CreateProject Component', () => {
       await user.click(getCreateProjectButton());
 
       await waitFor(() => {
-        expect(mockUpdateProjectGitSettings).toHaveBeenCalled();
+        expect(mockAxios.post).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
+          gitCloudMode: 'connect'
+        }));
       });
 
-      const updates = mockUpdateProjectGitSettings.mock.calls[0][1];
-      expect(updates.provider).toBe('github');
+      const postBody = mockAxios.post.mock.calls[0][1];
+      expect(postBody.gitProvider).toBe('github');
     });
 
     test('connects existing repo when using custom cloud workflow (includes token)', async () => {
       const { user } = renderComponent();
       mockAxios.post.mockResolvedValue(createSuccessResponse({ project: { id: 'proj-cloud-custom-connect', name: 'My Project' } }));
-      mockUpdateProjectGitSettings.mockResolvedValueOnce({});
 
       render(<CreateProject />);
       await goToGitStep(user, 'My Project');
@@ -772,14 +773,14 @@ describe('CreateProject Component', () => {
       await user.click(getCreateProjectButton());
 
       await waitFor(() => {
-        expect(mockUpdateProjectGitSettings).toHaveBeenCalledWith(
-          'proj-cloud-custom-connect',
+        expect(mockAxios.post).toHaveBeenCalledWith(
+          '/api/projects',
           expect.objectContaining({
-            workflow: 'cloud',
-            provider: 'gitlab',
-            remoteUrl: 'https://gitlab.com/octocat/my-project.git',
-            defaultBranch: 'main',
-            token: 'glpat-test'
+            gitCloudMode: 'connect',
+            gitRemoteUrl: 'https://gitlab.com/octocat/my-project.git',
+            gitProvider: 'gitlab',
+            gitDefaultBranch: 'main',
+            gitToken: 'glpat-test'
           })
         );
       });
