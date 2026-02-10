@@ -3950,6 +3950,24 @@ describe('PreviewTab', () => {
     });
   });
 
+  test('successful iframe load updates the displayed URL', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+    const hooks = previewRef.current.__testHooks;
+
+    const fakeIframe = {
+      contentWindow: { postMessage: vi.fn(), location: { href: 'http://localhost:5555/loaded' } },
+      contentDocument: null
+    };
+    hooks.setIframeNodeForTests(fakeIframe);
+
+    act(() => {
+      hooks.triggerIframeLoad();
+    });
+
+    expect(screen.getByLabelText('Preview URL')).toHaveValue('http://localhost:5555/loaded');
+  });
+
   test('flags isPlaceholderDetected after first proxy placeholder load', async () => {
     vi.useFakeTimers();
     try {
