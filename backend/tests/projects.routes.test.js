@@ -449,6 +449,31 @@ describe('Projects API with Scaffolding', () => {
       expect(response.body.error).toContain('Failed to create project');
     });
 
+    test('returns 409 when project path already exists', async () => {
+      const projectName = `existing-path-${Date.now()}`;
+      const projectPath = path.join(testProjectsDir, projectName);
+
+      await fs.mkdir(projectPath, { recursive: true });
+      await fs.writeFile(path.join(projectPath, 'README.md'), 'existing');
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Should conflict with existing folder',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          gitCloudMode: 'connect',
+          gitRemoteUrl: 'https://github.com/octocat/repo.git'
+        });
+
+      expect(response.status).toBe(409);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toMatch(/already exists/i);
+
+      await fs.rm(projectPath, { recursive: true, force: true });
+    });
+
     test('notifies progress completion when a progress key is provided', async () => {
       const projectName = `progress-complete-${Date.now()}`;
       const progressKey = `progress-${Date.now()}`;
@@ -6103,7 +6128,7 @@ describe('Projects API with Scaffolding', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(response.body.message).toMatch(/deleted successfully/i);
+      expect(response.body.message).toMatch(/cleanup failed/i);
       expect(failingCleanup).toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/Could not clean up project directories/), expect.any(Array), expect.stringMatching(/cleanup failed/));
 
@@ -6111,7 +6136,7 @@ describe('Projects API with Scaffolding', () => {
       warnSpy.mockRestore();
     });
 
-    test('returns response without waiting for cleanup outside test env', async () => {
+    test('returns response without waiting for cleanup when waitForCleanup=false', async () => {
       const { project } = await createPersistedProject({ name: `delete-async-${Date.now()}` });
       const projectRoutesModule = await import('../routes/projects.js');
       const processManager = await import('../routes/projects/processManager.js');
@@ -6131,7 +6156,7 @@ describe('Projects API with Scaffolding', () => {
 
       try {
         const response = await request(app)
-          .delete(`/api/projects/${project.id}`)
+          .delete(`/api/projects/${project.id}?waitForCleanup=false`)
           .set('x-confirm-destructive', 'true');
 
         expect(response.status).toBe(200);
@@ -6143,6 +6168,36 @@ describe('Projects API with Scaffolding', () => {
         releaseCleanup?.();
         projectRoutesModule.__projectRoutesInternals.resetCleanupDirectoryExecutor();
         terminateSpy.mockRestore();
+        process.env.NODE_ENV = previousEnv;
+      }
+    });
+
+    test('waitForCleanup returns cleanup failures when requested', async () => {
+      const { project } = await createPersistedProject({ name: `delete-wait-${Date.now()}` });
+      const projectRoutesModule = await import('../routes/projects.js');
+      const previousEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+
+      const failingCleanup = vi.fn().mockRejectedValue(new Error('cleanup failed'));
+      projectRoutesModule.__projectRoutesInternals.setCleanupDirectoryExecutor(failingCleanup);
+
+      try {
+        const response = await request(app)
+          .delete(`/api/projects/${project.id}?waitForCleanup=true`)
+          .set('x-confirm-destructive', 'true');
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(response.body.cleanup).toEqual(
+          expect.objectContaining({
+            success: false,
+            failures: expect.any(Array)
+          })
+        );
+        expect(response.body.cleanup.failures[0].message).toMatch(/cleanup failed/i);
+        expect(failingCleanup).toHaveBeenCalled();
+      } finally {
+        projectRoutesModule.__projectRoutesInternals.resetCleanupDirectoryExecutor();
         process.env.NODE_ENV = previousEnv;
       }
     });
@@ -6160,7 +6215,7 @@ describe('Projects API with Scaffolding', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(response.body.message).toMatch(/deleted successfully/i);
+      expect(response.body.message).toMatch(/cleanup failed/i);
       expect(failingCleanup).toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringMatching(/Could not clean up project directories/),
@@ -6208,6 +6263,54 @@ describe('Projects API with Scaffolding', () => {
   describe('Project Git settings API', () => {
     beforeEach(async () => {
       await cleanDatabase();
+    });
+
+    test('suggests gitignore entries for untracked setup artifacts', async () => {
+      const { project, projectPath } = await createPersistedProject({ name: `gitignore-suggest-${Date.now()}` });
+      await fs.writeFile(path.join(projectPath, '.gitignore'), '');
+      await fs.mkdir(path.join(projectPath, 'node_modules'), { recursive: true });
+
+      gitUtils.runGitCommand.mockImplementation(async (cwd, args) => {
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: projectPath, code: 0 };
+        }
+        if (args[0] === 'status' && args[1] === '--porcelain') {
+          return { stdout: '?? node_modules/\n', code: 0 };
+        }
+        return { stdout: '', code: 0 };
+      });
+
+      const response = await request(app)
+        .get(`/api/projects/${project.id}/git/ignore-suggestions`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.suggestion.needed).toBe(true);
+      expect(response.body.suggestion.entries).toContain('node_modules/');
+    });
+
+    test('applies gitignore entries and commits when requested', async () => {
+      const { project, projectPath } = await createPersistedProject({ name: `gitignore-apply-${Date.now()}` });
+      await fs.writeFile(path.join(projectPath, '.gitignore'), '');
+
+      gitUtils.runGitCommand.mockImplementation(async (cwd, args) => {
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: projectPath, code: 0 };
+        }
+        return { stdout: '', code: 0 };
+      });
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/git/ignore-fix`)
+        .send({ entries: ['node_modules/'], commit: true });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.applied).toBe(true);
+      expect(response.body.entries).toContain('node_modules/');
+
+      const updated = await fs.readFile(path.join(projectPath, '.gitignore'), 'utf8');
+      expect(updated).toContain('node_modules/');
     });
 
     test('returns 404 when saving git settings for a missing project', async () => {

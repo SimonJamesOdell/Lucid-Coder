@@ -117,7 +117,17 @@ describe('DELETE /api/projects/:id cleanup fs acquisition failures', () => {
 
     expect(response.body).toEqual({
       success: true,
-      message: 'Project deleted successfully'
+      message: 'Project deleted, but cleanup failed. See cleanup details.',
+      cleanup: {
+        success: false,
+        failures: [
+          {
+            target: null,
+            code: null,
+            message: 'fs module unavailable'
+          }
+        ]
+      }
     });
 
     expect(warnSpy).toHaveBeenCalledWith(

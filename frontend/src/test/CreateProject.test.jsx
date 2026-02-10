@@ -185,6 +185,13 @@ const renderComponent = () => {
   };
 };
 
+const waitForCreateProjectHooks = async () => {
+  await waitFor(() => {
+    expect(typeof CreateProject.__testHooks?.runPostCloneSetup).toBe('function');
+  });
+  return CreateProject.__testHooks;
+};
+
 const fillProjectName = async (user, value = 'My Project') => {
   const nameInput = screen.getByLabelText('Project Name *');
   await user.clear(nameInput);
@@ -672,6 +679,505 @@ describe('CreateProject Component', () => {
           })
         );
       });
+    });
+
+    test('prompts to apply gitignore fixes after cloning a repo', async () => {
+      const { user } = renderComponent();
+
+      mockAxios.post
+        .mockResolvedValueOnce({
+          data: {
+            ...createSuccessResponse({ project: { id: 'proj-gitignore', name: 'My Project' } }).data,
+            setupRequired: true,
+            gitIgnoreSuggestion: {
+              needed: true,
+              entries: ['node_modules/'],
+              samplePaths: ['node_modules/'],
+              trackedFiles: ['package-lock.json']
+            }
+          }
+        })
+        .mockResolvedValueOnce({ data: { success: true, applied: true, committed: true, entries: ['node_modules/'] } })
+        .mockResolvedValueOnce({ data: { success: true, processes: { frontend: { port: 3000 }, backend: { port: 4000 } } } });
+
+      render(<CreateProject />);
+      await goToGitStep(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+
+      await user.click(getCreateProjectButton());
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+      expect(screen.getByText('node_modules/')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /apply & commit/i }));
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith(
+          '/api/projects/proj-gitignore/git/ignore-fix',
+          expect.objectContaining({
+            entries: ['node_modules/'],
+            commit: true
+          })
+        );
+      });
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith('/api/projects/proj-gitignore/setup');
+      });
+
+      expect(await screen.findByRole('button', { name: /continue to project/i })).toBeInTheDocument();
+    });
+
+    test('prompts gitignore fixes even when sample paths are missing', async () => {
+      const { user } = renderComponent();
+
+      mockAxios.post.mockResolvedValueOnce({
+        data: {
+          ...createSuccessResponse({ project: { id: 'proj-gitignore-nosample', name: 'My Project' } }).data,
+          setupRequired: true,
+          gitIgnoreSuggestion: {
+            needed: true,
+            entries: ['node_modules/']
+          }
+        }
+      });
+
+      render(<CreateProject />);
+      await goToGitStep(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+
+      await user.click(getCreateProjectButton());
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+      expect(screen.queryByText(/detected:/i)).not.toBeInTheDocument();
+    });
+
+    test('shows an error when gitignore update fails', async () => {
+      const { user } = renderComponent();
+
+      mockAxios.post
+        .mockResolvedValueOnce({
+          data: {
+            ...createSuccessResponse({ project: { id: 'proj-gitignore-fail', name: 'My Project' } }).data,
+            setupRequired: true,
+            gitIgnoreSuggestion: {
+              needed: true,
+              entries: ['node_modules/'],
+              samplePaths: ['node_modules/']
+            }
+          }
+        })
+        .mockResolvedValueOnce({ data: { success: false, error: 'gitignore update failed' } });
+
+      render(<CreateProject />);
+      await goToGitStep(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+
+      await user.click(getCreateProjectButton());
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /apply & commit/i }));
+
+      expect(await screen.findByText(/gitignore update failed/i)).toBeInTheDocument();
+    });
+
+    test('shows an error when setup fails after skipping gitignore update', async () => {
+      const { user } = renderComponent();
+
+      mockAxios.post
+        .mockResolvedValueOnce({
+          data: {
+            ...createSuccessResponse({ project: { id: 'proj-gitignore-skip', name: 'My Project' } }).data,
+            setupRequired: true,
+            gitIgnoreSuggestion: {
+              needed: true,
+              entries: ['node_modules/'],
+              trackedFiles: ['package-lock.json'],
+              samplePaths: ['node_modules/']
+            }
+          }
+        })
+        .mockResolvedValueOnce({ data: { success: false, error: 'setup failed' } });
+
+      render(<CreateProject />);
+      await goToGitStep(user, 'My Project');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.selectOptions(screen.getByLabelText('Remote Setup *'), 'connect');
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+
+      await user.click(getCreateProjectButton());
+
+      expect(await screen.findByText(/tracked files.*package-lock\.json/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /skip for now/i }));
+
+      expect(await screen.findByText(/setup failed/i)).toBeInTheDocument();
+    });
+
+    test('exposes gitignore test hooks and rejects missing setup ids', async () => {
+      render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+
+      await expect(hooks.runPostCloneSetup()).rejects.toThrow(/missing project id/i);
+    });
+
+    test('gitignore handlers return early without suggestions', async () => {
+      render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+
+      await act(async () => {
+        await hooks.handleApplyGitIgnore();
+        await hooks.handleSkipGitIgnore();
+      });
+
+      expect(mockAxios.post).not.toHaveBeenCalled();
+    });
+
+    test('runPostCloneSetup surfaces setup failures', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockResolvedValueOnce({ data: { success: false, error: 'setup failed' } });
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+      });
+
+      await expect(hooks.runPostCloneSetup('proj-setup-fail')).rejects.toThrow(/setup failed/i);
+    });
+
+    test('runPostCloneSetup uses default error when response omits details', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockResolvedValueOnce({ data: { success: false } });
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+      });
+
+      await expect(hooks.runPostCloneSetup('proj-setup-default')).rejects.toThrow(/failed to complete project setup/i);
+    });
+
+    test('handleApplyGitIgnore shows error when update fails', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockResolvedValueOnce({ data: { success: false, error: 'gitignore update failed' } });
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+        hooks.setGitIgnoreSuggestion({
+          projectId: 'proj-gitignore-fail',
+          entries: ['node_modules/'],
+          detected: [],
+          samplePaths: [],
+          trackedFiles: []
+        });
+      });
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await hooks.handleApplyGitIgnore();
+      });
+
+      expect(await screen.findByText(/gitignore update failed/i)).toBeInTheDocument();
+    });
+
+    test('handleApplyGitIgnore uses default error when response omits error', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockResolvedValueOnce({ data: { success: false } });
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+        hooks.setGitIgnoreSuggestion({
+          projectId: 'proj-gitignore-default',
+          entries: ['node_modules/'],
+          detected: [],
+          samplePaths: [],
+          trackedFiles: []
+        });
+      });
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await hooks.handleApplyGitIgnore();
+      });
+
+      expect(await screen.findByText(/failed to update \.gitignore/i)).toBeInTheDocument();
+    });
+
+    test('handleApplyGitIgnore surfaces response errors on request failure', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockRejectedValueOnce({ response: { data: { error: 'apply failed' } } });
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+        hooks.setGitIgnoreSuggestion({
+          projectId: 'proj-gitignore-reject',
+          entries: ['node_modules/'],
+          detected: [],
+          samplePaths: [],
+          trackedFiles: []
+        });
+      });
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await hooks.handleApplyGitIgnore();
+      });
+
+      expect(await screen.findByText(/apply failed/i)).toBeInTheDocument();
+    });
+
+    test('handleApplyGitIgnore uses fallback error on unknown failures', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockRejectedValueOnce({});
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+        hooks.setGitIgnoreSuggestion({
+          projectId: 'proj-gitignore-fallback',
+          entries: ['node_modules/'],
+          detected: [],
+          samplePaths: [],
+          trackedFiles: []
+        });
+      });
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await hooks.handleApplyGitIgnore();
+      });
+
+      expect(await screen.findByText(/failed to update \.gitignore/i)).toBeInTheDocument();
+    });
+
+    test('handleSkipGitIgnore surfaces setup failure errors', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockResolvedValueOnce({ data: { success: false, error: 'setup failed again' } });
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+        hooks.setGitIgnoreSuggestion({
+          projectId: 'proj-gitignore-skip',
+          entries: ['node_modules/'],
+          detected: [],
+          samplePaths: [],
+          trackedFiles: []
+        });
+      });
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await hooks.handleSkipGitIgnore();
+      });
+
+      expect(await screen.findByText(/setup failed again/i)).toBeInTheDocument();
+    });
+
+    test('handleSkipGitIgnore uses fallback message on unknown errors', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockRejectedValueOnce({});
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+        hooks.setGitIgnoreSuggestion({
+          projectId: 'proj-gitignore-fallback',
+          entries: ['node_modules/'],
+          detected: [],
+          samplePaths: [],
+          trackedFiles: []
+        });
+      });
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await hooks.handleSkipGitIgnore();
+      });
+
+      expect(await screen.findByText(/failed to complete project setup/i)).toBeInTheDocument();
+    });
+
+    test('handleSkipGitIgnore completes setup successfully', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockResolvedValueOnce({ data: { success: true, message: 'Setup done' } });
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+        hooks.setGitIgnoreSuggestion({
+          projectId: 'proj-gitignore-skip-success',
+          entries: ['node_modules/'],
+          detected: [],
+          samplePaths: [],
+          trackedFiles: []
+        });
+      });
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await hooks.handleSkipGitIgnore();
+      });
+
+      expect(mockAxios.post).toHaveBeenCalledWith('/api/projects/proj-gitignore-skip-success/setup');
+      expect(await screen.findByText(/setup done/i)).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: /continue to project/i })).toBeInTheDocument();
+    });
+
+    test('handleSkipGitIgnore surfaces response error details', async () => {
+      render(<CreateProject />);
+
+      mockAxios.post.mockRejectedValueOnce({ response: { data: { error: 'Setup response failed' } } });
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setProgress({
+          steps: [{ name: 'Step 1', completed: false }],
+          completion: 0,
+          status: 'pending',
+          statusMessage: 'Waiting...'
+        });
+        hooks.setGitIgnoreSuggestion({
+          projectId: 'proj-gitignore-skip-error',
+          entries: ['node_modules/'],
+          detected: [],
+          samplePaths: [],
+          trackedFiles: []
+        });
+      });
+
+      expect(await screen.findByText(/keep your working tree clean/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await hooks.handleSkipGitIgnore();
+      });
+
+      expect(await screen.findByText(/setup response failed/i)).toBeInTheDocument();
+    });
+
+    test('skips test hook wiring outside test environments', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      const originalHooks = CreateProject.__testHooks;
+      CreateProject.__testHooks = undefined;
+
+      try {
+        render(<CreateProject />);
+
+        await waitFor(() => {
+          expect(CreateProject.__testHooks).toBeUndefined();
+        });
+      } finally {
+        process.env.NODE_ENV = originalEnv;
+        CreateProject.__testHooks = originalHooks;
+      }
+    });
+
+    test('test hook cleanup returns early when hooks are cleared', async () => {
+      const { unmount } = render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+
+      CreateProject.__testHooks = undefined;
+
+      expect(hooks).toBeDefined();
+
+      unmount();
+    });
+
+    test('handleContinueAfterGitIgnore resets state and navigates away', async () => {
+      render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.handleContinueAfterGitIgnore();
+      });
+
+      expect(mockShowMain).toHaveBeenCalled();
     });
 
     test('connects existing repo when global git settings need fallbacks', async () => {

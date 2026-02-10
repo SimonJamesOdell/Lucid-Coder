@@ -281,6 +281,68 @@
   text-decoration: underline;
 }
 
+.gitignore-suggestion {
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--text-primary, #ffffff);
+}
+
+.gitignore-suggestion h5 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.gitignore-suggestion p {
+  margin: 0 0 0.75rem 0;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.9rem;
+}
+
+.gitignore-suggestion ul {
+  margin: 0 0 0.75rem 1.25rem;
+  padding: 0;
+}
+
+.gitignore-suggestion li {
+  color: var(--text-primary, #ffffff);
+  font-size: 0.9rem;
+}
+
+.gitignore-suggestion code {
+  font-family: 'Fira Code', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  background: rgba(15, 23, 42, 0.6);
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  color: var(--text-primary, #ffffff);
+}
+
+.gitignore-sample {
+  font-size: 0.85rem;
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.gitignore-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.gitignore-error {
+  margin: 0 0 0.75rem 0;
+  color: var(--error-color, #ff6b6b);
+  font-size: 0.9rem;
+}
+
+.gitignore-warning {
+  margin: 0 0 0.75rem 0;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.9rem;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .create-project-view {

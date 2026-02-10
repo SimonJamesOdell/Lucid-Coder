@@ -106,6 +106,8 @@ const CreateProject = () => {
   const lastProgressUpdateAtRef = useRef(0);
   const pollSuppressedRef = useRef(false);
   const pollSuppressionTimeoutRef = useRef(null);
+  const [gitIgnoreSuggestion, setGitIgnoreSuggestion] = useState(null);
+  const [gitIgnoreStatus, setGitIgnoreStatus] = useState({ state: 'idle', error: '' });
 
   const [setupStep, setSetupStep] = useState('details');
   
@@ -241,7 +243,7 @@ const CreateProject = () => {
       setProcesses(null);
       setProgressKey(null);
     }
-    if (normalized?.status === 'completed' || normalized?.status === 'failed') {
+    if (normalized?.status === 'completed' || normalized?.status === 'failed' || normalized?.status === 'awaiting-user') {
       closeProgressStream();
     }
   };
@@ -559,11 +561,29 @@ const CreateProject = () => {
         
         // Auto-select the newly created project
         selectProject(projectData);
-        
-        // Show success for a moment before navigating
-        setTimeout(() => {
-          showMain();
-        }, 2000);
+
+        const suggestion = response.data?.gitIgnoreSuggestion;
+        const setupRequired = Boolean(response.data?.setupRequired);
+        const shouldPromptGitIgnore = isConnectExisting
+          && setupRequired
+          && suggestion?.needed
+          && Array.isArray(suggestion.entries)
+          && suggestion.entries.length > 0;
+
+        if (shouldPromptGitIgnore) {
+          setGitIgnoreSuggestion({
+            projectId: projectData.id,
+            entries: suggestion.entries,
+            detected: suggestion.detected || [],
+            samplePaths: suggestion.samplePaths || [],
+            trackedFiles: suggestion.trackedFiles || []
+          });
+        } else {
+          // Show success for a moment before navigating
+          setTimeout(() => {
+            showMain();
+          }, 2000);
+        }
       }
     } catch (err) {
       closeProgressStream();
@@ -582,6 +602,8 @@ const CreateProject = () => {
     setProgressKey(null);
     setProgress(null);
     setProcesses(null);
+    setGitIgnoreSuggestion(null);
+    setGitIgnoreStatus({ state: 'idle', error: '' });
     setSetupStep('details');
     setNewProject({
       name: '',
@@ -610,6 +632,117 @@ const CreateProject = () => {
     setCreateError('');
     setSetupStep('details');
   };
+
+  const runPostCloneSetup = async (projectId) => {
+    if (!projectId) {
+      throw new Error('Missing project id for setup');
+    }
+
+    setGitIgnoreStatus({ state: 'working', error: '' });
+    setProgress((prev) => ({
+      ...prev,
+      status: 'in-progress',
+      statusMessage: 'Installing dependencies...'
+    }));
+
+    const response = await axios.post(`/api/projects/${projectId}/setup`);
+
+    if (!response?.data?.success) {
+      throw new Error(response?.data?.error || 'Failed to complete project setup');
+    }
+
+    if (response.data.processes) {
+      setProcesses(response.data.processes);
+    }
+
+    setProgress((prev) => ({
+      ...prev,
+      completion: 100,
+      status: 'completed',
+      statusMessage: response.data.message || 'Project setup completed'
+    }));
+
+    setGitIgnoreStatus({ state: 'done', error: '' });
+  };
+
+  const handleApplyGitIgnore = async () => {
+    if (!gitIgnoreSuggestion?.projectId) {
+      return;
+    }
+
+    try {
+      const response = await axios.post(
+        `/api/projects/${gitIgnoreSuggestion.projectId}/git/ignore-fix`,
+        {
+          entries: gitIgnoreSuggestion.entries,
+          commit: true
+        }
+      );
+
+      if (!response?.data?.success) {
+        throw new Error(response?.data?.error || 'Failed to update .gitignore');
+      }
+
+      await runPostCloneSetup(gitIgnoreSuggestion.projectId);
+    } catch (error) {
+      const message = error?.response?.data?.error || error?.message || 'Failed to update .gitignore';
+      setGitIgnoreStatus({ state: 'error', error: message });
+    }
+  };
+
+  const handleSkipGitIgnore = async () => {
+    if (!gitIgnoreSuggestion?.projectId) {
+      return;
+    }
+
+    try {
+      await runPostCloneSetup(gitIgnoreSuggestion.projectId);
+    } catch (error) {
+      const message = error?.response?.data?.error || error?.message || 'Failed to complete project setup';
+      setGitIgnoreStatus({ state: 'error', error: message });
+      return;
+    }
+  };
+
+  const handleContinueAfterGitIgnore = () => {
+    setGitIgnoreSuggestion(null);
+    setGitIgnoreStatus({ state: 'idle', error: '' });
+    showMain();
+  };
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'test') {
+      return;
+    }
+
+    if (!CreateProject.__testHooks) {
+      CreateProject.__testHooks = {};
+    }
+
+    CreateProject.__testHooks.runPostCloneSetup = runPostCloneSetup;
+    CreateProject.__testHooks.handleApplyGitIgnore = handleApplyGitIgnore;
+    CreateProject.__testHooks.handleSkipGitIgnore = handleSkipGitIgnore;
+    CreateProject.__testHooks.handleContinueAfterGitIgnore = handleContinueAfterGitIgnore;
+    CreateProject.__testHooks.setGitIgnoreSuggestion = setGitIgnoreSuggestion;
+    CreateProject.__testHooks.setProgress = setProgress;
+
+    return () => {
+      if (!CreateProject.__testHooks) {
+        return;
+      }
+      CreateProject.__testHooks.runPostCloneSetup = undefined;
+      CreateProject.__testHooks.handleApplyGitIgnore = undefined;
+      CreateProject.__testHooks.handleSkipGitIgnore = undefined;
+      CreateProject.__testHooks.handleContinueAfterGitIgnore = undefined;
+      CreateProject.__testHooks.setGitIgnoreSuggestion = undefined;
+      CreateProject.__testHooks.setProgress = undefined;
+    };
+  }, [
+    runPostCloneSetup,
+    handleApplyGitIgnore,
+    handleSkipGitIgnore,
+    handleContinueAfterGitIgnore
+  ]);
 
   const getFrontendFrameworks = () => {
     return frontendFrameworks[newProject.frontend.language] || ['react'];
@@ -654,6 +787,71 @@ const CreateProject = () => {
                 <p>✅ Project created successfully!</p>
                 <p>Frontend running on: <a href={`http://localhost:${processes.frontend.port}`} target="_blank" rel="noopener noreferrer">http://localhost:{processes.frontend.port}</a></p>
                 <p>Backend running on: <a href={`http://localhost:${processes.backend.port}`} target="_blank" rel="noopener noreferrer">http://localhost:{processes.backend.port}</a></p>
+              </div>
+            )}
+            {gitIgnoreSuggestion && (
+              <div className="gitignore-suggestion">
+                <h5>Keep your working tree clean</h5>
+                <p>
+                  Before installing dependencies, we need your approval to keep the working tree clean.
+                </p>
+                {gitIgnoreSuggestion.entries.length > 0 && (
+                  <p>
+                    Add these entries to .gitignore and commit the change before installs run:
+                  </p>
+                )}
+                <ul>
+                  {gitIgnoreSuggestion.entries.map((entry) => (
+                    <li key={entry}><code>{entry}</code></li>
+                  ))}
+                </ul>
+                {gitIgnoreSuggestion.trackedFiles?.length > 0 && (
+                  <p className="gitignore-warning">
+                    Note: installs will update tracked files ({gitIgnoreSuggestion.trackedFiles.join(', ')}),
+                    so the working tree may still show changes.
+                  </p>
+                )}
+                {gitIgnoreSuggestion.samplePaths?.length > 0 && (
+                  <p className="gitignore-sample">
+                    Detected: {gitIgnoreSuggestion.samplePaths.join(', ')}
+                  </p>
+                )}
+                <p className="gitignore-sample">
+                  Skipping will continue setup without updating .gitignore and may leave the working tree dirty.
+                </p>
+                {gitIgnoreStatus.state === 'error' && (
+                  <div className="gitignore-error">{gitIgnoreStatus.error}</div>
+                )}
+                <div className="gitignore-actions">
+                  {gitIgnoreStatus.state !== 'done' ? (
+                    <>
+                      <button
+                        type="button"
+                        className="git-settings-button primary"
+                        onClick={handleApplyGitIgnore}
+                        disabled={gitIgnoreStatus.state === 'working'}
+                      >
+                        {gitIgnoreStatus.state === 'working' ? 'Applying...' : 'Apply & Commit'}
+                      </button>
+                      <button
+                        type="button"
+                        className="git-settings-button secondary"
+                        onClick={handleSkipGitIgnore}
+                        disabled={gitIgnoreStatus.state === 'working'}
+                      >
+                        Skip for now
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="git-settings-button primary"
+                      onClick={handleContinueAfterGitIgnore}
+                    >
+                      Continue to project
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>

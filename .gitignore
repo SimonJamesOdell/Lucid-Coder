@@ -55,6 +55,9 @@ coverage/
 coverage-tmp/
 .nyc_output/
 .vite-cache/
+backend/cov-out.txt
+backend/coverage-out.txt
+backend/coverage-output.txt
 *-coverage.json
 *-vitest.json
 *-target-lines.txt
@@ -71,6 +74,7 @@ test-results/
 
 # SQLite databases
 *.db
+*.db-journal
 
 # Test debug artifacts (should not be committed)
 *-debug.json

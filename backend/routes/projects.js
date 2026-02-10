@@ -10,9 +10,16 @@ import {
   deleteProject,
   getGitSettings,
   getPortSettings,
+  updateProjectPorts,
   saveProjectGitSettings
 } from '../database.js';
-import { createProjectWithFiles, cloneProjectFromRemote } from '../services/projectScaffolding.js';
+import {
+  createProjectWithFiles,
+  cloneProjectFromRemote,
+  installDependencies,
+  startProject
+} from '../services/projectScaffolding.js';
+import { buildPortOverrideOptions } from '../services/projectScaffolding/ports.js';
 import { resolveProjectPath, getProjectsDir } from '../utils/projectPaths.js';
 import { buildCloneUrl, stripGitCredentials } from '../utils/gitUrl.js';
 import {
@@ -138,6 +145,11 @@ const fileExists = async (targetPath) => {
     }
     throw error;
   }
+};
+
+const isCloneTargetNotEmptyError = (error) => {
+  const message = `${error?.stderr || ''} ${error?.message || ''}`.toLowerCase();
+  return message.includes('already exists and is not an empty directory');
 };
 
 const resolveImportGitSettings = ({
@@ -793,6 +805,26 @@ router.post('/', async (req, res) => {
 
     // Create project directory path
     const projectPath = resolveProjectPath(name);
+
+    if (await pathExists(projectPath)) {
+      const isDirectory = await dirExists(projectPath);
+      let errorMessage = 'Project path already exists. Choose a different name.';
+
+      if (isDirectory) {
+        const entries = await fs.readdir(projectPath);
+        errorMessage = entries.length
+          ? 'Project folder already exists and is not empty. Delete it or choose a different name.'
+          : 'Project folder already exists. Delete it or choose a different name.';
+      } else {
+        errorMessage = 'Project path already exists and is not a directory.';
+      }
+
+      if (progressKey) {
+        failProgress(progressKey, errorMessage);
+      }
+
+      return res.status(409).json({ success: false, error: errorMessage });
+    }
     
     const projectConfig = {
       name: name.trim(),
@@ -809,6 +841,8 @@ router.post('/', async (req, res) => {
     const gitCloudMode = safeTrim(req.body.gitCloudMode);
     const gitRemoteUrl = safeTrim(req.body.gitRemoteUrl);
     const isCloneFlow = gitCloudMode === 'connect' && Boolean(gitRemoteUrl);
+    const requireGitIgnoreApproval = req.body?.requireGitIgnoreApproval !== false;
+    const gitIgnoreApproved = req.body?.gitIgnoreApproved === true;
 
     const skipScaffolding =
       (process.env.E2E_SKIP_SCAFFOLDING === 'true' || process.env.E2E_SKIP_SCAFFOLDING === '1') &&
@@ -888,10 +922,17 @@ router.post('/', async (req, res) => {
         result = await cloneProjectFromRemote(projectConfig, {
           cloneOptions,
           portSettings,
-          onProgress: (payload) => updateProgress(progressKey, payload)
+          onProgress: (payload) => updateProgress(progressKey, payload),
+          requireGitIgnoreApproval,
+          gitIgnoreApproved
         });
       } else {
-        result = await cloneProjectFromRemote(projectConfig, { cloneOptions, portSettings });
+        result = await cloneProjectFromRemote(projectConfig, {
+          cloneOptions,
+          portSettings,
+          requireGitIgnoreApproval,
+          gitIgnoreApproved
+        });
       }
     } else {
       // Generate a new project with scaffolding
@@ -906,6 +947,7 @@ router.post('/', async (req, res) => {
       }
     }
 
+    const awaitingSetup = Boolean(result?.setupRequired);
     const processPorts = extractProcessPorts(result.processes);
     
     // Save to database with enhanced data
@@ -938,7 +980,7 @@ router.post('/', async (req, res) => {
     }
     
     // Store process information
-    if (result.processes) {
+    if (result.processes && !awaitingSetup) {
       storeRunningProcesses(project.id, result.processes, 'running', { launchType: 'auto' });
     }
     
@@ -955,16 +997,46 @@ router.post('/', async (req, res) => {
       project: enhancedProject,
       processes: result.processes,
       progress: result.progress,
-      message: isCloneFlow ? 'Project cloned and started successfully' : 'Project created and started successfully'
+      message: awaitingSetup
+        ? 'Project cloned. Waiting for .gitignore approval before installing dependencies.'
+        : (isCloneFlow ? 'Project cloned and started successfully' : 'Project created and started successfully'),
+      setupRequired: awaitingSetup,
+      gitIgnoreSuggestion: result?.gitIgnoreSuggestion || null
     });
 
     if (progressKey) {
-      completeProgress(progressKey, 'Project created successfully');
+      if (awaitingSetup && result?.progress) {
+        updateProgress(progressKey, result.progress);
+      } else {
+        completeProgress(progressKey, 'Project created successfully');
+      }
     }
   } catch (error) {
     console.error('Error creating project:', error);
+    const errorMessage = error.message || 'Failed to create project';
     if (progressKey) {
-      failProgress(progressKey, error.message || 'Failed to create project');
+      failProgress(progressKey, errorMessage);
+    }
+
+    if (isCloneTargetNotEmptyError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: 'Project folder already exists and is not empty. Delete it or choose a different name.'
+      });
+    }
+
+    if (error.code === 'GIT_MISSING') {
+      return res.status(500).json({
+        success: false,
+        error: errorMessage
+      });
+    }
+
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: errorMessage
+      });
     }
     
     // Handle unique constraint errors
@@ -983,6 +1055,51 @@ router.post('/', async (req, res) => {
     attachTestErrorDetails(error, errorResponse);
     
     res.status(500).json(errorResponse);
+  }
+});
+
+// POST /api/projects/:id/setup - Install dependencies and start after clone
+router.post('/:id/setup', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const project = await getProject(id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found'
+      });
+    }
+
+    if (!project.path) {
+      return res.status(400).json({
+        success: false,
+        error: 'Project path is not configured.'
+      });
+    }
+
+    await installDependencies(project.path);
+
+    const portSettings = await getPortSettings();
+    const portOverrides = buildPortOverrideOptions(portSettings);
+    const startResult = await startProject(project.path, portOverrides);
+
+    if (startResult.success && startResult.processes) {
+      storeRunningProcesses(project.id, startResult.processes, 'running', { launchType: 'auto' });
+      await updateProjectPorts(project.id, extractProcessPorts(startResult.processes));
+    }
+
+    res.json({
+      success: true,
+      processes: startResult.processes,
+      message: 'Project setup completed successfully'
+    });
+  } catch (error) {
+    console.error('Error completing project setup:', error);
+    res.status(500).json({
+      success: false,
+      error: error?.message || 'Failed to complete project setup'
+    });
   }
 });
 
@@ -1122,8 +1239,11 @@ router.delete('/:id', async (req, res) => {
     
     // Clean up filesystem with retry logic for Windows
     const cleanupTargets = buildCleanupTargets(project);
+    const waitForCleanupParam = safeTrim(req.query?.waitForCleanup).toLowerCase();
+    const waitForCleanup = waitForCleanupParam !== 'false' && waitForCleanupParam !== '0';
 
     const runCleanup = async () => {
+      const result = { success: true, failures: [] };
       try {
         const fs = await getFsModule();
 
@@ -1141,31 +1261,111 @@ router.delete('/:id', async (req, res) => {
           const firstError = cleanupFailures[0]?.error;
           const message = firstError?.message || 'cleanup failed';
           console.warn('⚠️ Warning: Could not clean up project directories:', cleanupTargets, message);
+          result.success = false;
+          result.failures = cleanupFailures.map((failure) => ({
+            target: failure.target,
+            code: failure.error?.code || null,
+            message: failure.error?.message || 'cleanup failed'
+          }));
         }
       } catch (fsError) {
         console.warn('⚠️ Warning: Could not clean up project directories:', cleanupTargets, fsError.message);
         // Don't fail the entire operation if filesystem cleanup fails
         // The project is already deleted from database
+        result.success = false;
+        result.failures = [{
+          target: null,
+          code: fsError?.code || null,
+          message: fsError?.message || 'cleanup failed'
+        }];
       }
+
+      return result;
     };
 
-    if (process.env.NODE_ENV === 'test') {
-      await runCleanup();
+    const shouldWaitForCleanup = process.env.NODE_ENV === 'test' || waitForCleanup;
+    let cleanupResult = null;
+
+    if (shouldWaitForCleanup) {
+      cleanupResult = await runCleanup();
     } else {
       setImmediate(() => {
         void runCleanup();
       });
     }
-    
-    res.json({
+
+    const responsePayload = {
       success: true,
       message: 'Project deleted successfully'
-    });
+    };
+
+    if (cleanupResult) {
+      responsePayload.cleanup = cleanupResult;
+      if (!cleanupResult.success) {
+        responsePayload.message = 'Project deleted, but cleanup failed. See cleanup details.';
+      }
+    }
+
+    res.json(responsePayload);
   } catch (error) {
     console.error('Error deleting project:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to delete project'
+    });
+  }
+});
+
+// POST /api/projects/:id/cleanup - Retry filesystem cleanup
+router.post('/:id/cleanup', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const project = await findProjectByIdentifier(id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found'
+      });
+    }
+
+    if (requireDestructiveConfirmation(req, res)) {
+      return;
+    }
+
+    const cleanupTargets = buildCleanupTargets(project);
+    const fs = await getFsModule();
+    const cleanupFailures = [];
+
+    for (const target of cleanupTargets) {
+      try {
+        await cleanupDirectoryExecutor(fs, target);
+      } catch (targetError) {
+        cleanupFailures.push({
+          target,
+          code: targetError?.code || null,
+          message: targetError?.message || 'cleanup failed'
+        });
+      }
+    }
+
+    const cleanup = {
+      success: cleanupFailures.length === 0,
+      failures: cleanupFailures
+    };
+
+    res.json({
+      success: true,
+      cleanup,
+      message: cleanup.success
+        ? 'Cleanup completed successfully'
+        : 'Cleanup failed. See cleanup details.'
+    });
+  } catch (error) {
+    console.error('Error retrying cleanup:', error);
+    res.status(500).json({
+      success: false,
+      error: error?.message || 'Failed to retry cleanup'
     });
   }
 });
