@@ -149,6 +149,46 @@
   min-width: 140px;
 }
 
+.git-summary-card {
+  margin-top: 1.25rem;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  color: var(--text-primary, #ffffff);
+}
+
+.git-summary-card h4 {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.git-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.git-summary-row:last-child {
+  border-bottom: none;
+}
+
+.git-summary-label {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.85rem;
+}
+
+.git-summary-value {
+  color: var(--text-primary, #ffffff);
+  font-size: 0.9rem;
+  max-width: 60%;
+  text-align: right;
+  word-break: break-word;
+}
+
 /* Progress UI Styles */
 .progress-container {
   margin: 2rem 0;

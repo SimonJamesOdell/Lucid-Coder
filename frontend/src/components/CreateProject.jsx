@@ -109,7 +109,7 @@ const CreateProject = () => {
   const [gitIgnoreSuggestion, setGitIgnoreSuggestion] = useState(null);
   const [gitIgnoreStatus, setGitIgnoreStatus] = useState({ state: 'idle', error: '' });
 
-  const [setupStep, setSetupStep] = useState('details');
+  const [setupStep, setSetupStep] = useState('git');
   
   // New project form state
   const [newProject, setNewProject] = useState({
@@ -399,44 +399,71 @@ const CreateProject = () => {
     }
   };
 
+  const deriveRepoName = (value) => {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) {
+      return '';
+    }
+    const cleaned = raw.replace(/\.git$/i, '');
+    const lastSlash = Math.max(cleaned.lastIndexOf('/'), cleaned.lastIndexOf(':'), cleaned.lastIndexOf('\\'));
+    const candidate = lastSlash >= 0 ? cleaned.slice(lastSlash + 1) : cleaned;
+    return candidate.trim();
+  };
+
   const handleCreateProject = async (e) => {
     e.preventDefault();
 
-    if (setupStep === 'details') {
-      if (!newProject.name.trim()) {
-        setCreateError('Project name is required');
+    if (setupStep === 'git') {
+      if (!gitWorkflowMode) {
+        setCreateError('Git workflow selection is required');
         return;
       }
 
-      setCreateError('');
-      setSetupStep('git');
-      return;
+      const isCloudWorkflow = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
+
+      if (isCloudWorkflow && !gitCloudMode) {
+        setCreateError('Remote setup selection is required for cloud workflows');
+        return;
+      }
+
+      if (isCloudWorkflow && gitCloudMode === 'connect' && !gitRemoteUrl.trim()) {
+        setCreateError('Repository URL is required to connect an existing repo');
+        return;
+      }
+
+      if (gitWorkflowMode === 'custom' && !gitToken.trim()) {
+        setCreateError('Personal access token is required for a custom cloud connection');
+        return;
+      }
+
+      if (gitWorkflowMode === 'local') {
+        setCreateError('');
+        setSetupStep('details');
+        return;
+      }
+
+      const derivedName = gitCloudMode === 'create'
+        ? gitRepoName.trim()
+        : deriveRepoName(gitRemoteUrl);
+
+      if (!derivedName) {
+        setCreateError('Repository name is required to continue');
+        return;
+      }
+
+      setNewProject((prev) => ({
+        ...prev,
+        name: derivedName,
+        description: prev.description || ''
+      }));
     }
-    
-    if (!newProject.name.trim()) {
+
+    const derivedNameForValidation = gitWorkflowMode !== 'local'
+      ? (gitCloudMode === 'create' ? gitRepoName.trim() : deriveRepoName(gitRemoteUrl))
+      : '';
+    const effectiveName = derivedNameForValidation || newProject.name.trim();
+    if (!effectiveName) {
       setCreateError('Project name is required');
-      return;
-    }
-
-    if (!gitWorkflowMode) {
-      setCreateError('Git workflow selection is required');
-      return;
-    }
-
-    const isCloudWorkflow = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
-
-    if (isCloudWorkflow && !gitCloudMode) {
-      setCreateError('Remote setup selection is required for cloud workflows');
-      return;
-    }
-
-    if (isCloudWorkflow && gitCloudMode === 'connect' && !gitRemoteUrl.trim()) {
-      setCreateError('Repository URL is required to connect an existing repo');
-      return;
-    }
-
-    if (gitWorkflowMode === 'custom' && !gitToken.trim()) {
-      setCreateError('Personal access token is required for a custom cloud connection');
       return;
     }
 
@@ -463,10 +490,15 @@ const CreateProject = () => {
       const normalizedProvider = (gitWorkflowMode === 'custom' ? gitProvider : providerFromGlobal) || 'github';
       const defaultBranch = (gitSettings?.defaultBranch || 'main').trim() || 'main';
       const username = typeof gitSettings?.username === 'string' ? gitSettings.username.trim() : '';
+      const derivedName = isCloudWorkflow
+        ? (gitCloudMode === 'create' ? gitRepoName.trim() : deriveRepoName(gitRemoteUrl))
+        : '';
+      const nameForProject = derivedName || newProject.name.trim();
+      const descriptionForProject = newProject.description.trim();
 
       const postBody = {
-        name: newProject.name.trim(),
-        description: newProject.description.trim(),
+        name: nameForProject,
+        description: descriptionForProject,
         frontend: {
           language: newProject.frontend.language,
           framework: newProject.frontend.framework
@@ -531,10 +563,10 @@ const CreateProject = () => {
 
           const options = {
             provider: normalizedProvider,
-            name: (gitRepoName.trim() || newProject.name.trim()),
+            name: (gitRepoName.trim() || nameForProject),
             owner: gitRepoOwner.trim(),
             visibility: gitRepoVisibility,
-            description: newProject.description.trim()
+            description: descriptionForProject
           };
 
           if (username) {
@@ -564,11 +596,8 @@ const CreateProject = () => {
 
         const suggestion = response.data?.gitIgnoreSuggestion;
         const setupRequired = Boolean(response.data?.setupRequired);
-        const shouldPromptGitIgnore = isConnectExisting
-          && setupRequired
-          && suggestion?.needed
-          && Array.isArray(suggestion.entries)
-          && suggestion.entries.length > 0;
+        const shouldPromptGitIgnore = setupRequired
+          && suggestion?.needed;
 
         if (shouldPromptGitIgnore) {
           setGitIgnoreSuggestion({
@@ -604,7 +633,7 @@ const CreateProject = () => {
     setProcesses(null);
     setGitIgnoreSuggestion(null);
     setGitIgnoreStatus({ state: 'idle', error: '' });
-    setSetupStep('details');
+    setSetupStep('git');
     setNewProject({
       name: '',
       description: '',
@@ -630,7 +659,7 @@ const CreateProject = () => {
 
   const handleBackToDetails = () => {
     setCreateError('');
-    setSetupStep('details');
+    setSetupStep('git');
   };
 
   const runPostCloneSetup = async (projectId) => {
@@ -639,11 +668,23 @@ const CreateProject = () => {
     }
 
     setGitIgnoreStatus({ state: 'working', error: '' });
-    setProgress((prev) => ({
-      ...prev,
-      status: 'in-progress',
-      statusMessage: 'Installing dependencies...'
-    }));
+    setProgress((prev) => {
+      const existingSteps = Array.isArray(prev?.steps) && prev.steps.length > 0
+        ? prev.steps
+        : buildProgressSteps(false);
+
+      const updatedSteps = existingSteps.map((step, index) => ({
+        ...step,
+        completed: index < 3
+      }));
+
+      return {
+        ...prev,
+        steps: updatedSteps,
+        status: 'in-progress',
+        statusMessage: 'Installing dependencies...'
+      };
+    });
 
     const response = await axios.post(`/api/projects/${projectId}/setup`);
 
@@ -657,12 +698,17 @@ const CreateProject = () => {
 
     setProgress((prev) => ({
       ...prev,
+      steps: buildProgressSteps(true),
       completion: 100,
       status: 'completed',
       statusMessage: response.data.message || 'Project setup completed'
     }));
 
     setGitIgnoreStatus({ state: 'done', error: '' });
+    setGitIgnoreSuggestion(null);
+    setTimeout(() => {
+      showMain();
+    }, 2000);
   };
 
   const handleApplyGitIgnore = async () => {
@@ -753,6 +799,21 @@ const CreateProject = () => {
   };
 
   const isProgressBlocking = Boolean(progress && progress.status !== 'failed');
+  const isCloudWorkflowUi = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
+  const derivedRepoNameForSummary = isCloudWorkflowUi
+    ? (gitCloudMode === 'create' ? gitRepoName.trim() : deriveRepoName(gitRemoteUrl))
+    : '';
+  const shouldShowGitSummary =
+    isCloudWorkflowUi &&
+    gitCloudMode === 'connect' &&
+    Boolean(gitRemoteUrl.trim());
+  const gitSummaryItems = shouldShowGitSummary
+    ? [
+        { label: 'Repo name', value: derivedRepoNameForSummary || '(not set)' },
+        { label: 'Remote', value: gitCloudMode === 'connect' ? (gitRemoteUrl.trim() || '(not set)') : 'New repo' },
+        { label: 'Provider', value: (gitWorkflowMode === 'custom' ? gitProvider : (gitSettings?.provider || 'github')) }
+      ]
+    : [];
 
   return (
     <div className="create-project-view">
@@ -789,15 +850,15 @@ const CreateProject = () => {
                 <p>Backend running on: <a href={`http://localhost:${processes.backend.port}`} target="_blank" rel="noopener noreferrer">http://localhost:{processes.backend.port}</a></p>
               </div>
             )}
-            {gitIgnoreSuggestion && (
+            {gitIgnoreSuggestion && gitIgnoreStatus.state !== 'working' && (
               <div className="gitignore-suggestion">
-                <h5>Keep your working tree clean</h5>
+                <h5>This repo is missing information in it's .gitignore file which will result in issues when used with Lucid Coder.</h5>
                 <p>
-                  Before installing dependencies, we need your approval to keep the working tree clean.
+                  If you want to continue, we can fix this issue automatically.
                 </p>
                 {gitIgnoreSuggestion.entries.length > 0 && (
                   <p>
-                    Add these entries to .gitignore and commit the change before installs run:
+                    Suggested entries:
                   </p>
                 )}
                 <ul>
@@ -816,9 +877,6 @@ const CreateProject = () => {
                     Detected: {gitIgnoreSuggestion.samplePaths.join(', ')}
                   </p>
                 )}
-                <p className="gitignore-sample">
-                  Skipping will continue setup without updating .gitignore and may leave the working tree dirty.
-                </p>
                 {gitIgnoreStatus.state === 'error' && (
                   <div className="gitignore-error">{gitIgnoreStatus.error}</div>
                 )}
@@ -831,7 +889,7 @@ const CreateProject = () => {
                         onClick={handleApplyGitIgnore}
                         disabled={gitIgnoreStatus.state === 'working'}
                       >
-                        {gitIgnoreStatus.state === 'working' ? 'Applying...' : 'Apply & Commit'}
+                        {gitIgnoreStatus.state === 'working' ? 'Fixing...' : 'Fix Issue'}
                       </button>
                       <button
                         type="button"
@@ -839,7 +897,7 @@ const CreateProject = () => {
                         onClick={handleSkipGitIgnore}
                         disabled={gitIgnoreStatus.state === 'working'}
                       >
-                        Skip for now
+                        Cancel Installation
                       </button>
                     </>
                   ) : (
@@ -1182,6 +1240,18 @@ const CreateProject = () => {
                     </div>
                   </div>
                 )}
+
+                {shouldShowGitSummary && gitSummaryItems.length > 0 && (
+                  <div className="git-summary-card">
+                    <h4>Derived from repo</h4>
+                    {gitSummaryItems.map((item) => (
+                      <div className="git-summary-row" key={item.label}>
+                        <span className="git-summary-label">{item.label}</span>
+                        <span className="git-summary-value">{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1201,7 +1271,7 @@ const CreateProject = () => {
                 Cancel
               </button>
 
-              {setupStep === 'git' && (
+              {setupStep === 'details' && (
                 <button
                   type="button"
                   onClick={handleBackToDetails}
@@ -1217,8 +1287,8 @@ const CreateProject = () => {
                 className="git-settings-button primary"
                 disabled={createLoading}
               >
-                {setupStep === 'details'
-                  ? 'Next'
+                {setupStep === 'git'
+                  ? (gitWorkflowMode === 'local' ? 'Next' : (createLoading ? 'Creating Project...' : 'Create Project'))
                   : (createLoading ? 'Creating Project...' : 'Create Project')}
               </button>
             </div>

@@ -97,9 +97,14 @@ const ProjectSelector = () => {
     setCleanupRetryStatus({ state: 'working', error: '' });
 
     try {
+      const targets = Array.isArray(cleanupWarning?.failures)
+        ? cleanupWarning.failures
+            .map((failure) => failure?.target)
+            .filter(Boolean)
+        : [];
       const response = await axios.post(
         `/api/projects/${cleanupWarning.projectId}/cleanup`,
-        {},
+        { targets },
         { headers: { 'x-confirm-destructive': 'true' } }
       );
 

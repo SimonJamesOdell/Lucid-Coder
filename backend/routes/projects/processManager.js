@@ -414,6 +414,42 @@ export const findPidsByPort = async (port) => {
 
 export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const waitForPidExit = async (pid, { timeoutMs = 5000, intervalMs = 200 } = {}) => {
+  const numericPid = Number(pid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) {
+    return true;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidActive(numericPid)) {
+      return true;
+    }
+    await delay(intervalMs);
+  }
+
+  return !isPidActive(numericPid);
+};
+
+const terminatePidWithRetry = async (pid, { attempts = 3, waitForExitMs = 2500 } = {}) => {
+  const numericPid = Number(pid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) {
+    return true;
+  }
+  if (isProtectedPid(numericPid)) {
+    return false;
+  }
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await killProcessTree(numericPid, { forceDelay: Math.min(1000, Math.max(250, Math.round(waitForExitMs / 4))) });
+    if (await waitForPidExit(numericPid, { timeoutMs: waitForExitMs })) {
+      return true;
+    }
+  }
+
+  return !isPidActive(numericPid);
+};
+
 export const killProcessTree = async (pid, { forceDelay = 1000 } = {}) => {
   const numericPid = Number(pid);
   if (!Number.isInteger(numericPid) || numericPid <= 0) {
@@ -493,6 +529,42 @@ export const ensurePortsFreed = async (ports = [], { killFn = killProcessesOnPor
     }
     await killFn(port);
   }
+};
+
+const waitForPortsToFree = async (ports = [], { timeoutMs = 6000, intervalMs = 250 } = {}) => {
+  const uniquePorts = [...new Set(ports)].filter((port) => Number.isInteger(port));
+  if (!uniquePorts.length) {
+    return true;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let hasBusyPort = false;
+
+    for (const port of uniquePorts) {
+      if (isReservedHostPort(port)) {
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const pids = await findPidsByPort(port);
+      const eligible = pids.filter((pid) => !isProtectedPid(pid));
+      if (eligible.length > 0) {
+        hasBusyPort = true;
+        for (const pid of eligible) {
+          // eslint-disable-next-line no-await-in-loop
+          await terminatePidWithRetry(pid, { attempts: 2, waitForExitMs: intervalMs * 4 });
+        }
+      }
+    }
+
+    if (!hasBusyPort) {
+      return true;
+    }
+
+    await delay(intervalMs);
+  }
+
+  return false;
 };
 
 export const isPidActive = (pid) => {
@@ -671,7 +743,8 @@ export const terminateRunningProcesses = async (projectId, options = {}) => {
       if (!proc || !proc.pid) {
         return Promise.resolve();
       }
-      return killProcessTree(proc.pid);
+      const waitForExitMs = options.waitForRelease ? (options.releaseDelay ?? 2000) : 800;
+      return terminatePidWithRetry(proc.pid, { waitForExitMs });
     };
 
     if (requestedTarget) {
@@ -729,6 +802,9 @@ export const terminateRunningProcesses = async (projectId, options = {}) => {
 
   if (shouldReleasePorts && portsToFree.length) {
     await ensurePortsFreed(portsToFree);
+    if (options.waitForRelease) {
+      await waitForPortsToFree(portsToFree, { timeoutMs: 8000 });
+    }
   }
 
   return {

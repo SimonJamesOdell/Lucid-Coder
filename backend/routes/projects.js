@@ -40,6 +40,7 @@ import {
   getProgressSnapshot
 } from '../services/progressTracker.js';
 import {
+  addCleanupTarget,
   buildCleanupTargets,
   cleanupDirectoryExecutor
 } from './projects/cleanup.js';
@@ -1224,7 +1225,8 @@ router.delete('/:id', async (req, res) => {
       project,
       waitForRelease: true,
       releaseDelay: process.env.NODE_ENV === 'test' ? 50 : 2000,
-      dropEntry: true
+      dropEntry: true,
+      forcePorts: true
     });
     
     // Delete from database
@@ -1321,8 +1323,14 @@ router.post('/:id/cleanup', async (req, res) => {
   try {
     const { id } = req.params;
     const project = await findProjectByIdentifier(id);
+    const requestedTargets = Array.isArray(req.body?.targets) ? req.body.targets : [];
+    const manualTargets = new Set();
+    for (const target of requestedTargets) {
+      addCleanupTarget(manualTargets, target);
+    }
+    const hasManualTargets = manualTargets.size > 0;
 
-    if (!project) {
+    if (!project && !hasManualTargets) {
       return res.status(404).json({
         success: false,
         error: 'Project not found'
@@ -1333,7 +1341,15 @@ router.post('/:id/cleanup', async (req, res) => {
       return;
     }
 
-    const cleanupTargets = buildCleanupTargets(project);
+    const cleanupTargets = hasManualTargets
+      ? [...manualTargets].sort((a, b) => b.length - a.length)
+      : buildCleanupTargets(project);
+    if (!cleanupTargets.length) {
+      return res.status(400).json({
+        success: false,
+        error: 'No cleanup targets available'
+      });
+    }
     const fs = await getFsModule();
     const cleanupFailures = [];
 
