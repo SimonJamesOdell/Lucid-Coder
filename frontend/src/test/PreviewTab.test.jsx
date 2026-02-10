@@ -1681,6 +1681,20 @@ describe('PreviewTab', () => {
     expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(true);
   });
 
+  test('detects proxy placeholder by "Preview starting" title', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    Object.defineProperty(iframe, 'contentDocument', {
+      configurable: true,
+      value: { title: 'Preview starting', querySelector: vi.fn() }
+    });
+    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+
+    expect(previewRef.current.__testHooks.isProxyPlaceholderPageForTests()).toBe(true);
+  });
+
   test('Copy selector uses navigator.clipboard when available', async () => {
     const processInfo = buildProcessInfo();
     const { previewRef } = renderPreviewTab({ processInfo });
@@ -2279,28 +2293,37 @@ describe('PreviewTab', () => {
   });
 
   test('escalates repeated proxy placeholder loads into an actionable error view', () => {
-    const processInfo = buildProcessInfo();
-    const { previewRef } = renderPreviewTab({ processInfo });
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
 
-    const fakeIframe = {
-      contentDocument: {
-        title: 'Preview proxy error',
-        querySelector: vi.fn(() => ({ textContent: 'ECONNREFUSED' }))
-      }
-    };
-    previewRef.current.__testHooks.setIframeNodeForTests(fakeIframe);
+      const fakeIframe = {
+        contentWindow: { postMessage: vi.fn(), stop: vi.fn() },
+        contentDocument: {
+          title: 'Preview proxy error',
+          querySelector: vi.fn(() => ({ textContent: 'ECONNREFUSED' }))
+        }
+      };
+      previewRef.current.__testHooks.setIframeNodeForTests(fakeIframe);
 
-    act(() => {
-      for (let i = 0; i < 13; i += 1) {
+      act(() => {
         previewRef.current.__testHooks.triggerIframeLoad();
-      }
-    });
+      });
 
-    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Ask AI to fix' })).toBeInTheDocument();
+      // Advance past the 10 s placeholder escalation timeout
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Fix with AI' })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  test('Ask AI button dispatches a prefill-chat event', () => {
+  test('Fix with AI button dispatches a run-prompt event', () => {
     const processInfo = buildProcessInfo();
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
 
@@ -2314,13 +2337,13 @@ describe('PreviewTab', () => {
     });
 
     act(() => {
-      fireEvent.click(screen.getByRole('button', { name: 'Ask AI to fix' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Fix with AI' }));
     });
 
     expect(dispatchSpy).toHaveBeenCalled();
-    const call = dispatchSpy.mock.calls.find((args) => args?.[0]?.type === 'lucidcoder:prefill-chat');
+    const call = dispatchSpy.mock.calls.find((args) => args?.[0]?.type === 'lucidcoder:run-prompt');
     expect(call).toEqual(expect.any(Array));
-    expect(call[0]).toEqual(expect.objectContaining({ type: 'lucidcoder:prefill-chat' }));
+    expect(call[0]).toEqual(expect.objectContaining({ type: 'lucidcoder:run-prompt' }));
 
     dispatchSpy.mockRestore();
   });
@@ -2360,12 +2383,12 @@ describe('PreviewTab', () => {
     });
 
     act(() => {
-      fireEvent.click(screen.getByRole('button', { name: 'Ask AI to fix' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Fix with AI' }));
     });
 
-    const call = dispatchSpy.mock.calls.find((args) => args?.[0]?.type === 'lucidcoder:prefill-chat');
+    const call = dispatchSpy.mock.calls.find((args) => args?.[0]?.type === 'lucidcoder:run-prompt');
     expect(call).toEqual(expect.any(Array));
-    expect(call[0]).toEqual(expect.objectContaining({ type: 'lucidcoder:prefill-chat' }));
+    expect(call[0]).toEqual(expect.objectContaining({ type: 'lucidcoder:run-prompt' }));
     const prompt = call[0].detail?.prompt || '';
     expect(prompt).toContain('Frontend logs (tail):');
     expect(prompt).toContain('2026-01-25T00:00:00.000Z stderr frontend boom');
@@ -2391,14 +2414,14 @@ describe('PreviewTab', () => {
       });
 
       expect(() => {
-        fireEvent.click(screen.getByRole('button', { name: 'Ask AI to fix' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Fix with AI' }));
       }).not.toThrow();
     } finally {
       window.dispatchEvent = originalDispatch;
     }
   });
 
-  test('Ask AI swallows dispatch exceptions', () => {
+  test('Fix with AI swallows dispatch exceptions', () => {
     const originalDispatch = window.dispatchEvent;
     window.dispatchEvent = vi.fn(() => {
       throw new Error('boom');
@@ -2416,7 +2439,7 @@ describe('PreviewTab', () => {
       });
 
       expect(() => {
-        fireEvent.click(screen.getByRole('button', { name: 'Ask AI to fix' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Fix with AI' }));
       }).not.toThrow();
 
       expect(window.dispatchEvent).toHaveBeenCalled();
@@ -2455,26 +2478,35 @@ describe('PreviewTab', () => {
   });
 
   test('escalation ignores placeholder document read errors', () => {
-    const processInfo = buildProcessInfo();
-    const { previewRef } = renderPreviewTab({ processInfo });
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
 
-    const fakeIframe = {
-      contentDocument: {
-        title: 'Preview proxy error',
-        querySelector: () => {
-          throw new Error('boom');
+      const fakeIframe = {
+        contentWindow: { postMessage: vi.fn(), stop: vi.fn() },
+        contentDocument: {
+          title: 'Preview proxy error',
+          querySelector: () => {
+            throw new Error('boom');
+          }
         }
-      }
-    };
-    previewRef.current.__testHooks.setIframeNodeForTests(fakeIframe);
+      };
+      previewRef.current.__testHooks.setIframeNodeForTests(fakeIframe);
 
-    act(() => {
-      for (let i = 0; i < 13; i += 1) {
+      act(() => {
         previewRef.current.__testHooks.triggerIframeLoad();
-      }
-    });
+      });
 
-    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+      // Advance past the 10 s placeholder escalation timeout
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('renders frontend and backend logs in the error view when available', () => {
@@ -2509,18 +2541,17 @@ describe('PreviewTab', () => {
     expect(screen.getByText('backend error: listen EADDRINUSE')).toBeInTheDocument();
   });
 
-  test('setErrorGracePeriod handles non-finite values', () => {
+  test('setErrorGracePeriod is a no-op in the new state machine', () => {
     const processInfo = buildProcessInfo();
     const { previewRef } = renderPreviewTab({ processInfo });
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(5000);
 
+    // The grace period API still exists as a no-op for backwards compat.
+    // getErrorGraceUntilForTests always returns 0.
     act(() => {
       previewRef.current.__testHooks.setErrorGracePeriodForTests(Number.NaN);
     });
 
-    expect(previewRef.current.__testHooks.getErrorGraceUntilForTests()).toBe(5000);
-
-    nowSpy.mockRestore();
+    expect(previewRef.current.__testHooks.getErrorGraceUntilForTests()).toBe(0);
   });
 
   test('clears error confirmation timeout on unmount', () => {
@@ -2621,20 +2652,13 @@ describe('PreviewTab', () => {
       const processInfo = buildProcessInfo();
       const { previewRef } = renderPreviewTab({ processInfo });
 
-      act(() => {
-        previewRef.current.__testHooks.setHasConfirmedPreviewForTests(true);
-      });
-
       await act(async () => {
         previewRef.current.__testHooks.triggerIframeError();
       });
 
+      // Advance past the 1.2 s error confirmation delay
       await act(async () => {
         vi.advanceTimersByTime(1200);
-      });
-
-      act(() => {
-        previewRef.current.__testHooks.setHasConfirmedPreviewForTests(true);
       });
 
       expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
@@ -2728,7 +2752,7 @@ describe('PreviewTab', () => {
 
       expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Ask AI to fix' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Fix with AI' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Try localhost' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Try 127.0.0.1' })).toBeNull();
     } finally {
@@ -2744,33 +2768,41 @@ describe('PreviewTab', () => {
   });
 
   test('error view shows proxy placeholder failure details after escalation', async () => {
-    const processInfo = buildProcessInfo();
-    const { previewRef } = renderPreviewTab({ processInfo });
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
 
-    const iframe = screen.getByTestId('preview-iframe');
-    const codeNode = { textContent: 'ECONNREFUSED 127.0.0.1:5555' };
-    Object.defineProperty(iframe, 'contentDocument', {
-      configurable: true,
-      value: {
-        title: 'Preview proxy error',
-        querySelector: vi.fn(() => codeNode)
-      }
-    });
-    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+      const iframe = screen.getByTestId('preview-iframe');
+      const codeNode = { textContent: 'ECONNREFUSED 127.0.0.1:5555' };
+      Object.defineProperty(iframe, 'contentDocument', {
+        configurable: true,
+        value: {
+          title: 'Preview proxy error',
+          querySelector: vi.fn(() => codeNode)
+        }
+      });
+      Object.defineProperty(iframe, 'contentWindow', {
+        configurable: true,
+        value: { postMessage: vi.fn(), stop: vi.fn() }
+      });
+      previewRef.current.__testHooks.setIframeNodeForTests(iframe);
 
-    act(() => {
-      // Trigger enough placeholder loads to escalate immediately.
-      for (let i = 0; i < 13; i += 1) {
+      act(() => {
         previewRef.current.__testHooks.triggerIframeLoad();
-      }
-    });
+      });
 
-    await waitFor(() => {
+      // Advance past the 10 s placeholder escalation timeout
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
       expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText(/Preview proxy error/i)).toBeInTheDocument();
-    expect(screen.getByText(/ECONNREFUSED 127\.0\.0\.1:5555/i)).toBeInTheDocument();
+      expect(screen.getByText(/Preview proxy error/i)).toBeInTheDocument();
+      expect(screen.getByText(/ECONNREFUSED 127\.0\.0\.1:5555/i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('error view uses "Details" label when failure details have no title', () => {
@@ -3510,20 +3542,21 @@ describe('PreviewTab', () => {
     }
   });
 
-  test('proxy placeholder load re-arms the load timeout and eventually schedules error confirmation', () => {
+  test('proxy placeholder load starts a 10s escalation timeout that triggers error', () => {
     vi.useFakeTimers();
     try {
       const processInfo = buildProcessInfo();
       const { previewRef } = renderPreviewTab({ processInfo });
       const hooks = previewRef.current.__testHooks;
 
-      // Set up a proxy placeholder page that does NOT exceed the escalation threshold
+      // Set up a proxy placeholder page
       const fakeIframe = {
+        contentWindow: { postMessage: vi.fn(), stop: vi.fn() },
         contentDocument: { title: 'Preview proxy error', querySelector: vi.fn() }
       };
       hooks.setIframeNodeForTests(fakeIframe);
 
-      // First placeholder load (non-escalated) — should keep loading and re-arm timeout
+      // First placeholder load — should keep loading and start escalation timeout
       act(() => {
         hooks.triggerIframeLoad();
       });
@@ -3531,14 +3564,9 @@ describe('PreviewTab', () => {
       // Should NOT show error yet (placeholder just started)
       expect(screen.queryByText('Failed to load preview')).toBeNull();
 
-      // Advance past the 8 s load timeout that was re-armed by the placeholder handler
+      // Advance past the 10 s placeholder escalation timeout
       act(() => {
-        vi.advanceTimersByTime(8000);
-      });
-
-      // Now advance past the error confirmation delay (typically ~1200 ms)
-      act(() => {
-        vi.advanceTimersByTime(1200);
+        vi.advanceTimersByTime(10000);
       });
 
       // The error should now be confirmed
@@ -3699,6 +3727,452 @@ describe('PreviewTab', () => {
 
       // Only a single soft reload should have fired
       expect(reloadFn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('softReloadIframe falls back to hard reload when iframe is missing', () => {
+    const processInfo = buildProcessInfo();
+    const idleInfo = buildProcessInfo({
+      processes: { frontend: { status: 'idle' } }
+    });
+    const { previewRef, rerender, props } = renderPreviewTab({ processInfo });
+
+    rerender(
+      <PreviewTab
+        ref={previewRef}
+        {...props}
+        processInfo={idleInfo}
+        isProjectStopped
+      />
+    );
+
+    previewRef.current.__testHooks.setIframeNodeForTests(null);
+
+    const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+    act(() => {
+      previewRef.current.__testHooks.softReloadIframeForTests();
+    });
+
+    return waitFor(() => {
+      expect(previewRef.current.__testHooks.getIframeKey()).toBe(keyBefore + 1);
+    });
+  });
+
+  test('auto-recovery timeout is cleared after a successful load', async () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+      const hooks = previewRef.current.__testHooks;
+
+      act(() => {
+        hooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      await act(async () => {});
+
+      const fakeIframe = {
+        contentWindow: { postMessage: vi.fn(), location: { href: 'http://localhost:5555/' } },
+        contentDocument: null
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      act(() => {
+        hooks.triggerIframeLoad();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(onRefreshProcessStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('successful load clears scheduled auto-recovery timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+      const hooks = previewRef.current.__testHooks;
+
+      act(() => {
+        hooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      await act(async () => {});
+
+      const fakeIframe = {
+        contentWindow: { postMessage: vi.fn(), location: { href: 'http://localhost:5555/' } },
+        contentDocument: null
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      act(() => {
+        hooks.triggerIframeLoad();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(onRefreshProcessStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('auto-recovery does not schedule duplicate timeouts', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+      const hooks = previewRef.current.__testHooks;
+
+      act(() => {
+        hooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        hooks.setErrorStateForTests({ error: false, loading: true, pending: false });
+      });
+
+      act(() => {
+        hooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(onRefreshProcessStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('setHasConfirmedPreviewForTests clears ready state when false', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+    const hooks = previewRef.current.__testHooks;
+
+    act(() => {
+      hooks.setPreviewUrlOverride('http://localhost:5000/preview/123');
+      hooks.setHasConfirmedPreviewForTests(true);
+    });
+
+    const iframe = screen.getByTestId('preview-iframe');
+    expect(iframe.className).not.toContain('full-iframe--loading');
+
+    act(() => {
+      previewRef.current.__testHooks.setHasConfirmedPreviewForTests(false);
+    });
+
+    expect(screen.getByTestId('preview-iframe').className).toContain('full-iframe--loading');
+  });
+
+  test('stopIframeContent replaces placeholder document content', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const iframe = {
+      contentWindow: { postMessage: vi.fn(), stop: vi.fn() },
+      contentDocument: {
+        title: 'Preview proxy error',
+        querySelector: vi.fn(),
+        open: vi.fn(),
+        write: vi.fn(),
+        close: vi.fn()
+      }
+    };
+
+    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+
+    act(() => {
+      previewRef.current.__testHooks.triggerIframeLoad();
+    });
+
+    expect(iframe.contentDocument.open).toHaveBeenCalled();
+    expect(iframe.contentDocument.write).toHaveBeenCalled();
+    expect(iframe.contentDocument.close).toHaveBeenCalled();
+  });
+
+  test('suppresses synthetic load after placeholder stop', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+    const iframe = screen.getByTestId('preview-iframe');
+
+    Object.defineProperty(iframe, 'contentDocument', {
+      configurable: true,
+      value: {
+        title: 'Preview proxy error',
+        querySelector: vi.fn(),
+        open: vi.fn(),
+        write: vi.fn(),
+        close: vi.fn()
+      }
+    });
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      value: { postMessage: vi.fn(), stop: vi.fn() }
+    });
+
+    previewRef.current.__testHooks.setIframeNodeForTests(iframe);
+
+    act(() => {
+      previewRef.current.__testHooks.triggerIframeLoad();
+    });
+
+    expect(screen.getByTestId('preview-stuck-actions')).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.load(iframe);
+    });
+
+    expect(screen.getByTestId('preview-stuck-actions')).toBeInTheDocument();
+  });
+
+  test('setPlaceholderCountersForTests accepts firstSeen values', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+    const hooks = previewRef.current.__testHooks;
+
+    act(() => {
+      hooks.setPlaceholderCountersForTests({ firstSeen: 123 });
+    });
+  });
+
+  test('flags isPlaceholderDetected after first proxy placeholder load', async () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+      const hooks = previewRef.current.__testHooks;
+
+      // Simulate a proxy placeholder page
+      const fakeIframe = {
+        contentWindow: { postMessage: vi.fn(), stop: vi.fn() },
+        contentDocument: { title: 'Preview proxy error', querySelector: vi.fn() }
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      act(() => {
+        hooks.triggerIframeLoad();
+      });
+
+      // After the first placeholder load, isPlaceholderDetected should be true
+      // and the loading overlay should show the stuck UI with action buttons.
+      expect(screen.getByTestId('preview-stuck-actions')).toBeInTheDocument();
+      expect(screen.getByText('Preview is not loading')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('loading overlay shows "Fix with AI" and "Retry" when stuck in placeholder loop', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+      const hooks = previewRef.current.__testHooks;
+
+      // Put the component into a loading + stuck state
+      act(() => {
+        hooks.setErrorStateForTests({ error: false, loading: true, pending: false });
+        hooks.setStuckInPlaceholderLoopForTests(true);
+      });
+
+      expect(screen.getByText('Preview is not loading')).toBeInTheDocument();
+
+      const stuckActions = screen.getByTestId('preview-stuck-actions');
+      expect(stuckActions).toBeInTheDocument();
+
+      const retryBtn = stuckActions.querySelector('button');
+      expect(retryBtn).toHaveTextContent('Retry');
+
+      const fixBtn = stuckActions.querySelectorAll('button')[1];
+      expect(fixBtn).toHaveTextContent('Fix with AI');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('loading overlay hides swoosh when stuck in placeholder loop', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: false, loading: true, pending: false });
+        previewRef.current.__testHooks.setStuckInPlaceholderLoopForTests(true);
+      });
+
+      // The loading bar swoosh should not be rendered when stuck
+      const loadingOverlay = screen.getByTestId('preview-loading');
+      expect(loadingOverlay.querySelector('.preview-loading-bar')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('Retry in stuck loading overlay reloads the iframe', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: false, loading: true, pending: false });
+        previewRef.current.__testHooks.setStuckInPlaceholderLoopForTests(true);
+      });
+
+      const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      });
+
+      // reloadIframe increments the key and clears the stuck state
+      expect(previewRef.current.__testHooks.getIframeKey()).toBeGreaterThan(keyBefore);
+      expect(previewRef.current.__testHooks.getStuckInPlaceholderLoopForTests()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('Fix with AI button in loading overlay dispatches run-prompt event', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+      const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+      act(() => {
+        previewRef.current.__testHooks.setErrorStateForTests({ error: false, loading: true, pending: false });
+        previewRef.current.__testHooks.setStuckInPlaceholderLoopForTests(true);
+      });
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: 'Fix with AI' }));
+      });
+
+      const chatEvent = dispatchSpy.mock.calls.find(
+        ([event]) => event.type === 'lucidcoder:run-prompt'
+      );
+      expect(chatEvent).toBeTruthy();
+      expect(chatEvent[0].detail.prompt).toContain('preview is failing to load');
+
+      dispatchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('isPlaceholderDetected is cleared on successful iframe load', async () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+      const hooks = previewRef.current.__testHooks;
+
+      // Put into a loading + stuck state so the stuck UI is visible
+      act(() => {
+        hooks.setErrorStateForTests({ error: false, loading: true, pending: false });
+        hooks.setStuckInPlaceholderLoopForTests(true);
+      });
+
+      // Verify the stuck UI is rendered
+      expect(screen.getByTestId('preview-stuck-actions')).toBeInTheDocument();
+
+      // Simulate a non-placeholder page loading (successful load).
+      // Use null contentDocument so isLucidCoderProxyPlaceholderPage returns false.
+      const fakeIframe = {
+        contentWindow: { postMessage: vi.fn(), location: { href: 'http://localhost:5555/' } },
+        contentDocument: null
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      act(() => {
+        hooks.triggerIframeLoad();
+      });
+
+      // After a successful load, the stuck actions should disappear
+      expect(screen.queryByTestId('preview-stuck-actions')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('escalation calls window.stop on iframe to break the reload loop', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+      const hooks = previewRef.current.__testHooks;
+
+      const stopFn = vi.fn();
+      const fakeIframe = {
+        contentWindow: { postMessage: vi.fn(), stop: stopFn },
+        contentDocument: { title: 'Preview proxy error', querySelector: vi.fn() }
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      act(() => {
+        hooks.triggerIframeLoad();
+      });
+
+      // window.stop is called immediately on each placeholder load
+      // to halt the placeholder's built-in reload script.
+      expect(stopFn).toHaveBeenCalled();
+
+      // Advance past the 10 s placeholder escalation timeout
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      // Should transition to the error state
+      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('escalation handles cross-origin error on window.stop gracefully', () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const { previewRef } = renderPreviewTab({ processInfo });
+      const hooks = previewRef.current.__testHooks;
+
+      const fakeIframe = {
+        contentWindow: {
+          postMessage: vi.fn(),
+          get stop() { throw new Error('cross-origin'); }
+        },
+        contentDocument: { title: 'Preview proxy error', querySelector: vi.fn() }
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      // Should not throw
+      act(() => {
+        hooks.triggerIframeLoad();
+      });
+
+      // Advance past the 10 s placeholder escalation timeout
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

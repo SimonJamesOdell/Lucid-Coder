@@ -44,6 +44,8 @@ import {
   fetchProjectGitStatus as fetchProjectGitStatusAction,
   fetchProjectGitRemote as fetchProjectGitRemoteAction,
   pullProjectGitRemote as pullProjectGitRemoteAction,
+  stashProjectGitChanges as stashProjectGitChangesAction,
+  discardProjectGitChanges as discardProjectGitChangesAction,
   fetchProjectBranchesOverview as fetchProjectBranchesOverviewAction,
   checkoutProjectBranch as checkoutProjectBranchAction,
   updateGitSettings as updateGitSettingsAction,
@@ -610,8 +612,36 @@ export const AppStateProvider = ({ children }) => {
   );
 
   const pullProjectGitRemote = useCallback(
+    async (projectId, options = {}) => {
+      const result = await pullProjectGitRemoteAction({ projectId, trackedFetch, ...options });
+      if (projectId && result?.status) {
+        setProjectGitStatus((prev) => ({
+          ...prev,
+          [projectId]: result.status
+        }));
+      }
+      return result;
+    },
+    [trackedFetch]
+  );
+
+  const stashProjectGitChanges = useCallback(
     async (projectId) => {
-      const result = await pullProjectGitRemoteAction({ projectId, trackedFetch });
+      const result = await stashProjectGitChangesAction({ projectId, trackedFetch });
+      if (projectId && result?.status) {
+        setProjectGitStatus((prev) => ({
+          ...prev,
+          [projectId]: result.status
+        }));
+      }
+      return result;
+    },
+    [trackedFetch]
+  );
+
+  const discardProjectGitChanges = useCallback(
+    async (projectId, options = {}) => {
+      const result = await discardProjectGitChangesAction({ projectId, trackedFetch, ...options });
       if (projectId && result?.status) {
         setProjectGitStatus((prev) => ({
           ...prev,
@@ -1286,6 +1316,8 @@ export const AppStateProvider = ({ children }) => {
     fetchProjectGitStatus,
     fetchProjectGitRemote,
     pullProjectGitRemote,
+    stashProjectGitChanges,
+    discardProjectGitChanges,
     fetchProjectBranchesOverview,
     checkoutProjectBranch,
     createProjectRemoteRepository,

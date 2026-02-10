@@ -31,6 +31,7 @@ const FilesTab = ({
     clearEditorFocusRequest
   } = useAppState();
   const projectId = project?.id;
+  const projectPath = typeof project?.path === 'string' ? project.path.trim() : '';
   const getFileExplorerStateRef = useRef(getFileExplorerState);
   const initialExplorerState = projectId ? getFileExplorerState?.(projectId) : null;
   const [fileTree, setFileTree] = useState([]);
@@ -1133,7 +1134,11 @@ const FilesTab = ({
         style={{ width: `${explorerWidth}px` }}
       >
         <div className="file-tree-header">
-          <h4>Explorer</h4>
+          {projectPath ? (
+            <p className="file-tree-path" title={projectPath}>
+              {projectPath}
+            </p>
+          ) : null}
         </div>
         <div
           className="file-tree-content"

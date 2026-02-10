@@ -369,6 +369,12 @@ describe('git helpers', () => {
     expect(await git.commitAllChanges('/repo', 'noop')).toBe(false);
   });
 
+  test('commitAllChanges returns false when empty commit message is on stdout', async () => {
+    queueSpawnResult({ code: 0 });
+    queueSpawnResult({ stdout: 'nothing to commit, working tree clean', stderr: '', code: 1 });
+    expect(await git.commitAllChanges('/repo', 'noop')).toBe(false);
+  });
+
   test('commitAllChanges rethrows unexpected commit failures', async () => {
     queueSpawnResult({ code: 0 });
     queueSpawnResult({ stderr: 'fatal error', code: 1 });

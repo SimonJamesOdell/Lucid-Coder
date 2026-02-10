@@ -54,6 +54,16 @@ const deleteDirWithRetries = async (dirPath, { retries = 50, delayMs = 100 } = {
   }
 };
 
+const cleanupDir = async (root) => {
+  let entries;
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return; // directory doesn't exist or inaccessible
+  }
+  return entries;
+};
+
 const cleanupWorkerArtifacts = async () => {
   const backendRoot = path.join(__dirname, '..');
 
@@ -131,6 +141,32 @@ const cleanupWorkerArtifacts = async () => {
 
   // Allow thread-mode test runs to perform fresh startup cleanup.
   await deleteFileWithRetries(path.join(backendRoot, '.vitest-threads-setup.lock'));
+
+  // ── Workspace-root sweep ────────────────────────────────────────────
+  // When vitest is launched from the workspace root (one level above backend/),
+  // tests that resolve paths via process.cwd() will drop artifacts there instead
+  // of under backend/. Run the same patterns against the workspace root.
+  const workspaceRoot = path.join(backendRoot, '..');
+  const rootEntries = await cleanupDir(workspaceRoot);
+  if (rootEntries) {
+    const rootTempDirs = rootEntries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter(
+        (name) =>
+          knownTempDirNames.has(name) ||
+          /^test-runtime-projects\./i.test(name) ||
+          /^integration-project-/i.test(name) ||
+          /^test-project-diff(?:-content|-resolved)?-/i.test(name) ||
+          /^test-project-files-ops-/i.test(name) ||
+          /^outside-(?:coverage-)?\d+$/i.test(name)
+      )
+      .map((name) => path.join(workspaceRoot, name));
+
+    for (const dirPath of rootTempDirs) {
+      await deleteDirWithRetries(dirPath);
+    }
+  }
 };
 
 export default async function globalSetupCleanup() {

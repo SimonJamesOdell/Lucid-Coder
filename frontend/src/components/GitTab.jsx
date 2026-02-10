@@ -57,6 +57,8 @@ const GitTab = () => {
     fetchProjectGitStatus,
     fetchProjectGitRemote,
     pullProjectGitRemote,
+    stashProjectGitChanges,
+    discardProjectGitChanges,
     fetchProjectBranchesOverview,
     checkoutProjectBranch,
     updateProjectGitSettings,
@@ -75,6 +77,8 @@ const GitTab = () => {
   const [gitStatusMessage, setGitStatusMessage] = useState(null);
   const [isFetchingRemote, setIsFetchingRemote] = useState(false);
   const [isPullingRemote, setIsPullingRemote] = useState(false);
+  const [isStashingChanges, setIsStashingChanges] = useState(false);
+  const [isDiscardingChanges, setIsDiscardingChanges] = useState(false);
   const [branchOptions, setBranchOptions] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState('');
 
@@ -118,6 +122,52 @@ const GitTab = () => {
   /* c8 ignore next -- defensive optional chaining when status map is missing */
   const currentGitStatus = currentProject ? projectGitStatus?.[currentProject.id] : null;
   const hasRemoteUrl = Boolean(formState.remoteUrl.trim());
+  const resolvedBranch = currentGitStatus?.branch || formState.defaultBranch || 'main';
+  const currentBranch = currentGitStatus?.currentBranch || resolvedBranch;
+  const aheadCount = Number.isFinite(currentGitStatus?.ahead) ? currentGitStatus.ahead : 0;
+  const behindCount = Number.isFinite(currentGitStatus?.behind) ? currentGitStatus.behind : 0;
+  const hasRemoteStatus = Boolean(currentGitStatus?.hasRemote);
+  const hasDiverged = aheadCount > 0 && behindCount > 0;
+  const isDirtyWorkingTree = Boolean(currentGitStatus?.dirty);
+  const hasBranchMismatch = Boolean(currentBranch && resolvedBranch && currentBranch !== resolvedBranch);
+  const pullBlocked = isDirtyWorkingTree;
+  const pullLabel = hasDiverged
+    ? 'Rebase pull'
+    : behindCount > 0
+      ? 'Fast-forward pull'
+      : 'Pull';
+  const guidanceCopy = (() => {
+    if (!hasRemoteStatus) {
+      return 'We do not know whether your local code matches the remote yet. Fetch to compare and decide if anything needs to change locally.';
+    }
+    if (hasBranchMismatch) {
+      return `You are on ${currentBranch}. Feature branches are expected; pull updates the branch you are on. Switch to ${resolvedBranch} only when you want to sync the shared baseline.`;
+    }
+    if (isDirtyWorkingTree) {
+      return 'There are local edits that Git cannot safely mix with remote updates. You need to decide whether to keep them (stash) or discard them before pulling.';
+    }
+    if (hasDiverged) {
+      return 'Local and remote changed in different ways. Git needs your decision to reconcile them, so pulling will rebase your work onto the remote history.';
+    }
+    if (behindCount > 0) {
+      return `The remote has ${behindCount} new commit${behindCount === 1 ? '' : 's'}. Pull to update your workspace with those changes.`;
+    }
+    if (aheadCount > 0) {
+      return `Your local changes are ahead by ${aheadCount} commit${aheadCount === 1 ? '' : 's'}. You need to decide when to push them to share with the remote.`;
+    }
+    return 'Everything is in sync. Fetch occasionally to check for updates.';
+  })();
+  const recommendFetch = !hasRemoteStatus || (!hasDiverged && behindCount === 0 && aheadCount === 0);
+  const recommendPull = hasRemoteStatus && (hasDiverged || behindCount > 0) && !pullBlocked;
+
+  const handlePullAttempt = (options = {}) => {
+    if (hasBranchMismatch) {
+      setGitStatusError(null);
+      setGitStatusMessage(`You are on ${currentBranch}. Pull updates this branch; switch to ${resolvedBranch} only when you want to sync the shared baseline.`);
+      return;
+    }
+    handlePullRemote(options);
+  };
 
   useEffect(() => {
     if (!currentProject?.id || !requiresRemoteDetails || !formState.remoteUrl.trim()) {
@@ -224,7 +274,7 @@ const GitTab = () => {
     }
   };
 
-  const handlePullRemote = async () => {
+  const handlePullRemote = async (options = {}) => {
     if (!currentProject?.id) {
       return;
     }
@@ -232,20 +282,79 @@ const GitTab = () => {
     setGitStatusMessage(null);
     setIsPullingRemote(true);
     try {
-      const result = await pullProjectGitRemote(currentProject.id);
+      const result = await pullProjectGitRemote(currentProject.id, options);
+      let message = 'Pull complete.';
       if (result?.strategy === 'noop') {
-        setGitStatusMessage('Already up to date.');
+        message = 'Already up to date.';
       } else if (result?.strategy === 'rebase') {
-        setGitStatusMessage('Pulled with rebase.');
+        message = 'Pulled with rebase.';
       } else if (result?.strategy === 'ff-only') {
-        setGitStatusMessage('Pulled with fast-forward.');
-      } else {
-        setGitStatusMessage('Pull complete.');
+        message = 'Pulled with fast-forward.';
       }
+
+      if (result?.stash?.created) {
+        if (result.stash.restored) {
+          message = `${message} Stashed changes restored.`;
+        } else if (result.stash.error) {
+          setGitStatusError(result.stash.error);
+        } else {
+          setGitStatusError('Pulled, but stashed changes were not restored. Check git stash list.');
+        }
+      }
+
+      setGitStatusMessage(message);
     } catch (error) {
       setGitStatusError(error?.message || 'Failed to pull remote.');
     } finally {
       setIsPullingRemote(false);
+    }
+  };
+
+  const handleStashChanges = async () => {
+    if (!currentProject?.id) {
+      return;
+    }
+    setGitStatusError(null);
+    setGitStatusMessage(null);
+    setIsStashingChanges(true);
+    try {
+      const result = await stashProjectGitChanges(currentProject.id);
+      if (result?.stashed) {
+        setGitStatusMessage('Changes stashed.');
+      } else {
+        setGitStatusMessage('Working tree already clean.');
+      }
+    } catch (error) {
+      setGitStatusError(error?.message || 'Failed to stash changes.');
+    } finally {
+      setIsStashingChanges(false);
+    }
+  };
+
+  const handleDiscardChanges = async () => {
+    if (!currentProject?.id) {
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm('Discard all local changes? This cannot be undone.');
+      if (!confirmed) {
+        return;
+      }
+    }
+    setGitStatusError(null);
+    setGitStatusMessage(null);
+    setIsDiscardingChanges(true);
+    try {
+      const result = await discardProjectGitChanges(currentProject.id, { confirm: true });
+      if (result?.discarded) {
+        setGitStatusMessage('Local changes discarded.');
+      } else {
+        setGitStatusMessage('Working tree already clean.');
+      }
+    } catch (error) {
+      setGitStatusError(error?.message || 'Failed to discard changes.');
+    } finally {
+      setIsDiscardingChanges(false);
     }
   };
 
@@ -698,59 +807,29 @@ const GitTab = () => {
               </div>
             </div>
             <div className="git-repo-actions">
-              <div className="git-repo-actions-row">
-                <button
-                  type="button"
-                  className="git-tab-configure"
-                  onClick={handleFetchRemote}
-                  disabled={!hasRemoteUrl || isFetchingRemote}
-                  data-testid="git-fetch-remote"
-                >
-                  {isFetchingRemote ? 'Fetching…' : 'Fetch'}
-                </button>
-                <button
-                  type="button"
-                  className="git-tab-configure"
-                  onClick={handlePullRemote}
-                  disabled={!hasRemoteUrl || isPullingRemote}
-                  data-testid="git-pull-remote"
-                >
-                  {isPullingRemote ? 'Pulling…' : 'Pull'}
-                </button>
-                <button
-                  type="button"
-                  className="git-tab-configure"
-                  onClick={handleOpenRemote}
-                  disabled={!hasRemoteUrl}
-                  data-testid="git-open-remote"
-                >
-                  Open remote
-                </button>
-                <button
-                  type="button"
-                  className="git-tab-configure"
-                  onClick={handleCopyRemote}
-                  disabled={!hasRemoteUrl}
-                  data-testid="git-copy-remote"
-                >
-                  Copy URL
-                </button>
-              </div>
               <div className="git-repo-status">
-                {currentGitStatus?.hasRemote ? (
+                {hasRemoteStatus ? (
                   <div className="git-repo-status-grid">
                     <div>
-                      <span className="label">Branch</span>
+                      <span className="label">Remote branch</span>
                       {/* c8 ignore next -- nested fallbacks are defensive */}
-                      <strong>{currentGitStatus.branch || formState.defaultBranch || 'main'}</strong>
+                      <strong>{resolvedBranch}</strong>
+                    </div>
+                    <div>
+                      <span className="label">Current branch</span>
+                      <strong>{currentBranch}</strong>
+                    </div>
+                    <div>
+                      <span className="label">Working tree</span>
+                      <strong>{isDirtyWorkingTree ? 'Dirty' : 'Clean'}</strong>
                     </div>
                     <div>
                       <span className="label">Ahead</span>
-                      <strong>{currentGitStatus.ahead ?? 0}</strong>
+                      <strong>{aheadCount}</strong>
                     </div>
                     <div>
                       <span className="label">Behind</span>
-                      <strong>{currentGitStatus.behind ?? 0}</strong>
+                      <strong>{behindCount}</strong>
                     </div>
                   </div>
                 ) : (
@@ -771,45 +850,152 @@ const GitTab = () => {
                   </p>
                 )}
               </div>
-              <div className="git-repo-actions-row">
-                <label className="git-field">
-                  Checkout branch
-                  <select
-                    value={selectedBranch}
-                    onChange={(event) => setSelectedBranch(event.target.value)}
-                    disabled={!branchOptions.length}
-                    data-testid="git-checkout-branch-select"
+              <div className="git-guidance">
+                <div>
+                  <p className="git-guidance-title">What to do next</p>
+                  <p className="git-guidance-body">{guidanceCopy}</p>
+                  {pullBlocked && (
+                    <p className="git-guidance-hint">Pull is disabled until the working tree is clean.</p>
+                  )}
+                </div>
+                <div className="git-guidance-actions">
+                  <button
+                    type="button"
+                    className={`git-tab-configure${recommendFetch ? ' git-tab-configure--primary' : ''}`}
+                    onClick={handleFetchRemote}
+                    disabled={!hasRemoteUrl || isFetchingRemote}
+                    data-testid="git-fetch-remote"
                   >
-                    {branchOptions.length ? (
-                      branchOptions.map((branch) => (
-                        <option key={branch} value={branch}>
-                          {branch}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">No branches</option>
-                    )}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="git-tab-configure"
-                  onClick={handleCheckoutBranch}
-                  disabled={!selectedBranch}
-                  data-testid="git-checkout-branch"
-                >
-                  Checkout
-                </button>
-                <button
-                  type="button"
-                  className="git-tab-configure"
-                  onClick={handleUpdateDefaultBranch}
-                  disabled={!formState.defaultBranch.trim()}
-                  data-testid="git-update-default-branch"
-                >
-                  Change default branch
-                </button>
+                    {isFetchingRemote ? 'Fetching…' : 'Fetch'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`git-tab-configure${recommendPull ? ' git-tab-configure--primary' : ''}`}
+                    onClick={() => handlePullAttempt()}
+                    disabled={!hasRemoteUrl || isPullingRemote || pullBlocked}
+                    data-testid="git-pull-remote"
+                  >
+                    {isPullingRemote ? 'Pulling…' : pullLabel}
+                  </button>
+                </div>
               </div>
+              <details className="git-advanced" data-testid="git-advanced-actions">
+                <summary>Advanced actions</summary>
+                <div className="git-repo-actions-row">
+                  <button
+                    type="button"
+                    className="git-tab-configure"
+                    onClick={handleOpenRemote}
+                    disabled={!hasRemoteUrl}
+                    data-testid="git-open-remote"
+                  >
+                    Open remote
+                  </button>
+                  <button
+                    type="button"
+                    className="git-tab-configure"
+                    onClick={handleCopyRemote}
+                    disabled={!hasRemoteUrl}
+                    data-testid="git-copy-remote"
+                  >
+                    Copy URL
+                  </button>
+                </div>
+                {isDirtyWorkingTree && (
+                  <>
+                    <div className="git-advanced-group">
+                      <p className="git-advanced-title">Resolve local changes</p>
+                      <div className="git-repo-actions-row">
+                        <button
+                          type="button"
+                          className="git-tab-configure"
+                          onClick={handleStashChanges}
+                          disabled={isStashingChanges}
+                          data-testid="git-stash-changes"
+                        >
+                          {isStashingChanges ? 'Stashing…' : 'Stash changes'}
+                        </button>
+                        <button
+                          type="button"
+                          className="git-tab-configure"
+                          onClick={handleDiscardChanges}
+                          disabled={isDiscardingChanges}
+                          data-testid="git-discard-changes"
+                        >
+                          {isDiscardingChanges ? 'Discarding…' : 'Discard changes'}
+                        </button>
+                      </div>
+                      <div className="git-repo-actions-row">
+                        <button
+                          type="button"
+                          className="git-tab-configure"
+                          onClick={() => handlePullAttempt({ mode: 'stash' })}
+                          disabled={!hasRemoteUrl || isPullingRemote}
+                          data-testid="git-stash-pull"
+                        >
+                          Stash & Pull
+                        </button>
+                        <button
+                          type="button"
+                          className="git-tab-configure"
+                          onClick={() => {
+                            if (typeof window !== 'undefined') {
+                              const confirmed = window.confirm('Discard all local changes and pull? This cannot be undone.');
+                              if (!confirmed) {
+                                return;
+                              }
+                            }
+                            handlePullAttempt({ mode: 'discard', confirm: true });
+                          }}
+                          disabled={!hasRemoteUrl || isPullingRemote}
+                          data-testid="git-discard-pull"
+                        >
+                          Discard & Pull
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+                <div className="git-repo-actions-row">
+                  <label className="git-field">
+                    Checkout branch
+                    <select
+                      value={selectedBranch}
+                      onChange={(event) => setSelectedBranch(event.target.value)}
+                      disabled={!branchOptions.length}
+                      data-testid="git-checkout-branch-select"
+                    >
+                      {branchOptions.length ? (
+                        branchOptions.map((branch) => (
+                          <option key={branch} value={branch}>
+                            {branch}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">No branches</option>
+                      )}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="git-tab-configure"
+                    onClick={handleCheckoutBranch}
+                    disabled={!selectedBranch}
+                    data-testid="git-checkout-branch"
+                  >
+                    Checkout
+                  </button>
+                  <button
+                    type="button"
+                    className="git-tab-configure"
+                    onClick={handleUpdateDefaultBranch}
+                    disabled={!formState.defaultBranch.trim()}
+                    data-testid="git-update-default-branch"
+                  >
+                    Change default branch
+                  </button>
+                </div>
+              </details>
             </div>
           </section>
         )}

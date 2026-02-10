@@ -1,3 +1,14 @@
+## 0.5.7 (2026-02-10)
+- Harden git fetch/pull/status routes to auto-seed the `origin` remote from saved settings when it is missing locally (`ensureRemoteOrigin`), with `remote add` → `set-url` fallback.
+- Show the project path in the Files tab explorer header and remove the static "Explorer" label.
+- Make proxy placeholder pages (503 "starting" / 502 "error" / 409 "unavailable") fully invisible so the frontend's own loading overlay is the only user-facing feedback during preview startup.
+- Restore preview proxy auto-retry scripting and harden PreviewTab placeholder handling, auto-recovery cleanup, and loading transitions.
+- Add Git sync status indicators (dirty/current/ahead/behind) plus stash/discard actions and stash/discard-aware pulls to keep local and remote states aligned.
+- Add guided Git sync copy with recommended actions and collapse advanced controls to reduce button overload.
+- Add comprehensive backend tests for the new remote-origin recovery paths (status, fetch, pull) including error and fallback branches.
+- Expand git utilities/routes and PreviewTab coverage to keep strict coverage gates green.
+- Add frontend test for project-path display in the file tree header.
+
 ## 0.5.6 (2026-02-09)
 - Return 503 "Preview is starting" responses (with Retry-After) when the preview proxy cannot reach a frontend still booting, instead of a generic 502.
 - Persist the detected LLM endpoint path at configuration time and reuse it at runtime to skip fallback delays for non-chat models.
