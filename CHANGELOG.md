@@ -1,10 +1,8 @@
-## 0.5.9 (2026-02-10)
+## 0.5.8 (2026-02-10)
 - Add synchronous cleanup retry/delete responses so the UI can await cleanup results and surface failures.
 - Require user approval for suggested .gitignore fixes during clone/setup and provide apply/skip flows with setup continuation.
 - Add retry cleanup actions and cleanup-log visibility to the project delete flow for clearer recovery guidance.
 - Expand backend/frontend coverage for git ignore handling, cleanup retries, and clone/setup edge cases to keep 100% gates green.
-
-## 0.5.8 (2026-02-10)
 - Add clone-project flow handling and git URL helpers to support connect-existing-repo creation, including credential stripping and remote/branch persistence.
 - Extend backend clone/scaffolding coverage for fallback branches, progress piping, and skip-scaffolding clone settings.
 - Update Create Project connect flow to pass git parameters on create and align tests with the new clone-backed path.
