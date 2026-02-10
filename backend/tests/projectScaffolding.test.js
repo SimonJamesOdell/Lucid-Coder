@@ -23,12 +23,22 @@ const gitUtils = vi.hoisted(() => ({
   runGitCommand: vi.fn(),
   ensureGitRepository: vi.fn().mockResolvedValue({ initialized: true }),
   configureGitUser: vi.fn().mockResolvedValue(undefined),
-  ensureInitialCommit: vi.fn().mockResolvedValue(undefined)
+  ensureInitialCommit: vi.fn().mockResolvedValue(undefined),
+  getCurrentBranch: vi.fn().mockResolvedValue('main')
 }));
 
 vi.mock('../utils/git.js', () => ({
   __esModule: true,
   ...gitUtils
+}));
+
+const gitUrlUtils = vi.hoisted(() => ({
+  buildCloneUrl: vi.fn().mockReturnValue({ cloneUrl: 'https://token@github.com/user/repo.git', safeUrl: 'https://github.com/user/repo.git' })
+}));
+
+vi.mock('../utils/gitUrl.js', () => ({
+  __esModule: true,
+  ...gitUrlUtils
 }));
 
 const defaultExecImpl = (command, options, callback) => {
@@ -44,6 +54,15 @@ const makeProjectConfig = (rootDir, overrides = {}) => ({
   frontend: { language: 'javascript', framework: 'react' },
   backend: { language: 'javascript', framework: 'express' },
   path: path.join(rootDir, 'sample-project'),
+  ...overrides
+});
+
+const makeCloneConfig = (rootDir, overrides = {}) => ({
+  name: 'Clone Project',
+  description: 'Cloned repo',
+  frontend: { language: 'javascript', framework: 'react' },
+  backend: { language: 'javascript', framework: 'express' },
+  path: path.join(rootDir, 'cloned-project'),
   ...overrides
 });
 
@@ -1884,5 +1903,394 @@ describe('__testing helpers', () => {
       restoreEnv('LUCIDCODER_BACKEND_HOST_PORTS', envBackup.LUCIDCODER_BACKEND_HOST_PORTS);
       vi.resetModules();
     }
+  });
+});
+
+describe('cloneProjectFromRemote', () => {
+  test('emits progress updates and returns success in test mode', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'clone-progress') });
+    const onProgress = vi.fn();
+    const cloneOptions = {
+      remoteUrl: 'https://github.com/octocat/repo.git',
+      provider: 'github',
+      defaultBranch: 'main',
+      username: 'octocat',
+      token: 'ghp_test123',
+      authMethod: 'pat'
+    };
+
+    const result = await projectScaffolding.cloneProjectFromRemote(config, {
+      cloneOptions,
+      portSettings: { frontendPortBase: '6500', backendPortBase: '7500' },
+      onProgress
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.cloned).toBe(true);
+    expect(result.branch).toBe('main');
+    expect(result.remote).toBe('https://github.com/octocat/repo.git');
+    expect(result.progress.status).toBe('completed');
+    expect(result.progress.completion).toBe(100);
+    expect(result.progress.steps).toHaveLength(5);
+    expect(result.progress.steps.every((s) => s.completed)).toBe(true);
+    expect(result.processes.frontend.port).toBeGreaterThanOrEqual(6500);
+    expect(result.processes.backend.port).toBeGreaterThanOrEqual(7500);
+
+    expect(onProgress).toHaveBeenCalled();
+    const messages = onProgress.mock.calls.map(([p]) => p.statusMessage);
+    expect(messages).toContain('Cloning remote repository...');
+    expect(messages).toContain('Repository cloned');
+    expect(messages).toContain('Git configured');
+    expect(messages).toContain('Dependencies installed');
+    expect(messages).toContain('Development servers running');
+  });
+
+  test('completes test-mode clone without progress handler', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'clone-no-progress') });
+
+    const result = await projectScaffolding.cloneProjectFromRemote(config, {
+      cloneOptions: { remoteUrl: 'https://github.com/octocat/repo.git' }
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.cloned).toBe(true);
+    expect(result.progress.status).toBe('completed');
+    expect(result.processes.frontend.port).toBeGreaterThan(0);
+    expect(result.processes.backend.port).toBeGreaterThan(0);
+  });
+
+  test('defaults cloneOptions.defaultBranch to main when omitted', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'clone-default-branch') });
+
+    const result = await projectScaffolding.cloneProjectFromRemote(config, {
+      cloneOptions: { remoteUrl: 'https://github.com/octocat/repo.git' }
+    });
+
+    expect(result.branch).toBe('main');
+  });
+
+  test('warns when progress reporter throws', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'clone-warn-progress') });
+    const failingReporter = vi.fn(() => { throw new Error('listener died'); });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const result = await projectScaffolding.cloneProjectFromRemote(config, {
+        cloneOptions: { remoteUrl: 'https://github.com/octocat/repo.git' },
+        onProgress: failingReporter
+      });
+
+      expect(result.success).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith('Progress reporter failed:', 'listener died');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('defaults to empty options when none provided', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'clone-empty-opts') });
+
+    const result = await projectScaffolding.cloneProjectFromRemote(config);
+
+    expect(result.success).toBe(true);
+    expect(result.cloned).toBe(true);
+    expect(result.branch).toBe('main');
+    expect(result.remote).toBeNull();
+  });
+});
+
+describe('cloneProjectFromRemote (real mode)', () => {
+  // In real mode, runGitCommand is mocked but startProject needs package.json files.
+  // Simulate git clone creating the expected project structure.
+  const simulateCloneFiles = (projectPath) => {
+    gitUtils.runGitCommand.mockImplementation(async (cwd, args) => {
+      if (args[0] === 'clone') {
+        await fs.mkdir(path.join(projectPath, 'frontend'), { recursive: true });
+        await fs.writeFile(path.join(projectPath, 'frontend', 'package.json'), JSON.stringify({ name: 'frontend', scripts: { dev: 'echo ok' } }));
+        await fs.mkdir(path.join(projectPath, 'backend'), { recursive: true });
+        await fs.writeFile(path.join(projectPath, 'backend', 'package.json'), JSON.stringify({ name: 'backend', scripts: { dev: 'echo ok' } }));
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    });
+  };
+
+  test('runs full clone workflow with git operations', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'real-clone') });
+
+    await runWithRealModeProjectScaffolding(async (realModule) => {
+      const onProgress = vi.fn();
+      const cloneOptions = {
+        remoteUrl: 'https://github.com/octocat/repo.git',
+        provider: 'github',
+        defaultBranch: 'main',
+        username: 'octocat',
+        token: 'ghp_test123',
+        authMethod: 'pat'
+      };
+
+      gitUtils.getCurrentBranch.mockResolvedValueOnce('main');
+      simulateCloneFiles(config.path);
+
+      const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn) => {
+        if (typeof fn === 'function') fn();
+        return 0;
+      });
+
+      try {
+        const result = await realModule.cloneProjectFromRemote(config, {
+          cloneOptions,
+          portSettings: { frontendPortBase: '6600', backendPortBase: '7600' },
+          onProgress
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.cloned).toBe(true);
+        expect(result.branch).toBe('main');
+        expect(result.remote).toBe('https://github.com/user/repo.git');
+        expect(result.progress.status).toBe('completed');
+        expect(result.processes.frontend.port).toBeGreaterThanOrEqual(6600);
+        expect(result.processes.backend.port).toBeGreaterThanOrEqual(7600);
+
+        // Verify git clone was called
+        expect(gitUtils.runGitCommand).toHaveBeenCalledWith(
+          path.dirname(config.path),
+          ['clone', 'https://token@github.com/user/repo.git', config.path]
+        );
+
+        // Verify credential stripping
+        expect(gitUtils.runGitCommand).toHaveBeenCalledWith(
+          config.path,
+          ['remote', 'set-url', 'origin', 'https://github.com/user/repo.git'],
+          { allowFailure: true }
+        );
+
+        // Verify git user was configured
+        expect(gitUtils.configureGitUser).toHaveBeenCalledWith(config.path, {
+          name: 'octocat',
+          email: 'octocat@users.noreply.github.com'
+        });
+
+        expect(gitUtils.getCurrentBranch).toHaveBeenCalledWith(config.path);
+
+        // Verify install + start
+        expect(execMock).toHaveBeenCalledTimes(2);
+        expect(spawnMock).toHaveBeenCalledTimes(2);
+
+        const messages = onProgress.mock.calls.map(([p]) => p.statusMessage);
+        expect(messages).toContain('Cloning remote repository...');
+        expect(messages).toContain('Development servers running');
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  test('falls back to defaultBranch when getCurrentBranch throws', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'real-clone-fallback-branch') });
+
+    await runWithRealModeProjectScaffolding(async (realModule) => {
+      gitUtils.getCurrentBranch.mockRejectedValueOnce(new Error('no HEAD'));
+      simulateCloneFiles(config.path);
+
+      const cloneOptions = {
+        remoteUrl: 'https://github.com/octocat/repo.git',
+        provider: 'github',
+        defaultBranch: 'develop',
+        username: 'octocat',
+        token: 'ghp_test123',
+        authMethod: 'pat'
+      };
+
+      const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn) => {
+        if (typeof fn === 'function') fn();
+        return 0;
+      });
+
+      try {
+        const result = await realModule.cloneProjectFromRemote(config, {
+          cloneOptions,
+          portSettings: { frontendPortBase: '6700', backendPortBase: '7700' }
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.branch).toBe('develop');
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  test('falls back to main when getCurrentBranch throws and defaultBranch is missing', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'real-clone-fallback-main') });
+
+    await runWithRealModeProjectScaffolding(async (realModule) => {
+      gitUtils.getCurrentBranch.mockRejectedValueOnce(new Error('no HEAD'));
+      simulateCloneFiles(config.path);
+
+      const cloneOptions = {
+        remoteUrl: 'https://github.com/octocat/repo.git',
+        provider: 'github',
+        username: 'octocat',
+        token: 'ghp_test123',
+        authMethod: 'pat'
+      };
+
+      const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn) => {
+        if (typeof fn === 'function') fn();
+        return 0;
+      });
+
+      try {
+        const result = await realModule.cloneProjectFromRemote(config, { cloneOptions });
+
+        expect(result.success).toBe(true);
+        expect(result.branch).toBe('main');
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  test('emits Git configured progress when getCurrentBranch throws (real mode)', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'real-clone-progress-branch') });
+
+    await runWithRealModeProjectScaffolding(async (realModule) => {
+      // Force getCurrentBranch to throw to hit the fallback path
+      gitUtils.getCurrentBranch.mockRejectedValueOnce(new Error('no HEAD'));
+      simulateCloneFiles(config.path);
+
+      const onProgress = vi.fn();
+
+      const cloneOptions = {
+        remoteUrl: 'https://github.com/octocat/repo.git',
+        provider: 'github',
+        defaultBranch: 'fallback-branch',
+        username: 'octocat',
+        token: 'ghp_test123',
+        authMethod: 'pat'
+      };
+
+      const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn) => {
+        if (typeof fn === 'function') fn();
+        return 0;
+      });
+
+      try {
+        const result = await realModule.cloneProjectFromRemote(config, {
+          cloneOptions,
+          portSettings: { frontendPortBase: '6800', backendPortBase: '7800' },
+          onProgress
+        });
+
+        expect(result.success).toBe(true);
+        // Ensure that the progress reporter received the Git configured update
+        const messages = onProgress.mock.calls.map(([p]) => p.statusMessage);
+        expect(messages).toContain('Git configured');
+        // And branch should be the fallback
+        expect(result.branch).toBe('fallback-branch');
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  test('configures git without email when username is absent', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'real-clone-no-user') });
+
+    await runWithRealModeProjectScaffolding(async (realModule) => {
+      gitUtils.getCurrentBranch.mockResolvedValueOnce('main');
+      simulateCloneFiles(config.path);
+
+      const cloneOptions = {
+        remoteUrl: 'https://github.com/octocat/repo.git',
+        provider: 'github',
+        defaultBranch: 'main',
+        token: 'ghp_test123',
+        authMethod: 'pat'
+      };
+
+      const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn) => {
+        if (typeof fn === 'function') fn();
+        return 0;
+      });
+
+      try {
+        const result = await realModule.cloneProjectFromRemote(config, { cloneOptions });
+
+        expect(result.success).toBe(true);
+        expect(gitUtils.configureGitUser).toHaveBeenCalledWith(config.path, {
+          name: undefined,
+          email: undefined
+        });
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  test('surfaces clone failures and halts remaining steps', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'real-clone-fail') });
+
+    await runWithRealModeProjectScaffolding(async (realModule) => {
+      const onProgress = vi.fn();
+      gitUtils.runGitCommand.mockRejectedValueOnce(new Error('clone failed: access denied'));
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        await expect(
+          realModule.cloneProjectFromRemote(config, {
+            cloneOptions: {
+              remoteUrl: 'https://github.com/octocat/repo.git',
+              provider: 'github',
+              defaultBranch: 'main',
+              token: 'ghp_test123',
+              authMethod: 'pat'
+            },
+            onProgress
+          })
+        ).rejects.toThrow('clone failed: access denied');
+
+        expect(execMock).not.toHaveBeenCalled();
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(gitUtils.configureGitUser).not.toHaveBeenCalled();
+        expect(errorSpy).toHaveBeenCalledWith('❌ Project clone failed:', 'clone failed: access denied');
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+  });
+
+  test('completes real-mode clone without progress handler', async () => {
+    const config = makeCloneConfig(tempDir, { path: path.join(tempDir, 'real-clone-silent') });
+
+    await runWithRealModeProjectScaffolding(async (realModule) => {
+      gitUtils.getCurrentBranch.mockResolvedValueOnce('main');
+      simulateCloneFiles(config.path);
+
+      const cloneOptions = {
+        remoteUrl: 'https://github.com/octocat/repo.git',
+        provider: 'github',
+        defaultBranch: 'main',
+        username: 'octocat',
+        token: 'ghp_test123',
+        authMethod: 'pat'
+      };
+
+      const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn) => {
+        if (typeof fn === 'function') fn();
+        return 0;
+      });
+
+      try {
+        const result = await realModule.cloneProjectFromRemote(config, { cloneOptions });
+
+        expect(result.success).toBe(true);
+        expect(result.cloned).toBe(true);
+        expect(result.branch).toBe('main');
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
   });
 });

@@ -279,6 +279,409 @@ describe('ProjectSelector Component', () => {
       });
     });
 
+    test('shows cleanup warning when deletion leaves files behind', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          message: 'Project deleted, but cleanup failed. See cleanup details.',
+          cleanup: {
+            success: false,
+            failures: [{ target: 'C:/projects/demo', code: 'EPERM', message: 'access denied' }]
+          }
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      expect(await screen.findByText('Cleanup incomplete')).toBeInTheDocument();
+      expect(screen.getByText(/view cleanup log/i)).toBeInTheDocument();
+
+      await user.click(screen.getByText(/view cleanup log/i));
+      expect(screen.getByText(/EPERM/i)).toBeInTheDocument();
+    });
+
+    test('falls back to default cleanup warning message when details are missing', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: {
+            success: false,
+            failures: null
+          }
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      expect(await screen.findByText('Cleanup incomplete')).toBeInTheDocument();
+      expect(screen.getByText(/some files may remain/i)).toBeInTheDocument();
+      expect(screen.queryByText(/view cleanup log/i)).not.toBeInTheDocument();
+    });
+
+    test('renders cleanup log fallbacks when failure details are missing', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          message: 'Project deleted, but cleanup failed. See cleanup details.',
+          cleanup: {
+            success: false,
+            failures: [{}]
+          }
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const toggle = await screen.findByRole('button', { name: /view cleanup log/i });
+      await user.click(toggle);
+
+      expect(screen.getByText(/unknown path/i)).toBeInTheDocument();
+    });
+
+    test('retries cleanup when the user clicks retry', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          message: 'Project deleted, but cleanup failed. See cleanup details.',
+          cleanup: {
+            success: false,
+            failures: [{ target: 'C:/projects/demo', message: 'EPERM: access denied' }]
+          }
+        }
+      });
+      axios.post.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: { success: true, failures: [] },
+          message: 'Cleanup completed successfully'
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      await waitFor(() => {
+        expect(axios.post).toHaveBeenCalledWith(
+          `/api/projects/${project.id}/cleanup`,
+          {},
+          expect.objectContaining({ headers: { 'x-confirm-destructive': 'true' } })
+        );
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByText('Cleanup incomplete')).not.toBeInTheDocument();
+      });
+    });
+
+    test('shows retry warning when cleanup still fails', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          message: 'Project deleted, but cleanup failed. See cleanup details.',
+          cleanup: {
+            success: false,
+            failures: [{ target: 'C:/projects/demo' }]
+          }
+        }
+      });
+      axios.post.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: { success: false, failures: [{}] },
+          message: 'Cleanup failed. See cleanup details.'
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      expect(await screen.findByText(/cleanup still failed/i)).toBeInTheDocument();
+    });
+
+    test('coerces retry cleanup failures to an empty list when failures is not an array', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          message: 'Project deleted, but cleanup failed. See cleanup details.',
+          cleanup: {
+            success: false,
+            failures: [{ target: 'C:/projects/demo' }]
+          }
+        }
+      });
+      axios.post.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: { success: false, failures: 'not-an-array' },
+          message: 'Cleanup failed. See cleanup details.'
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      expect(await screen.findByText(/cleanup failed\. see cleanup details\./i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /view cleanup log/i })).not.toBeInTheDocument();
+    });
+
+    test('uses default message when retry response omits error details', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: { success: false, failures: [{ target: 'C:/projects/demo' }] }
+        }
+      });
+      axios.post.mockResolvedValueOnce({ data: { success: false } });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      expect(await screen.findByText(/failed to retry cleanup/i)).toBeInTheDocument();
+    });
+
+    test('uses fallback warning when retry cleanup still fails without message', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: { success: false, failures: [{ target: 'C:/projects/demo' }] }
+        }
+      });
+      axios.post.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: { success: false, failures: [] }
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      expect(await screen.findByText(/cleanup failed\. see cleanup details\./i)).toBeInTheDocument();
+    });
+
+    test('falls back to default retry error when request fails without details', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: { success: false, failures: [{ target: 'C:/projects/demo' }] }
+        }
+      });
+      axios.post.mockRejectedValueOnce({});
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      expect(await screen.findByText(/failed to retry cleanup/i)).toBeInTheDocument();
+    });
+
+    test('surfaces response error details when retry cleanup request fails', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          cleanup: { success: false, failures: [{ target: 'C:/projects/demo' }] }
+        }
+      });
+      axios.post.mockRejectedValueOnce({ response: { data: { error: 'Cleanup retry response error' } } });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      expect(await screen.findByText(/cleanup retry response error/i)).toBeInTheDocument();
+    });
+
+    test('skips retry when cleanup warning is missing a project id', async () => {
+      const projectWithoutId = { ...project, id: undefined };
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([projectWithoutId]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          message: 'Project deleted, but cleanup failed. See cleanup details.',
+          cleanup: {
+            success: false,
+            failures: [{ target: 'C:/projects/demo' }]
+          }
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    test('shows retry error when cleanup retry fails', async () => {
+      useAppState.mockReturnValue(mockAppState());
+      axios.get
+        .mockResolvedValueOnce(mockProjectsPayload([project]))
+        .mockResolvedValueOnce(mockProjectsPayload([]));
+      axios.delete.mockResolvedValueOnce({
+        data: {
+          success: true,
+          message: 'Project deleted, but cleanup failed. See cleanup details.',
+          cleanup: {
+            success: false,
+            failures: [{ target: 'C:/projects/demo', message: 'EPERM: access denied' }]
+          }
+        }
+      });
+      axios.post.mockResolvedValueOnce({
+        data: {
+          success: false,
+          error: 'Cleanup retry failed'
+        }
+      });
+
+      const user = userEvent.setup();
+      render(<ProjectSelector />);
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+      await user.click(deleteButton);
+
+      const confirmButton = await screen.findByTestId('modal-confirm');
+      await user.click(confirmButton);
+
+      const retryButton = await screen.findByRole('button', { name: /retry cleanup/i });
+      await user.click(retryButton);
+
+      expect(await screen.findByText(/cleanup retry failed/i)).toBeInTheDocument();
+    });
+
     test('cancels delete when user declines confirmation', async () => {
       useAppState.mockReturnValue(mockAppState());
       axios.get.mockResolvedValueOnce(mockProjectsPayload([project]));

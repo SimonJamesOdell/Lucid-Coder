@@ -25,10 +25,124 @@ import {
   templates
 } from './projectScaffolding/generate.js';
 import { initializeGitRepository } from './projectScaffolding/git.js';
+import { buildCloneUrl } from '../utils/gitUrl.js';
+import {
+  runGitCommand,
+  getCurrentBranch,
+  configureGitUser
+} from '../utils/git.js';
 
 const execAsync = promisify(exec);
 const FORCE_REAL_START = process.env.LUCIDCODER_FORCE_REAL_START === 'true';
 const isTestMode = process.env.NODE_ENV === 'test' && !FORCE_REAL_START;
+
+const PRE_INSTALL_IGNORE_ENTRIES = {
+  node: ['node_modules/'],
+  python: ['venv/', '.venv/', '__pycache__/']
+};
+
+const PRE_INSTALL_TRACKED_PATHS = [
+  'package-lock.json',
+  'frontend/package-lock.json',
+  'backend/package-lock.json',
+  'npm-shrinkwrap.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'frontend/yarn.lock',
+  'backend/yarn.lock',
+  'frontend/pnpm-lock.yaml',
+  'backend/pnpm-lock.yaml',
+  'poetry.lock',
+  'Pipfile.lock',
+  'uv.lock'
+];
+
+const normalizeGitIgnoreLine = (line) => {
+  const trimmed = typeof line === 'string' ? line.trim() : '';
+  if (!trimmed || trimmed.startsWith('#')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const getRepoRoot = async (projectPath) => {
+  try {
+    const result = await runGitCommand(projectPath, ['rev-parse', '--show-toplevel']);
+    const root = typeof result?.stdout === 'string' ? result.stdout.trim() : '';
+    return root || projectPath;
+  } catch {
+    return projectPath;
+  }
+};
+
+const readGitIgnoreEntries = async (projectPath) => {
+  const repoRoot = await getRepoRoot(projectPath);
+  const gitignorePath = path.join(repoRoot, '.gitignore');
+
+  try {
+    const content = await fs.readFile(gitignorePath, 'utf8');
+    const entries = content
+      .split(/\r?\n/)
+      .map(normalizeGitIgnoreLine)
+      .filter(Boolean);
+    return { repoRoot, entries };
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return { repoRoot, entries: [] };
+    }
+    throw error;
+  }
+};
+
+const buildPreInstallGitIgnoreSuggestion = async (projectPath) => {
+  const { repoRoot, entries } = await readGitIgnoreEntries(projectPath);
+  const existing = new Set(entries);
+
+  const hasFile = async (relativePath) => {
+    try {
+      await fs.access(path.join(repoRoot, relativePath));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hasNodeProject = await Promise.all([
+    hasFile('package.json'),
+    hasFile(path.join('frontend', 'package.json')),
+    hasFile(path.join('backend', 'package.json'))
+  ]).then((results) => results.some(Boolean));
+
+  const hasPythonProject = await Promise.all([
+    hasFile('requirements.txt'),
+    hasFile('pyproject.toml'),
+    hasFile(path.join('backend', 'requirements.txt')),
+    hasFile(path.join('backend', 'pyproject.toml'))
+  ]).then((results) => results.some(Boolean));
+
+  const expectedEntries = [
+    ...(hasNodeProject ? PRE_INSTALL_IGNORE_ENTRIES.node : []),
+    ...(hasPythonProject ? PRE_INSTALL_IGNORE_ENTRIES.python : [])
+  ];
+
+  const missing = expectedEntries.filter((entry) => !existing.has(entry));
+  let trackedFiles = [];
+  try {
+    const tracked = await runGitCommand(projectPath, ['ls-files', '--', ...PRE_INSTALL_TRACKED_PATHS]);
+    trackedFiles = typeof tracked?.stdout === 'string'
+      ? tracked.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      : [];
+  } catch {
+    trackedFiles = [];
+  }
+
+  return {
+    needed: missing.length > 0 || trackedFiles.length > 0,
+    entries: missing,
+    trackedFiles,
+    repoRoot
+  };
+};
 // Main scaffolding functions
 export const generateProjectFiles = async (projectConfig) => {
   const { name, description, frontend, backend, path: projectPath } = projectConfig;
@@ -423,6 +537,169 @@ export const createProjectWithFiles = async (projectConfig, options = {}) => {
     };
   } catch (error) {
     console.error('❌ Project creation failed:', error.message);
+    throw error;
+  }
+};
+
+const CLONE_STEP_NAMES = [
+  'Cloning repository',
+  'Project files ready',
+  'Configuring git',
+  'Installing dependencies',
+  'Starting development servers'
+];
+
+export const cloneProjectFromRemote = async (projectConfig, options = {}) => {
+  const {
+    onProgress,
+    cloneOptions = {},
+    portSettings = null,
+    requireGitIgnoreApproval = false,
+    gitIgnoreApproved = false
+  } = options;
+  const totalSteps = CLONE_STEP_NAMES.length;
+  const emitProgress = typeof onProgress === 'function'
+    ? (payload) => {
+        try {
+          onProgress({ ...payload, updatedAt: new Date().toISOString() });
+        } catch (error) {
+          console.warn('Progress reporter failed:', error.message);
+        }
+      }
+    : null;
+
+  const reportProgress = (completedCount, statusMessage) => {
+    if (!emitProgress) return;
+    const status = completedCount >= totalSteps ? 'completed' : 'in-progress';
+    const completion = Math.round((Math.min(totalSteps, Math.max(0, completedCount)) / totalSteps) * 100);
+    emitProgress({
+      steps: CLONE_STEP_NAMES.map((name, i) => ({ name, completed: i < completedCount })),
+      completion,
+      status,
+      statusMessage
+    });
+  };
+
+  const reportMessage = (statusMessage, completedCount) => {
+    if (!emitProgress) return;
+    const completion = Math.round((Math.min(totalSteps, Math.max(0, completedCount)) / totalSteps) * 100);
+    emitProgress({
+      steps: CLONE_STEP_NAMES.map((name, i) => ({ name, completed: i < completedCount })),
+      completion,
+      status: 'in-progress',
+      statusMessage
+    });
+  };
+
+  if (isTestMode) {
+    reportMessage('Cloning remote repository...', 0);
+    await fs.mkdir(projectConfig.path, { recursive: true });
+    reportProgress(1, 'Repository cloned');
+    reportProgress(2, 'Project files ready');
+    reportMessage('Configuring git...', 2);
+    reportProgress(3, 'Git configured');
+    reportMessage('Installing dependencies...', 3);
+    reportProgress(4, 'Dependencies installed');
+    reportMessage('Starting development servers...', 4);
+    const portOverrides = buildPortOverrideOptions(portSettings);
+    const startResult = await startProject(projectConfig.path, portOverrides);
+    reportProgress(totalSteps, 'Development servers running');
+
+    return {
+      success: true,
+      processes: startResult.processes,
+      progress: {
+        steps: CLONE_STEP_NAMES.map((name) => ({ name, completed: true })),
+        completion: 100,
+        status: 'completed',
+        statusMessage: 'Development servers running'
+      },
+      cloned: true,
+      branch: cloneOptions.defaultBranch || 'main',
+      remote: cloneOptions.remoteUrl || null
+    };
+  }
+
+  try {
+    reportMessage('Cloning remote repository...', 0);
+
+    const { cloneUrl, safeUrl } = buildCloneUrl({
+      url: cloneOptions.remoteUrl,
+      authMethod: cloneOptions.authMethod,
+      token: cloneOptions.token,
+      username: cloneOptions.username,
+      provider: cloneOptions.provider
+    });
+
+    const parentDir = path.dirname(projectConfig.path);
+    await fs.mkdir(parentDir, { recursive: true });
+    await runGitCommand(parentDir, ['clone', cloneUrl, projectConfig.path]);
+
+    // Strip embedded credentials from the stored remote URL
+    await runGitCommand(projectConfig.path, ['remote', 'set-url', 'origin', safeUrl], { allowFailure: true });
+    reportProgress(1, 'Repository cloned');
+    reportProgress(2, 'Project files ready');
+
+    reportMessage('Configuring git...', 2);
+    await configureGitUser(projectConfig.path, {
+      name: cloneOptions.username,
+      email: cloneOptions.username ? `${cloneOptions.username}@users.noreply.github.com` : undefined
+    });
+
+    let clonedBranch;
+    try {
+      clonedBranch = await getCurrentBranch(projectConfig.path);
+    } catch {
+      clonedBranch = cloneOptions.defaultBranch || 'main';
+    }
+    reportProgress(3, 'Git configured');
+
+    if (requireGitIgnoreApproval) {
+      const suggestion = await buildPreInstallGitIgnoreSuggestion(projectConfig.path);
+      if (suggestion.needed && !gitIgnoreApproved) {
+        const completedCount = 3;
+        return {
+          success: true,
+          processes: null,
+          progress: {
+            steps: CLONE_STEP_NAMES.map((name, index) => ({ name, completed: index < completedCount })),
+            completion: Math.round((completedCount / totalSteps) * 100),
+            status: 'awaiting-user',
+            statusMessage: 'Waiting for .gitignore approval'
+          },
+          cloned: true,
+          branch: clonedBranch,
+          remote: safeUrl,
+          setupRequired: true,
+          gitIgnoreSuggestion: suggestion
+        };
+      }
+    }
+
+    reportMessage('Installing dependencies...', 3);
+    await installDependencies(projectConfig.path);
+    reportProgress(4, 'Dependencies installed');
+
+    reportMessage('Starting development servers...', 4);
+    const portOverrides = buildPortOverrideOptions(portSettings);
+    const startResult = await startProject(projectConfig.path, portOverrides);
+    reportProgress(totalSteps, 'Development servers running');
+
+    return {
+      success: true,
+      processes: startResult.processes,
+      progress: {
+        steps: CLONE_STEP_NAMES.map((name) => ({ name, completed: true })),
+        completion: 100,
+        status: 'completed',
+        statusMessage: 'Development servers running'
+      },
+      cloned: true,
+      branch: clonedBranch,
+      remote: safeUrl
+    };
+  } catch (error) {
+    console.error('❌ Project clone failed:', error.message);
     throw error;
   }
 };

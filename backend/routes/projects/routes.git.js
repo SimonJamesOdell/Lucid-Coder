@@ -1,3 +1,5 @@
+import fs from 'fs/promises';
+import path from 'path';
 import {
   deleteProjectGitSettings,
   getGitSettings,
@@ -24,6 +26,155 @@ import {
 import { requireDestructiveConfirmation } from './internals.js';
 
 const SUPPORTED_REMOTE_PROVIDERS = ['github', 'gitlab'];
+
+const IGNORE_RULES = [
+  {
+    pattern: 'node_modules/',
+    matches: (candidate) => candidate === 'node_modules'
+      || candidate.startsWith('node_modules/')
+      || candidate.includes('/node_modules/')
+  },
+  {
+    pattern: 'venv/',
+    matches: (candidate) => candidate === 'venv'
+      || candidate.startsWith('venv/')
+      || candidate.includes('/venv/')
+  },
+  {
+    pattern: '.venv/',
+    matches: (candidate) => candidate === '.venv'
+      || candidate.startsWith('.venv/')
+      || candidate.includes('/.venv/')
+  },
+  {
+    pattern: '__pycache__/',
+    matches: (candidate) => candidate === '__pycache__'
+      || candidate.startsWith('__pycache__/')
+      || candidate.includes('/__pycache__/')
+  },
+  {
+    pattern: 'dist/',
+    matches: (candidate) => candidate === 'dist'
+      || candidate.startsWith('dist/')
+      || candidate.includes('/dist/')
+  },
+  {
+    pattern: 'build/',
+    matches: (candidate) => candidate === 'build'
+      || candidate.startsWith('build/')
+      || candidate.includes('/build/')
+  }
+];
+
+const getRepoRoot = async (projectPath) => {
+  const result = await runGitCommand(projectPath, ['rev-parse', '--show-toplevel']);
+  const root = typeof result?.stdout === 'string' ? result.stdout.trim() : '';
+  return root || projectPath;
+};
+
+const normalizeGitIgnoreLine = (line) => {
+  const trimmed = typeof line === 'string' ? line.trim() : '';
+  if (!trimmed || trimmed.startsWith('#')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const loadGitIgnore = async (repoRoot) => {
+  const gitignorePath = path.join(repoRoot, '.gitignore');
+  try {
+    const content = await fs.readFile(gitignorePath, 'utf8');
+    const entries = content
+      .split(/\r?\n/)
+      .map(normalizeGitIgnoreLine)
+      .filter(Boolean);
+    return { gitignorePath, content, entries };
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return { gitignorePath, content: '', entries: [] };
+    }
+    throw error;
+  }
+};
+
+const buildGitIgnoreSuggestion = async (projectPath) => {
+  const { stdout } = await runGitCommand(projectPath, ['status', '--porcelain']);
+  const lines = typeof stdout === 'string' ? stdout.split(/\r?\n/) : [];
+  const untracked = lines
+    .filter((line) => line.startsWith('?? '))
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean);
+
+  if (untracked.length === 0) {
+    return { needed: false, entries: [], detected: [], samplePaths: [] };
+  }
+
+  const repoRoot = await getRepoRoot(projectPath);
+  const gitignore = await loadGitIgnore(repoRoot);
+  const existing = new Set(gitignore.entries);
+
+  const detected = [];
+  const entries = [];
+  for (const rule of IGNORE_RULES) {
+    if (!untracked.some((candidate) => rule.matches(candidate))) {
+      continue;
+    }
+    detected.push(rule.pattern);
+    if (!existing.has(rule.pattern)) {
+      entries.push(rule.pattern);
+    }
+  }
+
+  return {
+    needed: entries.length > 0,
+    entries,
+    detected,
+    samplePaths: untracked.slice(0, 6)
+  };
+};
+
+const applyGitIgnoreEntries = async (projectPath, entries) => {
+  const repoRoot = await getRepoRoot(projectPath);
+  const gitignore = await loadGitIgnore(repoRoot);
+  const existing = new Set(gitignore.entries);
+  const nextEntries = entries
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry && !/[\r\n\0]/.test(entry));
+
+  const additions = nextEntries.filter((entry) => !existing.has(entry));
+  if (additions.length === 0) {
+    return { applied: false, gitignorePath: gitignore.gitignorePath, additions: [] };
+  }
+
+  const prefix = gitignore.content && !gitignore.content.endsWith('\n') ? '\n' : '';
+  const updated = `${gitignore.content}${prefix}${additions.join('\n')}\n`;
+  await fs.writeFile(gitignore.gitignorePath, updated, 'utf8');
+
+  return { applied: true, gitignorePath: gitignore.gitignorePath, additions };
+};
+
+const commitGitIgnoreChanges = async (projectPath, message) => {
+  const repoRoot = await getRepoRoot(projectPath);
+  await runGitCommand(repoRoot, ['add', '.gitignore']);
+  try {
+    await runGitCommand(repoRoot, ['commit', '-m', message]);
+    return true;
+  } catch (error) {
+    if (/nothing to commit/i.test(error?.message || '')) {
+      return false;
+    }
+    throw error;
+  }
+};
+
+export const __gitRoutesTesting = {
+  applyGitIgnoreEntries,
+  commitGitIgnoreChanges,
+  loadGitIgnore,
+  getRepoRoot,
+  normalizeGitIgnoreLine,
+  buildGitIgnoreSuggestion
+};
 
 export function registerProjectGitRoutes(router) {
   const resolveEffectiveSettings = async (projectId) => {
@@ -135,6 +286,80 @@ export function registerProjectGitRoutes(router) {
     } catch (error) {
       console.error('Error fetching git status:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch git status' });
+    }
+  });
+
+  router.get('/:projectId/git/ignore-suggestions', async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const project = await getProject(projectId);
+
+      if (!project) {
+        return res.status(404).json({ success: false, error: 'Project not found' });
+      }
+
+      if (!project.path) {
+        return res.status(400).json({ success: false, error: 'Project path is not configured.' });
+      }
+
+      const settings = await resolveEffectiveSettings(projectId);
+      const branchName = settings?.defaultBranch || 'main';
+      await ensureGitRepository(project.path, { defaultBranch: branchName });
+
+      const suggestion = await buildGitIgnoreSuggestion(project.path);
+      res.json({ success: true, suggestion });
+    } catch (error) {
+      console.error('Error building gitignore suggestions:', error);
+      res.status(500).json({ success: false, error: 'Failed to build gitignore suggestions' });
+    }
+  });
+
+  router.post('/:projectId/git/ignore-fix', async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const project = await getProject(projectId);
+
+      if (!project) {
+        return res.status(404).json({ success: false, error: 'Project not found' });
+      }
+
+      if (!project.path) {
+        return res.status(400).json({ success: false, error: 'Project path is not configured.' });
+      }
+
+      const settings = await resolveEffectiveSettings(projectId);
+      const branchName = settings?.defaultBranch || 'main';
+      await ensureGitRepository(project.path, { defaultBranch: branchName });
+
+      const requestedEntries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+      const commit = req.body?.commit !== false;
+      const entries = requestedEntries.filter((entry) => typeof entry === 'string' && entry.trim());
+
+      if (entries.length === 0) {
+        const suggestion = await buildGitIgnoreSuggestion(project.path);
+        entries.push(...suggestion.entries);
+      }
+
+      if (entries.length === 0) {
+        return res.json({ success: true, applied: false, committed: false, entries: [] });
+      }
+
+      const result = await applyGitIgnoreEntries(project.path, entries);
+      let committed = false;
+
+      if (commit && result.applied) {
+        committed = await commitGitIgnoreChanges(project.path, 'chore: update .gitignore for local setup');
+      }
+
+      res.json({
+        success: true,
+        applied: result.applied,
+        committed,
+        entries: result.additions
+      });
+    } catch (error) {
+      console.error('Error applying gitignore updates:', error);
+      res.status(500).json({ success: false, error: error?.message || 'Failed to apply gitignore updates' });
     }
   });
 

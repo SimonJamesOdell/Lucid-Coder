@@ -13,6 +13,9 @@ const ProjectSelector = () => {
   const [projectToDelete, setProjectToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deletingProjectId, setDeletingProjectId] = useState(null);
+  const [cleanupWarning, setCleanupWarning] = useState(null);
+  const [cleanupRetryStatus, setCleanupRetryStatus] = useState({ state: 'idle', error: '' });
+  const [showCleanupDetails, setShowCleanupDetails] = useState(false);
 
 
 
@@ -55,11 +58,26 @@ const ProjectSelector = () => {
     try {
       setIsDeleting(true);
       setDeletingProjectId(projectToDelete.id);
-      await axios.delete(`/api/projects/${projectToDelete.id}`, {
+      const response = await axios.delete(`/api/projects/${projectToDelete.id}`, {
         headers: {
           'x-confirm-destructive': 'true'
         }
       });
+      const cleanup = response?.data?.cleanup;
+      if (cleanup && cleanup.success === false) {
+        const failures = Array.isArray(cleanup.failures) ? cleanup.failures : [];
+        setCleanupWarning({
+          projectId: projectToDelete.id,
+          message: response?.data?.message || 'Project deleted, but cleanup failed. Some files may remain.',
+          failures
+        });
+        setCleanupRetryStatus({ state: 'idle', error: '' });
+        setShowCleanupDetails(false);
+      } else {
+        setCleanupWarning(null);
+        setCleanupRetryStatus({ state: 'idle', error: '' });
+        setShowCleanupDetails(false);
+      }
       await fetchProjects({ silent: true });
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to delete project');
@@ -70,6 +88,44 @@ const ProjectSelector = () => {
       setProjectToDelete(null);
     }
   }, [projectToDelete, fetchProjects]);
+
+  const handleRetryCleanup = useCallback(async () => {
+    if (!cleanupWarning?.projectId) {
+      return;
+    }
+
+    setCleanupRetryStatus({ state: 'working', error: '' });
+
+    try {
+      const response = await axios.post(
+        `/api/projects/${cleanupWarning.projectId}/cleanup`,
+        {},
+        { headers: { 'x-confirm-destructive': 'true' } }
+      );
+
+      if (!response?.data?.success) {
+        throw new Error(response?.data?.error || 'Failed to retry cleanup');
+      }
+
+      const cleanup = response?.data?.cleanup;
+      if (cleanup && cleanup.success === false) {
+        const failures = Array.isArray(cleanup.failures) ? cleanup.failures : [];
+        setCleanupWarning({
+          projectId: cleanupWarning.projectId,
+          message: response?.data?.message || 'Cleanup failed. See cleanup details.',
+          failures
+        });
+        setCleanupRetryStatus({ state: 'error', error: 'Cleanup still failed. Some files remain.' });
+      } else {
+        setCleanupWarning(null);
+        setCleanupRetryStatus({ state: 'done', error: '' });
+        setShowCleanupDetails(false);
+      }
+    } catch (error) {
+      const message = error?.response?.data?.error || error?.message || 'Failed to retry cleanup';
+      setCleanupRetryStatus({ state: 'error', error: message });
+    }
+  }, [cleanupWarning]);
 
   const cancelDeleteProject = useCallback(() => {
     if (isDeleting) return;
@@ -172,6 +228,46 @@ const ProjectSelector = () => {
           </div>
         </div>
       </div>
+
+      {cleanupWarning && (
+        <div className="cleanup-warning" role="status" aria-live="polite">
+          <h4>Cleanup incomplete</h4>
+          <p>{cleanupWarning.message}</p>
+          {cleanupWarning.failures.length > 0 && (
+            <button
+              type="button"
+              className="cleanup-details-toggle"
+              onClick={() => setShowCleanupDetails((prev) => !prev)}
+            >
+              {showCleanupDetails ? 'Hide cleanup log' : 'View cleanup log'}
+            </button>
+          )}
+          {showCleanupDetails && cleanupWarning.failures.length > 0 && (
+            <ul>
+              {cleanupWarning.failures.map((failure, index) => (
+                <li key={`${failure.target || 'unknown'}-${index}`}>
+                  {failure.target || 'Unknown path'}
+                  {failure.code ? ` (${failure.code})` : ''}
+                  {failure.message ? ` - ${failure.message}` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+          {cleanupRetryStatus.state === 'error' && (
+            <p className="cleanup-warning-error">{cleanupRetryStatus.error}</p>
+          )}
+          <div className="cleanup-warning-actions">
+            <button
+              type="button"
+              className="retry-cleanup-btn"
+              onClick={handleRetryCleanup}
+              disabled={cleanupRetryStatus.state === 'working'}
+            >
+              {cleanupRetryStatus.state === 'working' ? 'Retrying cleanup...' : 'Retry cleanup'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {projects.length === 0 ? (
         <div className="empty-state">

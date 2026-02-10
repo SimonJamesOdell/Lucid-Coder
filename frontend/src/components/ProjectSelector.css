@@ -11,6 +11,75 @@
   margin-bottom: 3rem;
 }
 
+.cleanup-warning {
+  margin: 0 0 2rem 0;
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: var(--text-primary, #ffffff);
+}
+
+.cleanup-warning h4 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.cleanup-warning p {
+  margin: 0 0 0.5rem 0;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.9rem;
+}
+
+.cleanup-warning ul {
+  margin: 0 0 0 1.25rem;
+  padding: 0;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.85rem;
+}
+
+.cleanup-details-toggle {
+  background: transparent;
+  border: none;
+  color: #f59e0b;
+  padding: 0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-decoration: underline;
+  margin-bottom: 0.5rem;
+}
+
+.cleanup-warning-actions {
+  margin-top: 0.75rem;
+}
+
+.retry-cleanup-btn {
+  background: transparent;
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  padding: 0.5rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.retry-cleanup-btn:hover {
+  background: rgba(245, 158, 11, 0.18);
+}
+
+.retry-cleanup-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cleanup-warning-error {
+  margin: 0.5rem 0 0 0;
+  color: var(--error-color, #ff6b6b);
+  font-size: 0.85rem;
+}
+
 .header-content {
   display: flex;
   justify-content: space-between;

@@ -21,6 +21,7 @@ import {
 
 vi.mock('../services/projectScaffolding.js', () => ({
   createProjectWithFiles: vi.fn(),
+  cloneProjectFromRemote: vi.fn(),
   scaffoldProject: vi.fn(),
   installDependencies: vi.fn(),
   startProject: vi.fn()
@@ -175,7 +176,7 @@ describe('Projects API with Scaffolding', () => {
     gitUtils.runGitCommand.mockResolvedValue({ code: 0, stdout: '' });
 
     // Setup mocks
-    const { createProjectWithFiles, scaffoldProject, installDependencies, startProject } = scaffoldingService;
+    const { createProjectWithFiles, cloneProjectFromRemote, scaffoldProject, installDependencies, startProject } = scaffoldingService;
     
     vi.mocked(createProjectWithFiles).mockResolvedValue({
       success: true,
@@ -200,6 +201,29 @@ describe('Projects API with Scaffolding', () => {
         frontend: { pid: 1234, port: 5173 },
         backend: { pid: 1235, port: 3000 }
       }
+    });
+
+    vi.mocked(cloneProjectFromRemote).mockResolvedValue({
+      success: true,
+      processes: {
+        frontend: { pid: 3456, port: 5173 },
+        backend: { pid: 3457, port: 3000 }
+      },
+      progress: {
+        steps: [
+          { name: 'Cloning repository', completed: true },
+          { name: 'Project files ready', completed: true },
+          { name: 'Configuring git', completed: true },
+          { name: 'Installing dependencies', completed: true },
+          { name: 'Starting development servers', completed: true }
+        ],
+        completion: 100,
+        status: 'completed',
+        statusMessage: 'Development servers running'
+      },
+      cloned: true,
+      branch: 'main',
+      remote: 'https://github.com/octocat/repo.git'
     });
 
     const { initializeAndPushRepository } = await import('../services/projectScaffolding/git.js');
@@ -423,6 +447,31 @@ describe('Projects API with Scaffolding', () => {
       expect(response.status).toBe(500);
       expect(response.body.success).toBe(false);
       expect(response.body.error).toContain('Failed to create project');
+    });
+
+    test('returns 409 when project path already exists', async () => {
+      const projectName = `existing-path-${Date.now()}`;
+      const projectPath = path.join(testProjectsDir, projectName);
+
+      await fs.mkdir(projectPath, { recursive: true });
+      await fs.writeFile(path.join(projectPath, 'README.md'), 'existing');
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Should conflict with existing folder',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          gitCloudMode: 'connect',
+          gitRemoteUrl: 'https://github.com/octocat/repo.git'
+        });
+
+      expect(response.status).toBe(409);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toMatch(/already exists/i);
+
+      await fs.rm(projectPath, { recursive: true, force: true });
     });
 
     test('notifies progress completion when a progress key is provided', async () => {
@@ -817,6 +866,539 @@ describe('Projects API with Scaffolding', () => {
       expect(response.body.progress).toBeDefined();
       expect(response.body.progress.completion).toBe(100);
       expect(response.body.progress.steps).toHaveLength(5);
+    });
+
+    test('clones existing remote when gitCloudMode is connect', async () => {
+      const projectName = `clone-flow-${Date.now()}`;
+      const { cloneProjectFromRemote } = await import('../services/projectScaffolding.js');
+
+      await saveGitSettings({ workflow: 'cloud', provider: 'github', defaultBranch: 'main', username: 'global-user' });
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Cloned project',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          gitCloudMode: 'connect',
+          gitRemoteUrl: 'https://github.com/octocat/repo.git',
+          gitProvider: 'github',
+          gitDefaultBranch: 'main',
+          gitUsername: 'octocat',
+          gitToken: 'ghp_test123'
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.success).toBe(true);
+      expect(response.body.project.name).toBe(projectName);
+      expect(response.body.processes?.frontend?.port).toBe(5173);
+
+      expect(vi.mocked(cloneProjectFromRemote)).toHaveBeenCalledWith(
+        expect.objectContaining({ name: projectName }),
+        expect.objectContaining({
+          cloneOptions: expect.objectContaining({
+            remoteUrl: 'https://github.com/octocat/repo.git',
+            provider: 'github',
+            defaultBranch: 'main',
+            username: 'octocat',
+            token: 'ghp_test123',
+            authMethod: 'pat'
+          })
+        })
+      );
+
+      // Verify git settings were persisted
+      const savedSettings = await getProjectGitSettings(response.body.project.id);
+      expect(savedSettings.workflow).toBe('cloud');
+      expect(savedSettings.provider).toBe('github');
+      expect(savedSettings.remoteUrl).toBe('https://github.com/octocat/repo.git');
+      expect(savedSettings.defaultBranch).toBe('main');
+    });
+
+    test('clone flow uses result.branch and result.remote for git settings', async () => {
+      const projectName = `clone-branch-${Date.now()}`;
+      const { cloneProjectFromRemote } = await import('../services/projectScaffolding.js');
+
+      vi.mocked(cloneProjectFromRemote).mockResolvedValueOnce({
+        success: true,
+        processes: {
+          frontend: { pid: 5678, port: 5173 },
+          backend: { pid: 5679, port: 3000 }
+        },
+        progress: {
+          steps: [
+            { name: 'Cloning repository', completed: true },
+            { name: 'Project files ready', completed: true },
+            { name: 'Configuring git', completed: true },
+            { name: 'Installing dependencies', completed: true },
+            { name: 'Starting development servers', completed: true }
+          ],
+          completion: 100,
+          status: 'completed',
+          statusMessage: 'Development servers running'
+        },
+        cloned: true,
+        branch: 'develop',
+        remote: 'https://github.com/octocat/clean-repo.git'
+      });
+
+      await saveGitSettings({ workflow: 'cloud', provider: 'github', defaultBranch: 'main' });
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Clone with branch override',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          gitCloudMode: 'connect',
+          gitRemoteUrl: 'https://token@github.com/octocat/repo.git',
+          gitProvider: 'github',
+          gitDefaultBranch: 'main',
+          gitUsername: 'octocat'
+        });
+
+      expect(response.status).toBe(201);
+
+      const savedSettings = await getProjectGitSettings(response.body.project.id);
+      expect(savedSettings.defaultBranch).toBe('develop');
+      expect(savedSettings.remoteUrl).toBe('https://github.com/octocat/clean-repo.git');
+    });
+
+    test('clone flow without progress key omits onProgress', async () => {
+      const projectName = `clone-no-progress-${Date.now()}`;
+      const { cloneProjectFromRemote } = await import('../services/projectScaffolding.js');
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Clone without progress',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          gitCloudMode: 'connect',
+          gitRemoteUrl: 'https://github.com/octocat/repo.git',
+          gitProvider: 'gitlab',
+          gitDefaultBranch: 'develop',
+          gitToken: 'glpat-test'
+        });
+
+      expect(response.status).toBe(201);
+
+      // Verify cloneProjectFromRemote was called (without onProgress since no X-Progress-Key)
+      const callArgs = vi.mocked(cloneProjectFromRemote).mock.calls[0];
+      expect(callArgs[1].cloneOptions.provider).toBe('gitlab');
+      expect(callArgs[1].cloneOptions.defaultBranch).toBe('develop');
+      expect(callArgs[1].cloneOptions.token).toBe('glpat-test');
+      expect(callArgs[1].onProgress).toBeUndefined();
+
+      // Verify git settings saved with token
+      const savedSettings = await getProjectGitSettings(response.body.project.id);
+      expect(savedSettings.provider).toBe('gitlab');
+    });
+
+    test('clone flow with progress key pipes updates to progressTracker', async () => {
+      const projectName = `clone-with-progress-${Date.now()}`;
+      const { cloneProjectFromRemote } = await import('../services/projectScaffolding.js');
+
+      const progressTracker = await import('../services/progressTracker.js');
+      const updateSpy = vi.spyOn(progressTracker, 'updateProgress').mockImplementation(() => {});
+
+      // Make the scaffolding service invoke onProgress when provided
+      vi.mocked(cloneProjectFromRemote).mockImplementationOnce(async (config, options) => {
+        options?.onProgress?.({ step: 'cloning', completion: 10 });
+        return {
+          success: true,
+          processes: {
+            frontend: { pid: 9999, port: 5173 },
+            backend: { pid: 10000, port: 3000 }
+          },
+          progress: { steps: [], completion: 10 },
+          cloned: true,
+          branch: 'main',
+          remote: 'https://github.com/octocat/repo.git'
+        };
+      });
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Clone with progress',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          gitCloudMode: 'connect',
+          gitRemoteUrl: 'https://github.com/octocat/repo.git',
+          gitProvider: 'github',
+          gitDefaultBranch: 'main',
+          progressKey: 'pk-123'
+        });
+
+      expect(response.status).toBe(201);
+      expect(updateSpy).toHaveBeenCalledWith('pk-123', expect.objectContaining({ step: 'cloning' }));
+
+      updateSpy.mockRestore();
+    });
+
+    test('clone flow falls back to global git settings when body fields are empty', async () => {
+      const projectName = `clone-fallback-${Date.now()}`;
+
+      await saveGitSettings({ workflow: 'cloud', provider: 'bitbucket', defaultBranch: 'release', username: 'global-dev' });
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Clone with global fallbacks',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          gitCloudMode: 'connect',
+          gitRemoteUrl: 'https://github.com/octocat/repo.git'
+        });
+
+      expect(response.status).toBe(201);
+
+      const savedSettings = await getProjectGitSettings(response.body.project.id);
+      expect(savedSettings.provider).toBe('bitbucket');
+      expect(savedSettings.defaultBranch).toBe('main');
+    });
+
+    test('clone flow defaults provider and branch when git settings are blank', async () => {
+      const projectName = `clone-defaults-${Date.now()}`;
+      const { cloneProjectFromRemote } = await import('../services/projectScaffolding.js');
+      const database = await import('../database.js');
+
+      const getGitSettingsSpy = vi
+        .spyOn(database, 'getGitSettings')
+        .mockResolvedValue({ provider: '', defaultBranch: '', username: '' });
+
+      vi.mocked(cloneProjectFromRemote).mockResolvedValueOnce({
+        success: true,
+        processes: { frontend: { pid: 8881, port: 5173 }, backend: { pid: 8882, port: 3000 } },
+        progress: { steps: [], completion: 100 },
+        cloned: true,
+        branch: null,
+        remote: 'https://github.com/octocat/defaults.git'
+      });
+
+      try {
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Clone defaults provider/branch',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' },
+            gitCloudMode: 'connect',
+            gitRemoteUrl: 'https://github.com/octocat/defaults.git'
+          });
+
+        expect(response.status).toBe(201);
+
+        expect(vi.mocked(cloneProjectFromRemote)).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            cloneOptions: expect.objectContaining({
+              provider: 'github',
+              defaultBranch: 'main'
+            })
+          })
+        );
+
+        const savedSettings = await getProjectGitSettings(response.body.project.id);
+        expect(savedSettings.provider).toBe('github');
+        expect(savedSettings.defaultBranch).toBe('main');
+      } finally {
+        getGitSettingsSpy.mockRestore();
+      }
+    });
+
+    test('clone flow falls back to provided gitRemoteUrl when result.remote is missing and saves token', async () => {
+      const projectName = `clone-strip-remote-${Date.now()}`;
+      const { cloneProjectFromRemote } = await import('../services/projectScaffolding.js');
+
+      // Make the clone result omit remote and branch so route falls back to request values
+      vi.mocked(cloneProjectFromRemote).mockResolvedValueOnce({
+        success: true,
+        processes: { frontend: { pid: 7777, port: 5173 }, backend: { pid: 7778, port: 3000 } },
+        progress: { steps: [], completion: 100 },
+        cloned: true,
+        branch: null,
+        remote: null
+      });
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Clone fallback remote',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          gitCloudMode: 'connect',
+          gitRemoteUrl: 'https://token123@github.com/user/stripme.git',
+          gitProvider: 'github',
+          gitDefaultBranch: '',
+          gitUsername: 'strip-user',
+          gitToken: 'token123'
+        });
+
+      expect(response.status).toBe(201);
+
+      const savedSettings = await getProjectGitSettings(response.body.project.id);
+      expect(savedSettings.remoteUrl).toBe('https://github.com/user/stripme.git');
+      expect(savedSettings.username).toBe('strip-user');
+      // Tokens are stored encrypted in the DB; API returns token presence only
+      expect(savedSettings.tokenPresent).toBe(true);
+      expect(savedSettings.defaultBranch).toBe('main');
+    });
+
+    test('skipScaffolding clone flow saves git settings', async () => {
+      const prevSkip = process.env.E2E_SKIP_SCAFFOLDING;
+      const prevNodeEnv = process.env.NODE_ENV;
+
+      try {
+        process.env.E2E_SKIP_SCAFFOLDING = 'true';
+        process.env.NODE_ENV = 'test';
+
+        const projectName = `skip-clone-${Date.now()}`;
+
+        await saveGitSettings({ workflow: 'cloud', provider: 'github', defaultBranch: 'main', username: 'skip-user' });
+
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Skip scaffolding clone',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' },
+            gitCloudMode: 'connect',
+            gitRemoteUrl: 'https://github.com/octocat/repo.git',
+            gitProvider: 'github',
+            gitDefaultBranch: 'main',
+            gitUsername: 'octocat',
+            gitToken: 'ghp_skip_test'
+          });
+
+        expect(response.status).toBe(201);
+        expect(response.body.success).toBe(true);
+        expect(response.body.processes).toBeNull();
+
+        const savedSettings = await getProjectGitSettings(response.body.project.id);
+        expect(savedSettings.workflow).toBe('cloud');
+        expect(savedSettings.provider).toBe('github');
+        expect(savedSettings.remoteUrl).toBe('https://github.com/octocat/repo.git');
+        expect(savedSettings.defaultBranch).toBe('main');
+      } finally {
+        if (prevSkip === undefined) {
+          delete process.env.E2E_SKIP_SCAFFOLDING;
+        } else {
+          process.env.E2E_SKIP_SCAFFOLDING = prevSkip;
+        }
+        process.env.NODE_ENV = prevNodeEnv;
+      }
+    });
+
+    test('skipScaffolding clone flow saves username when provided', async () => {
+      const prevSkip = process.env.E2E_SKIP_SCAFFOLDING;
+      const prevNodeEnv = process.env.NODE_ENV;
+
+      try {
+        process.env.E2E_SKIP_SCAFFOLDING = 'true';
+        process.env.NODE_ENV = 'test';
+
+        const projectName = `skip-clone-user-${Date.now()}`;
+
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Skip scaffolding clone with user',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' },
+            gitCloudMode: 'connect',
+            gitRemoteUrl: 'https://github.com/user/project.git',
+            gitProvider: 'gitlab',
+            gitDefaultBranch: 'develop',
+            gitUsername: 'my-user'
+          });
+
+        expect(response.status).toBe(201);
+
+        const savedSettings = await getProjectGitSettings(response.body.project.id);
+        expect(savedSettings.provider).toBe('gitlab');
+        expect(savedSettings.defaultBranch).toBe('develop');
+        expect(savedSettings.username).toBe('my-user');
+      } finally {
+        if (prevSkip === undefined) {
+          delete process.env.E2E_SKIP_SCAFFOLDING;
+        } else {
+          process.env.E2E_SKIP_SCAFFOLDING = prevSkip;
+        }
+        process.env.NODE_ENV = prevNodeEnv;
+      }
+    });
+
+    test('skipScaffolding clone flow uses global git settings when body values are empty', async () => {
+      const prevSkip = process.env.E2E_SKIP_SCAFFOLDING;
+      const prevNodeEnv = process.env.NODE_ENV;
+
+      try {
+        process.env.E2E_SKIP_SCAFFOLDING = 'true';
+        process.env.NODE_ENV = 'test';
+
+        const projectName = `skip-clone-global-${Date.now()}`;
+
+        await saveGitSettings({ workflow: 'cloud', provider: 'gitlab', defaultBranch: 'develop' });
+
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Skip scaffolding clone with global settings',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' },
+            gitCloudMode: 'connect',
+            gitRemoteUrl: 'https://github.com/octocat/global.git'
+          });
+
+        expect(response.status).toBe(201);
+
+        const savedSettings = await getProjectGitSettings(response.body.project.id);
+        expect(savedSettings.provider).toBe('gitlab');
+        expect(savedSettings.defaultBranch).toBe('develop');
+      } finally {
+        if (prevSkip === undefined) {
+          delete process.env.E2E_SKIP_SCAFFOLDING;
+        } else {
+          process.env.E2E_SKIP_SCAFFOLDING = prevSkip;
+        }
+        process.env.NODE_ENV = prevNodeEnv;
+      }
+    });
+
+    test('skipScaffolding clone flow defaults to github/main when git settings are blank', async () => {
+      const prevSkip = process.env.E2E_SKIP_SCAFFOLDING;
+      const prevNodeEnv = process.env.NODE_ENV;
+      const database = await import('../database.js');
+
+      const getGitSettingsSpy = vi
+        .spyOn(database, 'getGitSettings')
+        .mockResolvedValue({ provider: '', defaultBranch: '', username: '' });
+
+      try {
+        process.env.E2E_SKIP_SCAFFOLDING = 'true';
+        process.env.NODE_ENV = 'test';
+
+        const projectName = `skip-clone-defaults-${Date.now()}`;
+
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Skip scaffolding clone defaults',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' },
+            gitCloudMode: 'connect',
+            gitRemoteUrl: 'https://github.com/octocat/defaults.git'
+          });
+
+        expect(response.status).toBe(201);
+
+        const savedSettings = await getProjectGitSettings(response.body.project.id);
+        expect(savedSettings.provider).toBe('github');
+        expect(savedSettings.defaultBranch).toBe('main');
+      } finally {
+        getGitSettingsSpy.mockRestore();
+        if (prevSkip === undefined) {
+          delete process.env.E2E_SKIP_SCAFFOLDING;
+        } else {
+          process.env.E2E_SKIP_SCAFFOLDING = prevSkip;
+        }
+        process.env.NODE_ENV = prevNodeEnv;
+      }
+    });
+
+    test('skipScaffolding without clone flow does not save git settings', async () => {
+      const prevSkip = process.env.E2E_SKIP_SCAFFOLDING;
+      const prevNodeEnv = process.env.NODE_ENV;
+
+      try {
+        process.env.E2E_SKIP_SCAFFOLDING = 'true';
+        process.env.NODE_ENV = 'test';
+
+        const projectName = `skip-no-clone-${Date.now()}`;
+
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Skip scaffolding no clone',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' }
+          });
+
+        expect(response.status).toBe(201);
+
+        const savedSettings = await getProjectGitSettings(response.body.project.id);
+        expect(savedSettings).toBeFalsy();
+      } finally {
+        if (prevSkip === undefined) {
+          delete process.env.E2E_SKIP_SCAFFOLDING;
+        } else {
+          process.env.E2E_SKIP_SCAFFOLDING = prevSkip;
+        }
+        process.env.NODE_ENV = prevNodeEnv;
+      }
+    });
+
+    test('skipScaffolding clone flow omits username and token when not provided', async () => {
+      const prevSkip = process.env.E2E_SKIP_SCAFFOLDING;
+      const prevNodeEnv = process.env.NODE_ENV;
+
+      try {
+        process.env.E2E_SKIP_SCAFFOLDING = 'true';
+        process.env.NODE_ENV = 'test';
+
+        const projectName = `skip-clone-no-creds-${Date.now()}`;
+
+        // ensure global git settings have no username/token
+        await saveGitSettings({ provider: 'github', defaultBranch: 'main', username: '' });
+
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Skip scaffolding clone without creds',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' },
+            gitCloudMode: 'connect',
+            gitRemoteUrl: 'https://github.com/octocat/repo-no-creds.git',
+            gitProvider: 'github',
+            gitDefaultBranch: 'main'
+          });
+
+        expect(response.status).toBe(201);
+        expect(response.body.success).toBe(true);
+        expect(response.body.processes).toBeNull();
+
+        const savedSettings = await getProjectGitSettings(response.body.project.id);
+        expect(savedSettings.remoteUrl).toBe('https://github.com/octocat/repo-no-creds.git');
+        expect(savedSettings.username).toBe('');
+        expect(savedSettings.tokenPresent).toBe(false);
+        expect(savedSettings.defaultBranch).toBe('main');
+      } finally {
+        if (prevSkip === undefined) {
+          delete process.env.E2E_SKIP_SCAFFOLDING;
+        } else {
+          process.env.E2E_SKIP_SCAFFOLDING = prevSkip;
+        }
+        if (prevNodeEnv === undefined) {
+          delete process.env.NODE_ENV;
+        } else {
+          process.env.NODE_ENV = prevNodeEnv;
+        }
+      }
     });
   });
 
@@ -5546,7 +6128,7 @@ describe('Projects API with Scaffolding', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(response.body.message).toMatch(/deleted successfully/i);
+      expect(response.body.message).toMatch(/cleanup failed/i);
       expect(failingCleanup).toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/Could not clean up project directories/), expect.any(Array), expect.stringMatching(/cleanup failed/));
 
@@ -5554,7 +6136,7 @@ describe('Projects API with Scaffolding', () => {
       warnSpy.mockRestore();
     });
 
-    test('returns response without waiting for cleanup outside test env', async () => {
+    test('returns response without waiting for cleanup when waitForCleanup=false', async () => {
       const { project } = await createPersistedProject({ name: `delete-async-${Date.now()}` });
       const projectRoutesModule = await import('../routes/projects.js');
       const processManager = await import('../routes/projects/processManager.js');
@@ -5574,7 +6156,7 @@ describe('Projects API with Scaffolding', () => {
 
       try {
         const response = await request(app)
-          .delete(`/api/projects/${project.id}`)
+          .delete(`/api/projects/${project.id}?waitForCleanup=false`)
           .set('x-confirm-destructive', 'true');
 
         expect(response.status).toBe(200);
@@ -5586,6 +6168,36 @@ describe('Projects API with Scaffolding', () => {
         releaseCleanup?.();
         projectRoutesModule.__projectRoutesInternals.resetCleanupDirectoryExecutor();
         terminateSpy.mockRestore();
+        process.env.NODE_ENV = previousEnv;
+      }
+    });
+
+    test('waitForCleanup returns cleanup failures when requested', async () => {
+      const { project } = await createPersistedProject({ name: `delete-wait-${Date.now()}` });
+      const projectRoutesModule = await import('../routes/projects.js');
+      const previousEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+
+      const failingCleanup = vi.fn().mockRejectedValue(new Error('cleanup failed'));
+      projectRoutesModule.__projectRoutesInternals.setCleanupDirectoryExecutor(failingCleanup);
+
+      try {
+        const response = await request(app)
+          .delete(`/api/projects/${project.id}?waitForCleanup=true`)
+          .set('x-confirm-destructive', 'true');
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(response.body.cleanup).toEqual(
+          expect.objectContaining({
+            success: false,
+            failures: expect.any(Array)
+          })
+        );
+        expect(response.body.cleanup.failures[0].message).toMatch(/cleanup failed/i);
+        expect(failingCleanup).toHaveBeenCalled();
+      } finally {
+        projectRoutesModule.__projectRoutesInternals.resetCleanupDirectoryExecutor();
         process.env.NODE_ENV = previousEnv;
       }
     });
@@ -5603,7 +6215,7 @@ describe('Projects API with Scaffolding', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(response.body.message).toMatch(/deleted successfully/i);
+      expect(response.body.message).toMatch(/cleanup failed/i);
       expect(failingCleanup).toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringMatching(/Could not clean up project directories/),
@@ -5651,6 +6263,54 @@ describe('Projects API with Scaffolding', () => {
   describe('Project Git settings API', () => {
     beforeEach(async () => {
       await cleanDatabase();
+    });
+
+    test('suggests gitignore entries for untracked setup artifacts', async () => {
+      const { project, projectPath } = await createPersistedProject({ name: `gitignore-suggest-${Date.now()}` });
+      await fs.writeFile(path.join(projectPath, '.gitignore'), '');
+      await fs.mkdir(path.join(projectPath, 'node_modules'), { recursive: true });
+
+      gitUtils.runGitCommand.mockImplementation(async (cwd, args) => {
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: projectPath, code: 0 };
+        }
+        if (args[0] === 'status' && args[1] === '--porcelain') {
+          return { stdout: '?? node_modules/\n', code: 0 };
+        }
+        return { stdout: '', code: 0 };
+      });
+
+      const response = await request(app)
+        .get(`/api/projects/${project.id}/git/ignore-suggestions`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.suggestion.needed).toBe(true);
+      expect(response.body.suggestion.entries).toContain('node_modules/');
+    });
+
+    test('applies gitignore entries and commits when requested', async () => {
+      const { project, projectPath } = await createPersistedProject({ name: `gitignore-apply-${Date.now()}` });
+      await fs.writeFile(path.join(projectPath, '.gitignore'), '');
+
+      gitUtils.runGitCommand.mockImplementation(async (cwd, args) => {
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: projectPath, code: 0 };
+        }
+        return { stdout: '', code: 0 };
+      });
+
+      const response = await request(app)
+        .post(`/api/projects/${project.id}/git/ignore-fix`)
+        .send({ entries: ['node_modules/'], commit: true });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.applied).toBe(true);
+      expect(response.body.entries).toContain('node_modules/');
+
+      const updated = await fs.readFile(path.join(projectPath, '.gitignore'), 'utf8');
+      expect(updated).toContain('node_modules/');
     });
 
     test('returns 404 when saving git settings for a missing project', async () => {
