@@ -3,6 +3,8 @@ import {
   fetchProjectGitStatus,
   fetchProjectGitRemote,
   pullProjectGitRemote,
+  stashProjectGitChanges,
+  discardProjectGitChanges,
   fetchProjectBranchesOverview,
   checkoutProjectBranch,
   updateGitSettings,
@@ -108,7 +110,69 @@ describe('settings git helpers', () => {
     const trackedFetch = () => Promise.resolve(buildResponse(true, { success: true }));
 
     const result = await pullProjectGitRemote({ trackedFetch, projectId: 'proj-5' });
-    expect(result).toEqual({ status: null, strategy: null });
+    expect(result).toEqual({ status: null, strategy: null, stash: null });
+  });
+
+  test('pullProjectGitRemote includes mode and confirm payload when provided', async () => {
+    let captured;
+    const trackedFetch = (url, options) => {
+      captured = { url, options };
+      return Promise.resolve(buildResponse(true, { success: true }));
+    };
+
+    await pullProjectGitRemote({
+      trackedFetch,
+      projectId: 'proj-5b',
+      mode: 'rebase',
+      confirm: true
+    });
+
+    expect(captured.url).toBe('/api/projects/proj-5b/git/pull');
+    expect(JSON.parse(captured.options.body)).toEqual({ mode: 'rebase', confirm: true });
+    expect(captured.options.headers).toEqual({ 'Content-Type': 'application/json' });
+  });
+
+  test('stashProjectGitChanges throws when projectId is missing', async () => {
+    await expect(stashProjectGitChanges({ trackedFetch: () => null })).rejects.toThrow(
+      'projectId is required to stash git changes'
+    );
+  });
+
+  test('stashProjectGitChanges returns payload on success', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      stashed: true,
+      label: 'lucidcoder-auto/main',
+      status: { branch: 'main', ahead: 0, behind: 0 }
+    }));
+
+    const result = await stashProjectGitChanges({ trackedFetch, projectId: 'proj-stash' });
+    expect(result).toMatchObject({ stashed: true, label: 'lucidcoder-auto/main' });
+  });
+
+  test('stashProjectGitChanges falls back to default error message', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+
+    await expect(stashProjectGitChanges({ trackedFetch, projectId: 'proj-stash-2' }))
+      .rejects.toThrow('Failed to stash changes');
+  });
+
+  test('discardProjectGitChanges throws when projectId is missing', async () => {
+    await expect(discardProjectGitChanges({ trackedFetch: () => null })).rejects.toThrow(
+      'projectId is required to discard git changes'
+    );
+  });
+
+  test('discardProjectGitChanges throws backend error', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false, error: 'blocked' }));
+    await expect(discardProjectGitChanges({ trackedFetch, projectId: 'proj-discard' })).rejects.toThrow('blocked');
+  });
+
+  test('discardProjectGitChanges falls back to default error message', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+
+    await expect(discardProjectGitChanges({ trackedFetch, projectId: 'proj-discard-2' }))
+      .rejects.toThrow('Failed to discard changes');
   });
 
   test('fetchProjectBranchesOverview throws on missing id', async () => {

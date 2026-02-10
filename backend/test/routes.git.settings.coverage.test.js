@@ -17,13 +17,16 @@ vi.mock('../database.js', () => ({
 }));
 
 const gitUtils = vi.hoisted(() => ({
+  discardWorkingTree: vi.fn(),
   ensureGitRepository: vi.fn(),
   fetchRemote: vi.fn(),
   getAheadBehind: vi.fn(),
   getCurrentBranch: vi.fn(),
   getRemoteUrl: vi.fn(),
   hasWorkingTreeChanges: vi.fn(),
-  runGitCommand: vi.fn()
+  popBranchStash: vi.fn(),
+  runGitCommand: vi.fn(),
+  stashWorkingTree: vi.fn()
 }));
 
 vi.mock('../utils/git.js', () => ({
@@ -53,6 +56,9 @@ describe('routes.git settings recovery coverage', () => {
     gitUtils.hasWorkingTreeChanges.mockResolvedValue(false);
     gitUtils.getAheadBehind.mockResolvedValue({ ahead: 0, behind: 0 });
     gitUtils.fetchRemote.mockResolvedValue(undefined);
+    gitUtils.stashWorkingTree.mockResolvedValue(null);
+    gitUtils.popBranchStash.mockResolvedValue(true);
+    gitUtils.discardWorkingTree.mockResolvedValue(undefined);
     gitUtils.runGitCommand.mockResolvedValue({ stdout: '', stderr: '', code: 0 });
     app = await loadApp();
   });
@@ -281,7 +287,7 @@ describe('routes.git settings recovery coverage', () => {
       .expect(400);
 
     expect(response.body.success).toBe(false);
-    expect(response.body.error).toBe('Working tree has uncommitted changes. Commit or stash before pulling.');
+    expect(response.body.error).toBe('Working tree has uncommitted changes. Use Stash & Pull or Discard & Pull in the Git tab before pulling.');
   });
 
   it('blocks pull when current branch differs from default', async () => {
@@ -362,5 +368,461 @@ describe('routes.git settings recovery coverage', () => {
 
     expect(response.body.success).toBe(true);
     expect(response.body.strategy).toBe('noop');
+  });
+
+  it('requires confirmation before discard pull when dirty', async () => {
+    const projectId = '106';
+    const projectPath = '/tmp/pull-discard-confirm';
+    const remoteUrl = 'https://github.com/octo/pull-discard.git';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl, defaultBranch: 'main' });
+    gitUtils.getRemoteUrl.mockResolvedValueOnce(null);
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/pull`)
+      .send({ mode: 'discard' })
+      .expect(409);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('Confirmation required to discard local changes.');
+    expect(gitUtils.discardWorkingTree).not.toHaveBeenCalled();
+  });
+
+  it('discards working tree during pull when confirmation is provided', async () => {
+    const projectId = '106-confirmed';
+    const projectPath = '/tmp/pull-discard-confirmed';
+    const remoteUrl = 'https://github.com/octo/pull-discard-confirmed.git';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl, defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/pull`)
+      .send({ mode: 'discard', confirm: true })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(gitUtils.discardWorkingTree).toHaveBeenCalledWith(projectPath);
+  });
+
+  it('returns compare errors during pull as 400', async () => {
+    const projectId = '107';
+    const projectPath = '/tmp/pull-compare-error';
+    const remoteUrl = 'https://github.com/octo/pull-compare.git';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl, defaultBranch: 'main' });
+    gitUtils.getRemoteUrl.mockResolvedValueOnce(null);
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(false);
+    gitUtils.getAheadBehind.mockResolvedValueOnce({ ahead: 0, behind: 0, error: 'compare failed' });
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/pull`)
+      .expect(400);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('compare failed');
+  });
+
+  it('stashes working tree changes on request', async () => {
+    const projectId = '201';
+    const projectPath = '/tmp/stash-project';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl: 'https://github.com/octo/stash.git', defaultBranch: 'main' });
+    gitUtils.stashWorkingTree.mockResolvedValueOnce('lucidcoder-auto/main');
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/stash`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.stashed).toBe(true);
+    expect(response.body.label).toBe('lucidcoder-auto/main');
+  });
+
+  it('returns 404 when stashing unknown project', async () => {
+    const projectId = '201-missing';
+
+    dbMocks.getProject.mockResolvedValue(null);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/stash`)
+      .expect(404);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('Project not found');
+  });
+
+  it('returns 400 when stashing project without path', async () => {
+    const projectId = '201-nopath';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: '' });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/stash`)
+      .expect(400);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('Project path is not configured.');
+  });
+
+  it('returns clean stash response when stash fails silently', async () => {
+    const projectId = '201-fail';
+    const projectPath = '/tmp/stash-fail';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+    gitUtils.stashWorkingTree.mockRejectedValueOnce({});
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/stash`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.stashed).toBe(false);
+    expect(response.body.label).toBeNull();
+  });
+
+  it('falls back to default branch when current branch is empty during stash', async () => {
+    const projectId = '201-branch-empty';
+    const projectPath = '/tmp/stash-branch-empty';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+    gitUtils.getCurrentBranch.mockResolvedValueOnce('');
+    gitUtils.stashWorkingTree.mockResolvedValueOnce('lucidcoder-auto/main');
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/stash`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(gitUtils.stashWorkingTree).toHaveBeenCalledWith(projectPath, 'main');
+  });
+
+  it('falls back to main when default branch is missing during stash', async () => {
+    const projectId = '201-default-fallback';
+    const projectPath = '/tmp/stash-default-fallback';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud' });
+    gitUtils.getCurrentBranch.mockRejectedValueOnce(new Error('branch failed'));
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/stash`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(projectPath, { defaultBranch: 'main' });
+    expect(gitUtils.stashWorkingTree).toHaveBeenCalledWith(projectPath, 'main');
+  });
+
+  it('returns null stash label when stash command fails', async () => {
+    const projectId = '201-stash-reject';
+    const projectPath = '/tmp/stash-reject';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+    gitUtils.stashWorkingTree.mockRejectedValueOnce(new Error('stash failed'));
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/stash`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.stashed).toBe(false);
+    expect(response.body.label).toBeNull();
+  });
+
+  it('returns fallback error when stash setup fails without message', async () => {
+    const projectId = '201-fail-setup';
+    const projectPath = '/tmp/stash-fail-setup';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+    gitUtils.ensureGitRepository.mockRejectedValueOnce({});
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/stash`)
+      .expect(500);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('Failed to stash changes');
+  });
+
+  it('requires confirmation before discarding changes', async () => {
+    const projectId = '202';
+    const projectPath = '/tmp/discard-project';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl: 'https://github.com/octo/discard.git', defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .expect(409);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('Confirmation required to discard local changes.');
+    expect(gitUtils.discardWorkingTree).not.toHaveBeenCalled();
+  });
+
+  it('discards changes when confirmation is provided', async () => {
+    const projectId = '203';
+    const projectPath = '/tmp/discard-confirmed';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl: 'https://github.com/octo/discard-confirmed.git', defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .send({ confirm: true })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.discarded).toBe(true);
+    expect(gitUtils.discardWorkingTree).toHaveBeenCalledWith(projectPath);
+  });
+
+  it('returns 404 when discarding unknown project', async () => {
+    const projectId = '203-missing';
+
+    dbMocks.getProject.mockResolvedValue(null);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .expect(404);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('Project not found');
+  });
+
+  it('returns 400 when discarding project without path', async () => {
+    const projectId = '203-nopath';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: '' });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .expect(400);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('Project path is not configured.');
+  });
+
+  it('returns clean discard response when working tree is clean', async () => {
+    const projectId = '203-clean';
+    const projectPath = '/tmp/discard-clean';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(false);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.discarded).toBe(false);
+    expect(gitUtils.discardWorkingTree).not.toHaveBeenCalled();
+  });
+
+  it('treats working tree status errors as clean during discard', async () => {
+    const projectId = '203-status-error';
+    const projectPath = '/tmp/discard-status-error';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockRejectedValueOnce(new Error('status failed'));
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.discarded).toBe(false);
+    expect(gitUtils.discardWorkingTree).not.toHaveBeenCalled();
+  });
+
+  it('falls back to main when default branch is missing during discard', async () => {
+    const projectId = '203-default-fallback';
+    const projectPath = '/tmp/discard-default-fallback';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(false);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(gitUtils.ensureGitRepository).toHaveBeenCalledWith(projectPath, { defaultBranch: 'main' });
+  });
+
+  it('pulls with stash mode when requested', async () => {
+    const projectId = '204';
+    const projectPath = '/tmp/pull-stash';
+    const remoteUrl = 'https://github.com/octo/pull-stash.git';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl, defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+    gitUtils.stashWorkingTree.mockResolvedValueOnce('lucidcoder-auto/main');
+    gitUtils.popBranchStash.mockResolvedValueOnce(true);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/pull`)
+      .send({ mode: 'stash' })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.stash).toEqual({ created: true, restored: true, error: null });
+  });
+
+  it('continues pull when stash creation fails', async () => {
+    const projectId = '204-stash-fails';
+    const projectPath = '/tmp/pull-stash-fails';
+    const remoteUrl = 'https://github.com/octo/pull-stash-fails.git';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl, defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+    gitUtils.getCurrentBranch.mockResolvedValueOnce('');
+    gitUtils.stashWorkingTree.mockRejectedValueOnce(new Error('stash failed'));
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/pull`)
+      .send({ mode: 'stash' })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.stash).toBeNull();
+    expect(gitUtils.stashWorkingTree).toHaveBeenCalledWith(projectPath, 'main');
+  });
+
+  it('surfaces stash restore errors after pull', async () => {
+    const projectId = '205';
+    const projectPath = '/tmp/pull-stash-restore-error';
+    const remoteUrl = 'https://github.com/octo/pull-stash-restore-error.git';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl, defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+    gitUtils.stashWorkingTree.mockResolvedValueOnce('lucidcoder-auto/main');
+    gitUtils.popBranchStash.mockRejectedValueOnce(new Error('restore failed'));
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/pull`)
+      .send({ mode: 'stash' })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.stash).toEqual({ created: true, restored: false, error: 'restore failed' });
+  });
+
+  it('uses default branch when current branch is empty during stash restore', async () => {
+    const projectId = '205-branch-fallback';
+    const projectPath = '/tmp/pull-stash-branch-fallback';
+    const remoteUrl = 'https://github.com/octo/pull-stash-branch-fallback.git';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl, defaultBranch: 'main' });
+    gitUtils.getRemoteUrl.mockResolvedValueOnce(remoteUrl);
+    gitUtils.getCurrentBranch.mockResolvedValueOnce('');
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+    gitUtils.stashWorkingTree.mockResolvedValueOnce('lucidcoder-auto/main');
+    gitUtils.popBranchStash.mockResolvedValueOnce(true);
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/pull`)
+      .send({ mode: 'stash' })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.stash).toEqual({ created: true, restored: true, error: null });
+    expect(gitUtils.popBranchStash).toHaveBeenCalledWith(projectPath, 'main');
+  });
+
+  it('uses fallback stash restore error message when missing', async () => {
+    const projectId = '205-no-restore-message';
+    const projectPath = '/tmp/pull-stash-restore-empty';
+    const remoteUrl = 'https://github.com/octo/pull-stash-restore-empty.git';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', remoteUrl, defaultBranch: 'main' });
+    gitUtils.hasWorkingTreeChanges.mockResolvedValueOnce(true);
+    gitUtils.stashWorkingTree.mockResolvedValueOnce('lucidcoder-auto/main');
+    gitUtils.popBranchStash.mockRejectedValueOnce({});
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/pull`)
+      .send({ mode: 'stash' })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.stash).toEqual({ created: true, restored: false, error: 'Failed to re-apply stashed changes.' });
+  });
+
+  it('returns 500 when discard route throws', async () => {
+    const projectId = '206';
+    const projectPath = '/tmp/discard-throws';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+    gitUtils.ensureGitRepository.mockRejectedValueOnce(new Error('discard explode'));
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .expect(500);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('discard explode');
+  });
+
+  it('uses fallback error message when discard fails without message', async () => {
+    const projectId = '207';
+    const projectPath = '/tmp/discard-throws-empty';
+
+    dbMocks.getProject.mockResolvedValue({ id: projectId, path: projectPath });
+    dbMocks.getProjectGitSettings.mockResolvedValue(null);
+    dbMocks.getGitSettings.mockResolvedValue({ workflow: 'cloud', defaultBranch: 'main' });
+    gitUtils.ensureGitRepository.mockRejectedValueOnce({});
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/git/discard`)
+      .expect(500);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toBe('Failed to discard changes');
   });
 });

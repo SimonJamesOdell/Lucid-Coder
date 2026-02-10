@@ -688,7 +688,9 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       'html,body{height:100%;margin:0;padding:0;background:transparent;}' +
       '</style>' +
       '</head><body aria-busy="true">' +
-      '<script>setTimeout(function(){try{location.reload();}catch(e){}},900);</script>' +
+      '<script>' +
+      'setTimeout(function(){location.reload();},900);' +
+      '</script>' +
       '</body></html>';
 
     const textBody = isFrontendStarting ? 'Preview is starting' : 'Preview proxy error';

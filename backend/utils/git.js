@@ -206,6 +206,11 @@ export const popBranchStash = async (projectPath, branchName) => {
   return true;
 };
 
+export const discardWorkingTree = async (projectPath) => {
+  await runGitCommand(projectPath, ['reset', '--hard']);
+  await runGitCommand(projectPath, ['clean', '-fd']);
+};
+
 export const commitAllChanges = async (projectPath, message) => {
   await runGitCommand(projectPath, ['add', '--all']);
   try {

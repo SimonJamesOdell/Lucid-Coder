@@ -36,6 +36,15 @@ describe('GitTab', () => {
       status: { branch: 'main', ahead: 0, behind: 0, hasRemote: true },
       strategy: 'noop'
     }),
+    stashProjectGitChanges: vi.fn().mockResolvedValue({
+      stashed: true,
+      label: 'lucidcoder-auto/main',
+      status: { branch: 'main', ahead: 0, behind: 0, hasRemote: true, dirty: false }
+    }),
+    discardProjectGitChanges: vi.fn().mockResolvedValue({
+      discarded: true,
+      status: { branch: 'main', ahead: 0, behind: 0, hasRemote: true, dirty: false }
+    }),
     fetchProjectBranchesOverview: vi.fn().mockResolvedValue({
       branches: [{ name: 'main' }],
       current: 'main'
@@ -629,6 +638,54 @@ describe('GitTab', () => {
     expect(await screen.findByText('Pull complete.')).toBeInTheDocument();
   });
 
+  test('pull remote reports stash restore success', async () => {
+    const pullProjectGitRemote = vi.fn().mockResolvedValue({
+      status: { branch: 'main', ahead: 0, behind: 0, hasRemote: true },
+      strategy: 'ff-only',
+      stash: { created: true, restored: true }
+    });
+    useAppState.mockReturnValue(buildContext({ pullProjectGitRemote }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-pull-remote'));
+
+    expect(await screen.findByText('Pulled with fast-forward. Stashed changes restored.')).toBeInTheDocument();
+  });
+
+  test('pull remote reports stash restore failure with error message', async () => {
+    const pullProjectGitRemote = vi.fn().mockResolvedValue({
+      status: { branch: 'main', ahead: 0, behind: 0, hasRemote: true },
+      strategy: 'ff-only',
+      stash: { created: true, error: 'stash restore failed' }
+    });
+    useAppState.mockReturnValue(buildContext({ pullProjectGitRemote }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-pull-remote'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('stash restore failed');
+  });
+
+  test('pull remote reports stash restore failure when no error is provided', async () => {
+    const pullProjectGitRemote = vi.fn().mockResolvedValue({
+      status: { branch: 'main', ahead: 0, behind: 0, hasRemote: true },
+      strategy: 'ff-only',
+      stash: { created: true }
+    });
+    useAppState.mockReturnValue(buildContext({ pullProjectGitRemote }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-pull-remote'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Pulled, but stashed changes were not restored');
+  });
+
   test('pull remote falls back to default error message', async () => {
     const pullProjectGitRemote = vi.fn().mockRejectedValue({});
     useAppState.mockReturnValue(buildContext({ pullProjectGitRemote }));
@@ -639,6 +696,508 @@ describe('GitTab', () => {
     await user.click(screen.getByTestId('git-pull-remote'));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to pull remote.');
+  });
+
+  test('shows dirty working tree status and resolve actions', () => {
+    useAppState.mockReturnValue(buildContext({
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    render(<GitTab />);
+
+    expect(screen.getByText('Dirty')).toBeInTheDocument();
+    expect(screen.getByTestId('git-stash-changes')).toBeInTheDocument();
+    expect(screen.getByTestId('git-discard-changes')).toBeInTheDocument();
+    expect(screen.getByTestId('git-stash-pull')).toBeInTheDocument();
+    expect(screen.getByTestId('git-discard-pull')).toBeInTheDocument();
+  });
+
+  test('stash changes reports success when stashed', async () => {
+    const stashProjectGitChanges = vi.fn().mockResolvedValue({ stashed: true });
+    useAppState.mockReturnValue(buildContext({
+      stashProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-stash-changes'));
+
+    expect(await screen.findByText('Changes stashed.')).toBeInTheDocument();
+  });
+
+  test('stash changes does nothing when project id is missing', async () => {
+    const stashProjectGitChanges = vi.fn();
+    useAppState.mockReturnValue(buildContext({
+      currentProject: { id: '', name: 'No Id', path: '/tmp/demo' },
+      stashProjectGitChanges,
+      projectGitStatus: {
+        '': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-stash-changes'));
+
+    expect(stashProjectGitChanges).not.toHaveBeenCalled();
+  });
+
+  test('stash changes reports clean working tree when nothing stashed', async () => {
+    const stashProjectGitChanges = vi.fn().mockResolvedValue({ stashed: false });
+    useAppState.mockReturnValue(buildContext({
+      stashProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-stash-changes'));
+
+    expect(await screen.findByText('Working tree already clean.')).toBeInTheDocument();
+  });
+
+  test('stash changes reports error when stash fails', async () => {
+    const stashProjectGitChanges = vi.fn().mockRejectedValue(new Error('stash failed'));
+    useAppState.mockReturnValue(buildContext({
+      stashProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-stash-changes'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('stash failed');
+  });
+
+  test('stash changes falls back to default error message', async () => {
+    const stashProjectGitChanges = vi.fn().mockRejectedValue({});
+    useAppState.mockReturnValue(buildContext({
+      stashProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-stash-changes'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to stash changes.');
+  });
+
+  test('stash changes falls back when error message is empty', async () => {
+    const stashProjectGitChanges = vi.fn().mockRejectedValue({ message: '' });
+    useAppState.mockReturnValue(buildContext({
+      stashProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-stash-changes'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to stash changes.');
+  });
+
+  test('discard changes does nothing when confirmation is declined', async () => {
+    const discardProjectGitChanges = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    useAppState.mockReturnValue(buildContext({
+      discardProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-discard-changes'));
+
+    expect(discardProjectGitChanges).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  test('discard changes reports clean working tree when nothing discarded', async () => {
+    const discardProjectGitChanges = vi.fn().mockResolvedValue({ discarded: false });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    useAppState.mockReturnValue(buildContext({
+      discardProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-discard-changes'));
+
+    expect(await screen.findByText('Working tree already clean.')).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
+  test('discard changes does nothing when project id is missing', async () => {
+    const discardProjectGitChanges = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    useAppState.mockReturnValue(buildContext({
+      currentProject: { id: '', name: 'No Id', path: '/tmp/demo' },
+      discardProjectGitChanges,
+      projectGitStatus: {
+        '': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-discard-changes'));
+
+    expect(discardProjectGitChanges).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  test('discard changes falls back to default error message', async () => {
+    const discardProjectGitChanges = vi.fn().mockRejectedValue({});
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    useAppState.mockReturnValue(buildContext({
+      discardProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-discard-changes'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to discard changes.');
+    confirmSpy.mockRestore();
+  });
+
+  test('discard changes reports success when discarded', async () => {
+    const discardProjectGitChanges = vi.fn().mockResolvedValue({ discarded: true });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    useAppState.mockReturnValue(buildContext({
+      discardProjectGitChanges,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-discard-changes'));
+
+    expect(await screen.findByText('Local changes discarded.')).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
+  test('stash and pull sends stash mode', async () => {
+    const pullProjectGitRemote = vi.fn().mockResolvedValue({
+      status: { branch: 'main', ahead: 0, behind: 0, hasRemote: true },
+      strategy: 'ff-only'
+    });
+    useAppState.mockReturnValue(buildContext({
+      pullProjectGitRemote,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-stash-pull'));
+
+    expect(pullProjectGitRemote).toHaveBeenCalledWith('proj-1', { mode: 'stash' });
+  });
+
+  test('discard and pull confirms before sending discard mode', async () => {
+    const pullProjectGitRemote = vi.fn().mockResolvedValue({
+      status: { branch: 'main', ahead: 0, behind: 0, hasRemote: true },
+      strategy: 'ff-only'
+    });
+    useAppState.mockReturnValue(buildContext({
+      pullProjectGitRemote,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-discard-pull'));
+
+    expect(pullProjectGitRemote).toHaveBeenCalledWith('proj-1', { mode: 'discard', confirm: true });
+    confirmSpy.mockRestore();
+  });
+
+  test('branch mismatch guidance and pull warning are shown', async () => {
+    const pullProjectGitRemote = vi.fn();
+    useAppState.mockReturnValue(buildContext({
+      pullProjectGitRemote,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'feature/login',
+          ahead: 0,
+          behind: 0
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    expect(screen.getByText(/You are on feature\/login/)).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('git-pull-remote'));
+
+    expect(await screen.findByText(/Pull updates this branch/)).toBeInTheDocument();
+    expect(pullProjectGitRemote).not.toHaveBeenCalled();
+  });
+
+  test('guidance copy explains diverged branches', () => {
+    useAppState.mockReturnValue(buildContext({
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 2,
+          behind: 1
+        }
+      }
+    }));
+
+    render(<GitTab />);
+
+    expect(screen.getByText(/Local and remote changed in different ways/)).toBeInTheDocument();
+  });
+
+  test('guidance copy explains when remote is ahead', () => {
+    useAppState.mockReturnValue(buildContext({
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 2
+        }
+      }
+    }));
+
+    render(<GitTab />);
+
+    expect(screen.getByText(/The remote has 2 new commits/)).toBeInTheDocument();
+  });
+
+  test('guidance copy uses singular commit when remote is ahead by one', () => {
+    useAppState.mockReturnValue(buildContext({
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1
+        }
+      }
+    }));
+
+    render(<GitTab />);
+
+    expect(screen.getByText(
+      'The remote has 1 new commit. Pull to update your workspace with those changes.'
+    )).toBeInTheDocument();
+  });
+
+  test('guidance copy explains when local is ahead', () => {
+    useAppState.mockReturnValue(buildContext({
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 3,
+          behind: 0
+        }
+      }
+    }));
+
+    render(<GitTab />);
+
+    expect(screen.getByText(/Your local changes are ahead by 3 commits/)).toBeInTheDocument();
+  });
+
+  test('guidance copy uses singular commit when local is ahead by one', () => {
+    useAppState.mockReturnValue(buildContext({
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 1,
+          behind: 0
+        }
+      }
+    }));
+
+    render(<GitTab />);
+
+    expect(screen.getByText(
+      'Your local changes are ahead by 1 commit. You need to decide when to push them to share with the remote.'
+    )).toBeInTheDocument();
+  });
+
+  test('discard and pull cancels when confirmation is declined', async () => {
+    const pullProjectGitRemote = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    useAppState.mockReturnValue(buildContext({
+      pullProjectGitRemote,
+      projectGitStatus: {
+        'proj-1': {
+          hasRemote: true,
+          branch: 'main',
+          currentBranch: 'main',
+          ahead: 0,
+          behind: 1,
+          dirty: true
+        }
+      }
+    }));
+
+    const user = userEvent.setup();
+    render(<GitTab />);
+
+    await user.click(screen.getByTestId('git-discard-pull'));
+
+    expect(pullProjectGitRemote).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   test('open remote trims .git suffix', async () => {

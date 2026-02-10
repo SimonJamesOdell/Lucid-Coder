@@ -346,13 +346,24 @@ export const fetchProjectGitRemote = async ({ trackedFetch, projectId }) => {
   return data.status || null;
 };
 
-export const pullProjectGitRemote = async ({ trackedFetch, projectId }) => {
+export const pullProjectGitRemote = async ({ trackedFetch, projectId, mode, confirm }) => {
   if (!projectId) {
     throw new Error('projectId is required to pull git remote');
   }
 
+  const payload = {};
+  if (mode) {
+    payload.mode = mode;
+  }
+  if (confirm) {
+    payload.confirm = true;
+  }
+
+  const body = Object.keys(payload).length ? JSON.stringify(payload) : undefined;
   const response = await trackedFetch(`/api/projects/${projectId}/git/pull`, {
-    method: 'POST'
+    method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body
   });
 
   const data = await response.json();
@@ -364,8 +375,51 @@ export const pullProjectGitRemote = async ({ trackedFetch, projectId }) => {
 
   return {
     status: data.status || null,
-    strategy: data.strategy || null
+    strategy: data.strategy || null,
+    stash: data.stash || null
   };
+};
+
+export const stashProjectGitChanges = async ({ trackedFetch, projectId }) => {
+  if (!projectId) {
+    throw new Error('projectId is required to stash git changes');
+  }
+
+  const response = await trackedFetch(`/api/projects/${projectId}/git/stash`, {
+    method: 'POST'
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to stash changes';
+    throw new Error(message);
+  }
+
+  return data;
+};
+
+export const discardProjectGitChanges = async ({ trackedFetch, projectId, confirm }) => {
+  if (!projectId) {
+    throw new Error('projectId is required to discard git changes');
+  }
+
+  const payload = confirm ? { confirm: true } : {};
+  const body = Object.keys(payload).length ? JSON.stringify(payload) : undefined;
+  const response = await trackedFetch(`/api/projects/${projectId}/git/discard`, {
+    method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to discard changes';
+    throw new Error(message);
+  }
+
+  return data;
 };
 
 export const fetchProjectBranchesOverview = async ({ trackedFetch, projectId }) => {

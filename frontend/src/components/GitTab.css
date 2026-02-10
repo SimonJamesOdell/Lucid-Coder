@@ -307,11 +307,51 @@
   gap: 0.85rem;
 }
 
+.git-guidance {
+  border: 1px solid var(--border-color, #1f1f1f);
+  border-radius: 0.6rem;
+  padding: 0.85rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.git-guidance-title {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary, #8c8c8c);
+}
+
+.git-guidance-body {
+  margin: 0.25rem 0 0;
+  color: var(--text-primary, #f5f5f5);
+  font-size: 0.95rem;
+}
+
+.git-guidance-hint {
+  margin: 0.4rem 0 0;
+  color: var(--warning-color, #f6c343);
+  font-size: 0.85rem;
+}
+
+.git-guidance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
 .git-repo-actions-row {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
   align-items: flex-end;
+}
+
+.git-tab-configure--primary {
+  box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.35), 0 6px 16px rgba(0, 122, 204, 0.2);
 }
 
 .git-repo-status {
@@ -343,6 +383,41 @@
   margin: 0;
   color: var(--text-secondary, #a0a0a0);
   font-size: 0.9rem;
+}
+
+.git-repo-actions-row--danger .git-tab-configure {
+  border-color: rgba(246, 195, 67, 0.5);
+}
+
+.git-advanced {
+  border: 1px dashed var(--border-color, #2a2a2a);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.9rem;
+}
+
+.git-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-secondary, #a0a0a0);
+}
+
+.git-advanced[open] summary {
+  color: var(--text-primary, #f5f5f5);
+}
+
+.git-advanced-group {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.git-advanced-title {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary, #8c8c8c);
 }
 
 .ghost {

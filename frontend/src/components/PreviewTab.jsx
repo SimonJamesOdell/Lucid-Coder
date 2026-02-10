@@ -84,35 +84,49 @@ const PreviewTab = forwardRef(
     },
     ref
   ) => {
-  const [iframeError, setIframeError] = useState(false);
-  const [iframeLoading, setIframeLoading] = useState(false);
-  const [pendingIframeError, setPendingIframeError] = useState(false);
-  const [hasConfirmedPreview, setHasConfirmedPreview] = useState(false);
+  // ── Core lifecycle state machine ──────────────────────────────────────
+  // previewPhase: 'loading' │ 'ready' │ 'error'
+  //   loading → iframe is loading, overlay covers it
+  //   ready   → preview loaded, iframe is visible
+  //   error   → confirmed failure, error card shown, iframe stopped
+  const [previewPhase, setPreviewPhase] = useState('loading');
   const [iframeKey, setIframeKey] = useState(0);
-    const [previewContextMenu, setPreviewContextMenu] = useState(null);
-  const [restartStatus, setRestartStatus] = useState(null);
-  const [previewFailureDetails, setPreviewFailureDetails] = useState(null);
-  const [startInFlight, setStartInFlight] = useState(false);
-  const [hostnameOverride, setHostnameOverride] = useState(null);
-  const [previewUrlOverride, setPreviewUrlOverride] = useState(null);
   const [isSoftReloading, setIsSoftReloading] = useState(false);
+  const [isPlaceholderDetected, setIsPlaceholderDetected] = useState(false);
+  const [previewFailureDetails, setPreviewFailureDetails] = useState(null);
+
+  // ── Auto-recovery ────────────────────────────────────────────────────
   const [autoRecoverState, setAutoRecoverState] = useState({
     attempt: 0,
     mode: 'idle'
   });
   const [autoRecoverDisabled, setAutoRecoverDisabled] = useState(false);
   const autoRecoverDisabledRef = useRef(autoRecoverDisabled);
-  const reloadTimeoutRef = useRef(null);
-  const reloadDebounceRef = useRef(null);
-  const loadTimeoutRef = useRef(null);
-  const errorConfirmTimeoutRef = useRef(null);
   const autoRecoverTimeoutRef = useRef(null);
   const autoRecoverAttemptRef = useRef(0);
-  const errorGraceUntilRef = useRef(0);
+
+  // ── UI state ─────────────────────────────────────────────────────────
+  const [previewContextMenu, setPreviewContextMenu] = useState(null);
+  const [restartStatus, setRestartStatus] = useState(null);
+  const [startInFlight, setStartInFlight] = useState(false);
+  const [hostnameOverride, setHostnameOverride] = useState(null);
+  const [previewUrlOverride, setPreviewUrlOverride] = useState(null);
+
+  // ── Timers ───────────────────────────────────────────────────────────
+  const loadTimeoutRef = useRef(null);           // 8 s from iframe mount
+  const placeholderTimeoutRef = useRef(null);    // 10 s proxy-placeholder escalation
+  const errorDelayRef = useRef(null);            // 1.2 s error confirmation delay
+  const reloadTimeoutRef = useRef(null);         // 400 ms scheduled reload after restart
+  const reloadDebounceRef = useRef(null);        // 300 ms debounce for soft-reloads
+
+  // ── Refs ──────────────────────────────────────────────────────────────
   const proxyPlaceholderFirstSeenRef = useRef(0);
-  const proxyPlaceholderLoadCountRef = useRef(0);
+  const suppressNextLoadRef = useRef(false);  // guards against synthetic load from doc.open/close
   const iframeRef = useRef(null);
+  const iframeNodeOverrideRef = useRef(null);
   const canvasRef = useRef(null);
+
+  const getIframeNode = useCallback(() => iframeNodeOverrideRef.current || iframeRef.current, []);
 
   useEffect(() => {
     autoRecoverDisabledRef.current = autoRecoverDisabled;
@@ -161,33 +175,38 @@ const PreviewTab = forwardRef(
     return origin;
   };
 
+  // ── Helpers ─────────────────────────────────────────────────────────
+  const clearAllTimers = () => {
+    for (const ref of [loadTimeoutRef, placeholderTimeoutRef, errorDelayRef, autoRecoverTimeoutRef, reloadTimeoutRef, reloadDebounceRef]) {
+      if (ref.current) { clearTimeout(ref.current); ref.current = null; }
+    }
+  };
+
+  const stopIframeContent = () => {
+    try {
+      const win = getIframeNode()?.contentWindow;
+      if (win && typeof win.stop === 'function') { win.stop(); }
+    } catch { /* cross-origin — ignore */ }
+
+    // win.stop() only aborts in-flight resource loads — it does NOT clear
+    // pending setTimeout callbacks.  The proxy placeholder page schedules
+    // `setTimeout(location.reload(), 900)` which would survive win.stop()
+    // and cause an endless load→reload→load strobe.  Replacing the document
+    // via open/close destroys the page's JS execution context, killing every
+    // pending timer and breaking the loop for good.
+    try {
+      const doc = getIframeNode()?.contentDocument;
+      if (doc && typeof doc.open === 'function') {
+        suppressNextLoadRef.current = true;
+        doc.open();
+        doc.write('<html><head><title>Preview loading</title></head><body></body></html>');
+        doc.close();
+      }
+    } catch { /* cross-origin or sandboxed — ignore */ }
+  };
+
   useEffect(() => {
-    return () => {
-      if (reloadTimeoutRef.current) {
-        clearTimeout(reloadTimeoutRef.current);
-        reloadTimeoutRef.current = null;
-      }
-
-      if (reloadDebounceRef.current) {
-        clearTimeout(reloadDebounceRef.current);
-        reloadDebounceRef.current = null;
-      }
-
-      if (loadTimeoutRef.current) {
-        clearTimeout(loadTimeoutRef.current);
-        loadTimeoutRef.current = null;
-      }
-
-      if (errorConfirmTimeoutRef.current) {
-        clearTimeout(errorConfirmTimeoutRef.current);
-        errorConfirmTimeoutRef.current = null;
-      }
-
-      if (autoRecoverTimeoutRef.current) {
-        clearTimeout(autoRecoverTimeoutRef.current);
-        autoRecoverTimeoutRef.current = null;
-      }
-    };
+    return () => { clearAllTimers(); };
   }, []);
 
   useEffect(() => {
@@ -362,7 +381,8 @@ const PreviewTab = forwardRef(
       setDisplayedUrl(previewUrl);
       setHistory([previewUrl]);
       setHistoryIndex(0);
-      setHasConfirmedPreview(false);
+      // The lifecycle effect (which depends on previewUrl) will transition
+      // the phase to 'loading' and set up the load timeout.
     }
   }, [previewUrl]);
 
@@ -404,45 +424,19 @@ const PreviewTab = forwardRef(
     return `${origin}${strippedPath}${parsed.search || ''}${parsed.hash || ''}`;
   };
 
-  const clearLoadTimeout = () => {
-    if (loadTimeoutRef.current) {
-      clearTimeout(loadTimeoutRef.current);
-      loadTimeoutRef.current = null;
+  const confirmError = (title, message, kind) => {
+    clearAllTimers();
+    stopIframeContent();
+    setIsSoftReloading(false);
+    setIsPlaceholderDetected(false);
+    if (title || message) {
+      setPreviewFailureDetails({ kind: kind || 'generic', title: title || '', message: message || '' });
     }
-  };
-
-  const clearErrorConfirmTimeout = () => {
-    if (errorConfirmTimeoutRef.current) {
-      clearTimeout(errorConfirmTimeoutRef.current);
-      errorConfirmTimeoutRef.current = null;
-    }
-  };
-
-  const setErrorGracePeriod = (durationMs) => {
-    const safeDuration = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
-    errorGraceUntilRef.current = Date.now() + safeDuration;
-  };
-
-  const scheduleErrorConfirmation = () => {
-    setIframeLoading(true);
-    setPendingIframeError(true);
-    clearErrorConfirmTimeout();
-
-    const now = Date.now();
-    const graceUntil = errorGraceUntilRef.current || 0;
-    const graceDelay = Math.max(0, graceUntil - now);
-    const confirmDelay = graceDelay + 1200;
-
-    errorConfirmTimeoutRef.current = setTimeout(() => {
-      errorConfirmTimeoutRef.current = null;
-      setPendingIframeError(false);
-      setIframeLoading(false);
-      setIframeError(true);
-    }, confirmDelay);
+    setPreviewPhase('error');
   };
 
   const updateDisplayedUrlFromIframe = useCallback(() => {
-    const iframe = iframeRef.current;
+    const iframe = getIframeNode();
     if (!iframe) {
       return;
     }
@@ -481,7 +475,7 @@ const PreviewTab = forwardRef(
   }, []);
 
   const postPreviewBridgePing = useCallback(() => {
-    const iframeWindow = iframeRef.current?.contentWindow;
+    const iframeWindow = getIframeNode()?.contentWindow;
     if (!iframeWindow || typeof iframeWindow.postMessage !== 'function') {
       return;
     }
@@ -547,7 +541,7 @@ const PreviewTab = forwardRef(
   };
 
   const isLucidCoderProxyPlaceholderPage = () => {
-    const iframe = iframeRef.current;
+    const iframe = getIframeNode();
     if (!iframe) {
       return false;
     }
@@ -574,7 +568,7 @@ const PreviewTab = forwardRef(
     }
 
     const handleMessage = (event) => {
-      const iframeWindow = iframeRef.current?.contentWindow;
+      const iframeWindow = getIframeNode()?.contentWindow;
       if (!iframeWindow || event.source !== iframeWindow) {
         return;
       }
@@ -597,7 +591,7 @@ const PreviewTab = forwardRef(
       }
 
       if (payload.type === 'LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU') {
-        const iframe = iframeRef.current;
+        const iframe = getIframeNode();
         const canvas = canvasRef.current;
         if (!iframe || !canvas) {
           return;
@@ -642,10 +636,7 @@ const PreviewTab = forwardRef(
         onPreviewNavigated?.(href, { source: 'message', type: payload.type });
       }
 
-      setHasConfirmedPreview(true);
-      setIframeLoading(false);
-      setIframeError(false);
-      setPendingIframeError(false);
+      setPreviewPhase('ready');
     };
 
     window.addEventListener('message', handleMessage);
@@ -718,141 +709,155 @@ const PreviewTab = forwardRef(
     };
   };
 
+  // ── Iframe lifecycle effect ─────────────────────────────────────────
+  // Fires when the iframe is (re)mounted (iframeKey) or the target URL
+  // changes. Sets up the loading phase and a single load timeout.
   useEffect(() => {
-    clearLoadTimeout();
-    clearErrorConfirmTimeout();
-    setPendingIframeError(false);
+    // Clear timers from the previous load cycle.
+    clearAllTimers();
+    setIsPlaceholderDetected(false);
+    proxyPlaceholderFirstSeenRef.current = 0;
 
     if (isStartingProject) {
-      setIframeError(false);
-      setIframeLoading(true);
+      setPreviewPhase('loading');
       return;
     }
 
-    if (showNotRunningState || iframeError) {
-      setIframeLoading(false);
+    if (showNotRunningState) {
       return;
     }
 
     if (!previewUrl || previewUrl === 'about:blank') {
-      setIframeLoading(false);
       return;
     }
 
-    setIframeLoading(true);
+    setPreviewPhase('loading');
     loadTimeoutRef.current = setTimeout(() => {
       loadTimeoutRef.current = null;
-      scheduleErrorConfirmation();
+      confirmError(
+        'Load timeout',
+        'The preview didn\u2019t finish loading. The dev server may have crashed or is unreachable.'
+      );
     }, 8000);
 
     return () => {
-      clearLoadTimeout();
+      if (loadTimeoutRef.current) { clearTimeout(loadTimeoutRef.current); loadTimeoutRef.current = null; }
     };
-  }, [previewUrl, iframeKey, showNotRunningState, iframeError, isStartingProject]);
+  }, [previewUrl, iframeKey, showNotRunningState, isStartingProject]);
+
+  // ── Iframe event handlers ───────────────────────────────────────────
 
   const handleIframeError = () => {
     setIsSoftReloading(false);
-    clearLoadTimeout();
-    scheduleErrorConfirmation();
+    // Cancel the main load timeout — we know the load failed.
+    if (loadTimeoutRef.current) { clearTimeout(loadTimeoutRef.current); loadTimeoutRef.current = null; }
+
+    // Brief 1.2 s delay so transient network hiccups don't flash the error card.
+    if (!errorDelayRef.current) {
+      errorDelayRef.current = setTimeout(() => {
+        errorDelayRef.current = null;
+        confirmError('', '');
+      }, 1200);
+    }
   };
 
-  const handleIframeLoad = () => {
+  const handleIframeLoad = (options = {}) => {
+    const ignoreSuppression = Boolean(options.ignoreSuppression);
+    // After stopIframeContent() replaces the document via doc.open/close,
+    // the browser fires a synthetic load event. Ignore it.
+    if (suppressNextLoadRef.current) {
+      suppressNextLoadRef.current = false;
+      if (!ignoreSuppression) {
+        return;
+      }
+    }
+
     setIsSoftReloading(false);
+
+    // Cancel any pending error delay — a load event supersedes it.
+    if (errorDelayRef.current) { clearTimeout(errorDelayRef.current); errorDelayRef.current = null; }
+
     postPreviewBridgePing();
 
-    // If the preview proxy is still warming up, it may briefly serve a same-origin
-    // placeholder page that auto-reloads. Keep the loading overlay up so users don't
-    // see error-page flashes while the dev server comes online.
+    // Proxy placeholder detection: the backend proxy serves a small HTML
+    // page with a recognisable <title> when it can't reach the dev server.
     if (isLucidCoderProxyPlaceholderPage()) {
-      proxyPlaceholderLoadCountRef.current += 1;
+      setPreviewPhase('loading');
+      setPreviewFailureDetails(null);
+      if (!isPlaceholderDetected) {
+        setIsPlaceholderDetected(true);
+      }
       if (!proxyPlaceholderFirstSeenRef.current) {
         proxyPlaceholderFirstSeenRef.current = Date.now();
       }
 
-      const placeholderAgeMs = Date.now() - (proxyPlaceholderFirstSeenRef.current || Date.now());
-      const shouldEscalate = placeholderAgeMs > 12000 || proxyPlaceholderLoadCountRef.current > 12;
+      // Capture error details NOW before stopIframeContent replaces the document.
+      let capturedTitle = '';
+      let capturedMessage = '';
+      try {
+        const doc = getIframeNode()?.contentDocument;
+        capturedTitle = typeof doc?.title === 'string' ? doc.title : '';
+        const code = doc?.querySelector?.('code');
+        capturedMessage = typeof code?.textContent === 'string' ? code.textContent.trim() : '';
+      } catch { /* ignore */ }
 
-      if (shouldEscalate) {
-        let title = '';
-        let message = '';
-        try {
-          const doc = iframeRef.current?.contentDocument;
-          title = typeof doc?.title === 'string' ? doc.title : '';
-          const code = doc?.querySelector?.('code');
-          message = typeof code?.textContent === 'string' ? code.textContent.trim() : '';
-        } catch {
-          // ignore
-        }
+      // Stop the placeholder's built-in reload script (900 ms setTimeout)
+      // to prevent rapid-fire load events. Our own escalation timeout
+      // handles the retry cadence.
+      stopIframeContent();
 
-        setPreviewFailureDetails({
-          kind: 'proxy-placeholder',
-          title: title || 'Preview proxy error',
-          message: message || 'The preview proxy is returning an error and cannot reach the dev server.'
-        });
+      // Cancel the regular 8 s load timeout — the placeholder timeout
+      // manages the deadline from here.
+      if (loadTimeoutRef.current) { clearTimeout(loadTimeoutRef.current); loadTimeoutRef.current = null; }
 
-        clearLoadTimeout();
-        clearErrorConfirmTimeout();
-        setPendingIframeError(false);
-        setIframeLoading(false);
-        setIframeError(true);
-        return;
+      // Start a 10 s placeholder escalation timeout (once).
+      if (!placeholderTimeoutRef.current) {
+        placeholderTimeoutRef.current = setTimeout(() => {
+          placeholderTimeoutRef.current = null;
+
+          confirmError(
+            capturedTitle || 'Preview proxy error',
+            capturedMessage || 'The preview proxy is returning an error and cannot reach the dev server.',
+            'proxy-placeholder'
+          );
+        }, 10000);
       }
 
-      setIframeError(false);
-      setIframeLoading(true);
-      setPendingIframeError(false);
-      clearErrorConfirmTimeout();
-      // Reset the load timeout so the proxy has more time to warm up
-      // without prematurely triggering error confirmation.
-      clearLoadTimeout();
-      loadTimeoutRef.current = setTimeout(() => {
-        loadTimeoutRef.current = null;
-        scheduleErrorConfirmation();
-      }, 8000);
+      // Keep the loading phase active (overlay stays visible).
       return;
     }
 
-    clearLoadTimeout();
-    clearErrorConfirmTimeout();
-    setIframeLoading(false);
-    setIframeError(false);
-    setPendingIframeError(false);
-    setHasConfirmedPreview(true);
-    errorGraceUntilRef.current = 0;
+    // ── Genuine content loaded — preview is ready ──
+    clearAllTimers();
     proxyPlaceholderFirstSeenRef.current = 0;
-    proxyPlaceholderLoadCountRef.current = 0;
+    setIsPlaceholderDetected(false);
     setPreviewFailureDetails(null);
-
-    if (autoRecoverTimeoutRef.current) {
-      clearTimeout(autoRecoverTimeoutRef.current);
-      autoRecoverTimeoutRef.current = null;
-    }
+    setPreviewPhase('ready');
     autoRecoverAttemptRef.current = 0;
     setAutoRecoverState({ attempt: 0, mode: 'idle' });
 
     updateDisplayedUrlFromIframe();
   };
 
+  // ── Reload helpers ──────────────────────────────────────────────────
+
   const reloadIframe = () => {
+    clearAllTimers();
+    suppressNextLoadRef.current = false;
     setRestartStatus(null);
-    setIframeError(false);
-    setIframeLoading(true);
-    setPendingIframeError(false);
+    setPreviewPhase('loading');
     setIsSoftReloading(false);
-    clearErrorConfirmTimeout();
-    setErrorGracePeriod(4000);
-    setHasConfirmedPreview(false);
-    proxyPlaceholderFirstSeenRef.current = 0;
-    proxyPlaceholderLoadCountRef.current = 0;
+    setIsPlaceholderDetected(false);
     setPreviewFailureDetails(null);
+    proxyPlaceholderFirstSeenRef.current = 0;
     setIframeKey((prev) => prev + 1);
   };
 
-  // Soft reload: reloads iframe content in-place without destroying the DOM
-  // element. The old content stays visible under the loading overlay so users
-  // don't see a blank/black flash while the new content loads.
+  // Soft reload: reloads iframe content in-place without unmounting the
+  // DOM element. The old content stays visible under the loading overlay
+  // so users don't see a blank / black flash while the new page loads.
   const softReloadIframe = () => {
-    const iframe = iframeRef.current;
+    const iframe = getIframeNode();
     if (!iframe) {
       reloadIframe();
       return;
@@ -865,32 +870,30 @@ const PreviewTab = forwardRef(
         return;
       }
 
+      clearAllTimers();
+      suppressNextLoadRef.current = false;
       setRestartStatus(null);
-      setIframeError(false);
-      setPendingIframeError(false);
+      setPreviewPhase('loading');
       setIsSoftReloading(true);
-      clearErrorConfirmTimeout();
-      clearLoadTimeout();
-      setErrorGracePeriod(4000);
-      proxyPlaceholderFirstSeenRef.current = 0;
-      proxyPlaceholderLoadCountRef.current = 0;
+      setIsPlaceholderDetected(false);
       setPreviewFailureDetails(null);
+      proxyPlaceholderFirstSeenRef.current = 0;
 
-      // Set a load timeout for the soft reload
       loadTimeoutRef.current = setTimeout(() => {
         loadTimeoutRef.current = null;
-        scheduleErrorConfirmation();
+        confirmError(
+          'Load timeout',
+          'The preview didn\u2019t finish loading after a reload.'
+        );
       }, 8000);
 
       win.location.reload();
     } catch {
-      // Cross-origin or other error — fall back to full remount
       reloadIframe();
     }
   };
 
-  // Debounced version of softReloadIframe for external callers (file saves, etc.)
-  // Multiple rapid calls coalesce into a single reload.
+  // Debounced version of softReloadIframe for external callers (saves, etc.)
   const debouncedReload = () => {
     if (reloadDebounceRef.current) {
       clearTimeout(reloadDebounceRef.current);
@@ -900,6 +903,8 @@ const PreviewTab = forwardRef(
       softReloadIframe();
     }, 300);
   };
+
+  // ── Auto-recovery ───────────────────────────────────────────────────
 
   const scheduleAutoRecoveryAttempt = useCallback(() => {
     const projectId = project?.id;
@@ -951,7 +956,7 @@ const PreviewTab = forwardRef(
   }, [project?.id, onRefreshProcessStatus]);
 
   useEffect(() => {
-    if (!iframeError || iframeLoading || pendingIframeError) {
+    if (previewPhase !== 'error') {
       return;
     }
 
@@ -961,9 +966,7 @@ const PreviewTab = forwardRef(
 
     scheduleAutoRecoveryAttempt();
   }, [
-    iframeError,
-    iframeLoading,
-    pendingIframeError,
+    previewPhase,
     showNotRunningState,
     isStartingProject,
     isProjectStopped,
@@ -990,7 +993,7 @@ const PreviewTab = forwardRef(
         .join('\n');
     };
 
-    const detailsTitle = previewFailureDetails?.title || (iframeError ? 'Failed to load preview' : 'Preview issue');
+    const detailsTitle = previewFailureDetails?.title || (previewPhase === 'error' ? 'Failed to load preview' : 'Preview issue');
     const detailsMessage = previewFailureDetails?.message || '';
     const expected = previewUrlRef.current || previewUrl;
     const displayed = displayedUrlRef.current || displayedUrl || expected;
@@ -1017,13 +1020,13 @@ const PreviewTab = forwardRef(
     ].join('\n');
   };
 
-  const prefillChatWithPreviewHelp = () => {
+  const dispatchPreviewFixGoal = () => {
     if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') {
       return;
     }
     const prompt = buildPreviewHelpPrompt();
     try {
-      window.dispatchEvent(new CustomEvent('lucidcoder:prefill-chat', { detail: { prompt } }));
+      window.dispatchEvent(new CustomEvent('lucidcoder:run-prompt', { detail: { prompt } }));
     } catch {
       // ignore
     }
@@ -1050,9 +1053,7 @@ const PreviewTab = forwardRef(
     }
 
     setRestartStatus(null);
-    setIframeLoading(true);
-    setErrorGracePeriod(4000);
-    setHasConfirmedPreview(false);
+    setPreviewPhase('loading');
 
     try {
       await onRestartProject(project.id);
@@ -1094,9 +1095,7 @@ const PreviewTab = forwardRef(
   const handleStartProject = async () => {
     setStartInFlight(true);
     setRestartStatus(null);
-    setIframeLoading(true);
-    setErrorGracePeriod(4000);
-    setHasConfirmedPreview(false);
+    setPreviewPhase('loading');
 
     try {
       await onRestartProject(project.id);
@@ -1118,7 +1117,7 @@ const PreviewTab = forwardRef(
     getOpenInNewTabUrl: () => toDevServerUrl(displayedUrlRef.current) || toDevServerUrl(),
     __testHooks: {
       triggerIframeError: handleIframeError,
-      triggerIframeLoad: handleIframeLoad,
+      triggerIframeLoad: () => handleIframeLoad({ ignoreSuppression: true }),
       triggerRefreshAndRetryForTests: handleRefreshAndRetry,
       normalizeHostname,
       resolveFrontendPort: chooseFrontendPort,
@@ -1135,7 +1134,7 @@ const PreviewTab = forwardRef(
         setPreviewFailureDetails(value);
       },
       setIframeNodeForTests: (node) => {
-        iframeRef.current = node;
+        iframeNodeOverrideRef.current = node;
       },
       setCanvasNodeForTests: (node) => {
         canvasRef.current = node;
@@ -1143,12 +1142,16 @@ const PreviewTab = forwardRef(
       copyTextToClipboardForTests: (value) => copyTextToClipboard(value),
       isProxyPlaceholderPageForTests: () => isLucidCoderProxyPlaceholderPage(),
       setHasConfirmedPreviewForTests: (value) => {
-        setHasConfirmedPreview(Boolean(value));
+        if (Boolean(value)) {
+          setPreviewPhase('ready');
+        } else if (previewPhase === 'ready') {
+          setPreviewPhase('loading');
+        }
       },
-      setErrorGracePeriodForTests: (value) => {
-        setErrorGracePeriod(value);
+      setErrorGracePeriodForTests: () => {
+        // No-op: grace period eliminated in phase-based state machine.
       },
-      getErrorGraceUntilForTests: () => errorGraceUntilRef.current,
+      getErrorGraceUntilForTests: () => 0,
       setAutoRecoverDisabledForTests: (value) => {
         setAutoRecoverDisabled(Boolean(value));
       },
@@ -1160,21 +1163,27 @@ const PreviewTab = forwardRef(
         autoRecoverAttemptRef.current = Number.isFinite(nextValue) ? nextValue : 0;
       },
       setErrorStateForTests: ({ error, loading, pending } = {}) => {
-        if (typeof error === 'boolean') {
-          setIframeError(error);
-        }
-        if (typeof loading === 'boolean') {
-          setIframeLoading(loading);
-        }
-        if (typeof pending === 'boolean') {
-          setPendingIframeError(pending);
+        if (error === true) {
+          setPreviewPhase('error');
+        } else if (loading === true) {
+          setPreviewPhase('loading');
+        } else if (error === false && loading === false) {
+          setPreviewPhase('ready');
         }
       },
       updateDisplayedUrlFromIframe,
       startNavigationPollingForTests: () => ensureNavigationPolling(),
       softReloadIframeForTests: softReloadIframe,
       hardReloadIframeForTests: reloadIframe,
-      getIsSoftReloadingForTests: () => isSoftReloading
+      getIsSoftReloadingForTests: () => isSoftReloading,
+      getStuckInPlaceholderLoopForTests: () => isPlaceholderDetected,
+      setStuckInPlaceholderLoopForTests: (value) => setIsPlaceholderDetected(Boolean(value)),
+      setPlaceholderCountersForTests: ({ firstSeen, loadCount } = {}) => {
+        if (typeof firstSeen === 'number') {
+          proxyPlaceholderFirstSeenRef.current = firstSeen;
+        }
+        // loadCount is no longer tracked — placeholder detection is time-based only.
+      }
     }
   }));
 
@@ -1302,7 +1311,7 @@ const PreviewTab = forwardRef(
     );
   }
 
-  if (iframeError && !iframeLoading && !pendingIframeError) {
+  if (previewPhase === 'error') {
     const expectedUrl = previewUrl;
     const canRestart = Boolean(project?.id && onRestartProject);
     const canRefresh = Boolean(project?.id && typeof onRefreshProcessStatus === 'function');
@@ -1377,8 +1386,8 @@ const PreviewTab = forwardRef(
                 Retry
               </button>
 
-              <button type="button" className="retry-button" onClick={prefillChatWithPreviewHelp}>
-                Ask AI to fix
+              <button type="button" className="retry-button" onClick={dispatchPreviewFixGoal}>
+                Fix with AI
               </button>
             </div>
 
@@ -1414,24 +1423,48 @@ const PreviewTab = forwardRef(
   }
 
   const renderLoadingOverlay = () => {
-    if (!iframeLoading || !previewUrl || previewUrl === 'about:blank') {
+    if (previewPhase !== 'loading' || (!previewUrl || previewUrl === 'about:blank') && !isPlaceholderDetected) {
       return null;
     }
 
     const newTabUrl = toDevServerUrl(normalizedDisplayedUrl) || toDevServerUrl();
 
     const showRecoveryCopy = autoRecoverState.mode === 'running' && (Number(autoRecoverState.attempt) || 0) > 0;
-    const title = showRecoveryCopy ? 'Recovering preview…' : 'Loading preview…';
+    const title = isPlaceholderDetected
+      ? 'Preview is not loading'
+      : showRecoveryCopy
+        ? 'Recovering preview…'
+        : 'Loading preview…';
     const subtitle = showRecoveryCopy ? `Attempt ${autoRecoverState.attempt}/3` : null;
 
     return (
       <div className="preview-loading" data-testid="preview-loading">
         <div className="preview-loading-card">
           <h3>{title}</h3>
-          <div className="preview-loading-bar" aria-hidden="true">
-            <span className="preview-loading-bar-swoosh" />
-          </div>
+          {!isPlaceholderDetected && (
+            <div className="preview-loading-bar" aria-hidden="true">
+              <span className="preview-loading-bar-swoosh" />
+            </div>
+          )}
           {subtitle ? <p className="expected-url">{subtitle}</p> : null}
+
+          {isPlaceholderDetected && (
+            <>
+              <p>
+                The project preview can't load. The dev server may have crashed
+                or the project code has an error that prevents it from starting.
+              </p>
+              <div className="preview-error-actions" data-testid="preview-stuck-actions">
+                <button type="button" className="retry-button" onClick={reloadIframe}>
+                  Retry
+                </button>
+                <button type="button" className="retry-button" onClick={dispatchPreviewFixGoal}>
+                  Fix with AI
+                </button>
+              </div>
+            </>
+          )}
+
           <p className="expected-url">
             URL: <code>{normalizedDisplayedUrl}</code>
           </p>
@@ -1448,7 +1481,7 @@ const PreviewTab = forwardRef(
   };
 
   const postNavigateToIframe = (url) => {
-    const iframeWindow = iframeRef.current?.contentWindow;
+    const iframeWindow = getIframeNode()?.contentWindow;
     if (iframeWindow && typeof iframeWindow.postMessage === 'function') {
       try {
         iframeWindow.postMessage({ type: 'LUCIDCODER_PREVIEW_NAVIGATE', href: url }, '*');
@@ -1613,7 +1646,7 @@ const PreviewTab = forwardRef(
         <iframe
           ref={iframeRef}
           data-testid="preview-iframe"
-          className={`full-iframe${(iframeLoading && !isSoftReloading) || pendingIframeError || (!hasConfirmedPreview && !isSoftReloading) ? ' full-iframe--loading' : ''}`}
+          className={`full-iframe${previewPhase !== 'ready' && !isSoftReloading ? ' full-iframe--loading' : ''}`}
           key={iframeKey}
           src={effectivePreviewUrl}
           title={`${project?.name || 'Project'} Preview`}

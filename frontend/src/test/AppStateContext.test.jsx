@@ -916,6 +916,58 @@ describe('AppStateContext', () => {
     expect(result.current.projectGitStatus['proj-empty']).toBeUndefined()
   })
 
+  test('stashProjectGitChanges updates status when payload includes status', async () => {
+    const { result } = renderUseAppState()
+
+    fetch.mockResolvedValueOnce(mockApiResponse({
+      success: true,
+      stashed: true,
+      status: {
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        hasRemote: true
+      }
+    }))
+
+    await act(async () => {
+      await result.current.stashProjectGitChanges('proj-stash')
+    })
+
+    expect(result.current.projectGitStatus['proj-stash']).toMatchObject({
+      branch: 'main',
+      ahead: 0,
+      behind: 0,
+      hasRemote: true
+    })
+  })
+
+  test('discardProjectGitChanges updates status when payload includes status', async () => {
+    const { result } = renderUseAppState()
+
+    fetch.mockResolvedValueOnce(mockApiResponse({
+      success: true,
+      discarded: true,
+      status: {
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        hasRemote: true
+      }
+    }))
+
+    await act(async () => {
+      await result.current.discardProjectGitChanges('proj-discard', { confirm: true })
+    })
+
+    expect(result.current.projectGitStatus['proj-discard']).toMatchObject({
+      branch: 'main',
+      ahead: 0,
+      behind: 0,
+      hasRemote: true
+    })
+  })
+
   test('git polling fetches remote status when project has a remote url', async () => {
     vi.useFakeTimers()
     fetch
