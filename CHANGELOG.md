@@ -1,3 +1,6 @@
+## 0.6.0 (2026-02-11)
+- Bump version metadata to 0.6.0.
+
 ## 0.5.9 (2026-02-11)
 - Add manual cleanup-target support for project cleanup (explicit targets, empty-target guard, and forced port cleanup on delete).
 - Extend process cleanup helpers with PID/port retry utilities and test-only hooks to keep shutdown logic deterministic in coverage runs.
