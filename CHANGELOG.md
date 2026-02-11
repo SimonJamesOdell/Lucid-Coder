@@ -1,3 +1,9 @@
+## 0.5.9 (2026-02-11)
+- Add manual cleanup-target support for project cleanup (explicit targets, empty-target guard, and forced port cleanup on delete).
+- Extend process cleanup helpers with PID/port retry utilities and test-only hooks to keep shutdown logic deterministic in coverage runs.
+- Update Create Project and Project Selector flows to align with the git-first wizard, progress steps, and cleanup retry UI.
+- Expand backend and frontend tests to keep the 100% coverage gate green.
+
 ## 0.5.8 (2026-02-10)
 - Add synchronous cleanup retry/delete responses so the UI can await cleanup results and surface failures.
 - Require user approval for suggested .gitignore fixes during clone/setup and provide apply/skip flows with setup continuation.

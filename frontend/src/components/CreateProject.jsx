@@ -563,7 +563,7 @@ const CreateProject = () => {
 
           const options = {
             provider: normalizedProvider,
-            name: (gitRepoName.trim() || nameForProject),
+            name: gitRepoName.trim(),
             owner: gitRepoOwner.trim(),
             visibility: gitRepoVisibility,
             description: descriptionForProject
@@ -770,7 +770,9 @@ const CreateProject = () => {
     CreateProject.__testHooks.handleSkipGitIgnore = handleSkipGitIgnore;
     CreateProject.__testHooks.handleContinueAfterGitIgnore = handleContinueAfterGitIgnore;
     CreateProject.__testHooks.setGitIgnoreSuggestion = setGitIgnoreSuggestion;
+    CreateProject.__testHooks.setGitIgnoreStatus = setGitIgnoreStatus;
     CreateProject.__testHooks.setProgress = setProgress;
+    CreateProject.__testHooks.deriveRepoName = deriveRepoName;
 
     return () => {
       if (!CreateProject.__testHooks) {
@@ -781,7 +783,9 @@ const CreateProject = () => {
       CreateProject.__testHooks.handleSkipGitIgnore = undefined;
       CreateProject.__testHooks.handleContinueAfterGitIgnore = undefined;
       CreateProject.__testHooks.setGitIgnoreSuggestion = undefined;
+      CreateProject.__testHooks.setGitIgnoreStatus = undefined;
       CreateProject.__testHooks.setProgress = undefined;
+      CreateProject.__testHooks.deriveRepoName = undefined;
     };
   }, [
     runPostCloneSetup,
@@ -810,7 +814,7 @@ const CreateProject = () => {
   const gitSummaryItems = shouldShowGitSummary
     ? [
         { label: 'Repo name', value: derivedRepoNameForSummary || '(not set)' },
-        { label: 'Remote', value: gitCloudMode === 'connect' ? (gitRemoteUrl.trim() || '(not set)') : 'New repo' },
+        { label: 'Remote', value: gitRemoteUrl.trim() },
         { label: 'Provider', value: (gitWorkflowMode === 'custom' ? gitProvider : (gitSettings?.provider || 'github')) }
       ]
     : [];
@@ -889,7 +893,7 @@ const CreateProject = () => {
                         onClick={handleApplyGitIgnore}
                         disabled={gitIgnoreStatus.state === 'working'}
                       >
-                        {gitIgnoreStatus.state === 'working' ? 'Fixing...' : 'Fix Issue'}
+                        Fix Issue
                       </button>
                       <button
                         type="button"

@@ -241,7 +241,7 @@ describe('App Component Integration', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Set up a new project with AI-powered coding assistance.')).toBeInTheDocument()
-        expect(screen.getByLabelText('Project Name *')).toBeInTheDocument()
+        expect(screen.getByLabelText('Git Workflow *')).toBeInTheDocument()
       })
     })
 
@@ -321,6 +321,8 @@ describe('App Component Integration', () => {
         expect(screen.getByText('Set up a new project with AI-powered coding assistance.')).toBeInTheDocument()
       })
 
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
+      await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Name *'), 'Temp Project')
 
       await user.click(screen.getByText('Cancel'))
@@ -377,10 +379,10 @@ describe('App Component Integration', () => {
 
       await user.click(screen.getByText('Create New Project'))
 
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
+      await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Name *'), 'Test Project')
       await user.type(screen.getByLabelText('Description'), 'Test description')
-      await user.click(screen.getByText('Next'))
-      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Create Project'))
 
       await waitFor(() => {
@@ -409,7 +411,9 @@ describe('App Component Integration', () => {
 
       await user.click(screen.getByText('Create New Project'))
 
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
+      await user.click(screen.getByText('Create Project'))
 
       await waitFor(() => {
         expect(screen.getByText('Project name is required')).toBeInTheDocument()
@@ -430,10 +434,10 @@ describe('App Component Integration', () => {
 
       await user.click(screen.getByText('Create New Project'))
 
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
+      await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Name *'), 'Duplicate Project')
       await user.type(screen.getByLabelText('Description'), 'Test description')
-      await user.click(screen.getByText('Next'))
-      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
 
       axios.post.mockRejectedValueOnce({
         response: {
@@ -463,10 +467,10 @@ describe('App Component Integration', () => {
 
       await user.click(screen.getByText('Create New Project'))
 
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
+      await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Name *'), 'Flaky Project')
       await user.type(screen.getByLabelText('Description'), 'Flaky description')
-      await user.click(screen.getByText('Next'))
-      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
 
       axios.post.mockRejectedValueOnce(new Error('Network error'))
 

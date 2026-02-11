@@ -94,7 +94,16 @@ const PreviewTab = forwardRef(
   const [isSoftReloading, setIsSoftReloading] = useState(false);
   const [isPlaceholderDetected, setIsPlaceholderDetected] = useState(false);
   const [previewFailureDetails, setPreviewFailureDetails] = useState(null);
-  const [isPreviewFrozen, setIsPreviewFrozen] = useState(false);
+
+  // ── Auto-recovery ────────────────────────────────────────────────────
+  const [autoRecoverState, setAutoRecoverState] = useState({
+    attempt: 0,
+    mode: 'idle'
+  });
+  const [autoRecoverDisabled, setAutoRecoverDisabled] = useState(false);
+  const autoRecoverDisabledRef = useRef(autoRecoverDisabled);
+  const autoRecoverTimeoutRef = useRef(null);
+  const autoRecoverAttemptRef = useRef(0);
 
   // ── UI state ─────────────────────────────────────────────────────────
   const [previewContextMenu, setPreviewContextMenu] = useState(null);
@@ -102,7 +111,6 @@ const PreviewTab = forwardRef(
   const [startInFlight, setStartInFlight] = useState(false);
   const [hostnameOverride, setHostnameOverride] = useState(null);
   const [previewUrlOverride, setPreviewUrlOverride] = useState(null);
-  const [isBackendLogsOpen, setIsBackendLogsOpen] = useState(false);
 
   // ── Timers ───────────────────────────────────────────────────────────
   const loadTimeoutRef = useRef(null);           // 8 s from iframe mount
@@ -117,11 +125,12 @@ const PreviewTab = forwardRef(
   const iframeRef = useRef(null);
   const iframeNodeOverrideRef = useRef(null);
   const canvasRef = useRef(null);
-  const previewReadyRef = useRef(false);
-  const previewEscapeCountRef = useRef(0);
-  const previewEscapeWindowRef = useRef(0);
 
   const getIframeNode = useCallback(() => iframeNodeOverrideRef.current || iframeRef.current, []);
+
+  useEffect(() => {
+    autoRecoverDisabledRef.current = autoRecoverDisabled;
+  }, [autoRecoverDisabled]);
 
   const guessBackendOrigin = () => {
     if (typeof window === 'undefined') {
@@ -168,7 +177,7 @@ const PreviewTab = forwardRef(
 
   // ── Helpers ─────────────────────────────────────────────────────────
   const clearAllTimers = () => {
-    for (const ref of [loadTimeoutRef, placeholderTimeoutRef, errorDelayRef, reloadTimeoutRef, reloadDebounceRef]) {
+    for (const ref of [loadTimeoutRef, placeholderTimeoutRef, errorDelayRef, autoRecoverTimeoutRef, reloadTimeoutRef, reloadDebounceRef]) {
       if (ref.current) { clearTimeout(ref.current); ref.current = null; }
     }
   };
@@ -199,6 +208,10 @@ const PreviewTab = forwardRef(
   useEffect(() => {
     return () => { clearAllTimers(); };
   }, []);
+
+  useEffect(() => {
+    autoRecoverAttemptRef.current = Number(autoRecoverState.attempt) || 0;
+  }, [autoRecoverState.attempt]);
 
   useEffect(() => {
     /* v8 ignore next */
@@ -276,6 +289,13 @@ const PreviewTab = forwardRef(
     const projectId = project?.id ?? null;
     if (autoStartAttemptRef.current.projectId !== projectId) {
       autoStartAttemptRef.current = { projectId, attempted: false };
+      if (autoRecoverTimeoutRef.current) {
+        clearTimeout(autoRecoverTimeoutRef.current);
+        autoRecoverTimeoutRef.current = null;
+      }
+      autoRecoverAttemptRef.current = 0;
+      setAutoRecoverState({ attempt: 0, mode: 'idle' });
+      setAutoRecoverDisabled(false);
     }
   }, [project?.id]);
 
@@ -325,13 +345,6 @@ const PreviewTab = forwardRef(
       return 'about:blank';
     }
 
-    if (typeof window !== 'undefined') {
-      const origin = window.location?.origin;
-      if (origin && origin !== 'null') {
-        return `${origin}/preview/${encodeURIComponent(project.id)}`;
-      }
-    }
-
     const backendOrigin = guessBackendOrigin();
     if (!backendOrigin) {
       return 'about:blank';
@@ -368,9 +381,6 @@ const PreviewTab = forwardRef(
       setDisplayedUrl(previewUrl);
       setHistory([previewUrl]);
       setHistoryIndex(0);
-      previewReadyRef.current = false;
-      previewEscapeCountRef.current = 0;
-      previewEscapeWindowRef.current = 0;
       // The lifecycle effect (which depends on previewUrl) will transition
       // the phase to 'loading' and set up the load timeout.
     }
@@ -423,38 +433,6 @@ const PreviewTab = forwardRef(
       setPreviewFailureDetails({ kind: kind || 'generic', title: title || '', message: message || '' });
     }
     setPreviewPhase('error');
-    previewReadyRef.current = false;
-  };
-
-  const handleProxyPlaceholderDetected = (details = {}) => {
-    clearAllTimers();
-    setPreviewPhase('loading');
-    setPreviewFailureDetails(null);
-    if (!isPlaceholderDetected) {
-      setIsPlaceholderDetected(true);
-    }
-    if (!proxyPlaceholderFirstSeenRef.current) {
-      proxyPlaceholderFirstSeenRef.current = Date.now();
-    }
-
-    setIsPreviewFrozen(true);
-    suppressNextLoadRef.current = true;
-
-    stopIframeContent();
-
-    if (loadTimeoutRef.current) { clearTimeout(loadTimeoutRef.current); loadTimeoutRef.current = null; }
-
-    if (!placeholderTimeoutRef.current) {
-      placeholderTimeoutRef.current = setTimeout(() => {
-        placeholderTimeoutRef.current = null;
-
-        confirmError(
-          details.title || 'Preview proxy error',
-          details.message || 'The preview proxy is returning an error and cannot reach the dev server.',
-          'proxy-placeholder'
-        );
-      }, 10000);
-    }
   };
 
   const updateDisplayedUrlFromIframe = useCallback(() => {
@@ -483,17 +461,6 @@ const PreviewTab = forwardRef(
     }
   }, [setDisplayedUrl, onPreviewNavigated]);
 
-  const markPreviewReady = useCallback(() => {
-    clearAllTimers();
-    proxyPlaceholderFirstSeenRef.current = 0;
-    setIsPlaceholderDetected(false);
-    setPreviewFailureDetails(null);
-    setPreviewPhase('ready');
-    previewReadyRef.current = true;
-    setIsPreviewFrozen(false);
-    updateDisplayedUrlFromIframe();
-  }, [updateDisplayedUrlFromIframe]);
-
   const getExpectedPreviewOrigin = useCallback(() => {
     const current = previewUrlRef.current;
     if (typeof current !== 'string' || !current) {
@@ -506,33 +473,6 @@ const PreviewTab = forwardRef(
       return null;
     }
   }, []);
-
-  const getPreviewProxyPrefix = useCallback(() => {
-    if (!project?.id) {
-      return null;
-    }
-    return `/preview/${encodeURIComponent(project.id)}`;
-  }, [project?.id]);
-
-  const isPreviewEscapeUrl = useCallback((href) => {
-    if (!href) {
-      return false;
-    }
-    const expectedOrigin = getExpectedPreviewOrigin();
-    const prefix = getPreviewProxyPrefix();
-    if (!expectedOrigin || !prefix) {
-      return false;
-    }
-    try {
-      const url = new URL(href);
-      if (url.origin !== expectedOrigin) {
-        return false;
-      }
-      return !url.pathname.startsWith(prefix);
-    } catch {
-      return false;
-    }
-  }, [getExpectedPreviewOrigin, getPreviewProxyPrefix]);
 
   const postPreviewBridgePing = useCallback(() => {
     const iframeWindow = getIframeNode()?.contentWindow;
@@ -671,20 +611,7 @@ const PreviewTab = forwardRef(
         return;
       }
 
-      if (payload.type === 'LUCIDCODER_PREVIEW_PROXY_ERROR') {
-        handleProxyPlaceholderDetected({
-          title: payload.title,
-          message: payload.message
-        });
-        return;
-      }
-
-      if (payload.type === 'LUCIDCODER_PREVIEW_BRIDGE_READY') {
-        markPreviewReady();
-        return;
-      }
-
-      if (payload.type !== 'LUCIDCODER_PREVIEW_NAV') {
+      if (payload.type !== 'LUCIDCODER_PREVIEW_NAV' && payload.type !== 'LUCIDCODER_PREVIEW_BRIDGE_READY') {
         return;
       }
 
@@ -709,16 +636,14 @@ const PreviewTab = forwardRef(
         onPreviewNavigated?.(href, { source: 'message', type: payload.type });
       }
 
-      if (previewReadyRef.current) {
-        setPreviewPhase('ready');
-      }
+      setPreviewPhase('ready');
     };
 
     window.addEventListener('message', handleMessage);
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, [getExpectedPreviewOrigin, onPreviewNavigated, markPreviewReady]);
+  }, [getExpectedPreviewOrigin, onPreviewNavigated]);
 
   const renderContextMenu = () => {
     if (!previewContextMenu) {
@@ -847,10 +772,6 @@ const PreviewTab = forwardRef(
       }
     }
 
-    if (isPreviewFrozen) {
-      return;
-    }
-
     setIsSoftReloading(false);
 
     // Cancel any pending error delay — a load event supersedes it.
@@ -858,36 +779,18 @@ const PreviewTab = forwardRef(
 
     postPreviewBridgePing();
 
-    let currentHref = '';
-    try {
-      currentHref = getIframeNode()?.contentWindow?.location?.href || '';
-    } catch {
-      currentHref = '';
-    }
-
-    if (isPreviewEscapeUrl(currentHref)) {
-      const now = Date.now();
-      if (!previewEscapeWindowRef.current || now - previewEscapeWindowRef.current > 5000) {
-        previewEscapeWindowRef.current = now;
-        previewEscapeCountRef.current = 0;
-      }
-      previewEscapeCountRef.current += 1;
-
-      if (previewEscapeCountRef.current >= 3) {
-        confirmError(
-          'Preview redirected',
-          'The preview keeps navigating to the LucidCoder UI. The project dev server is likely redirecting to the host origin.'
-        );
-        return;
-      }
-
-      reloadIframe();
-      return;
-    }
-
     // Proxy placeholder detection: the backend proxy serves a small HTML
     // page with a recognisable <title> when it can't reach the dev server.
     if (isLucidCoderProxyPlaceholderPage()) {
+      setPreviewPhase('loading');
+      setPreviewFailureDetails(null);
+      if (!isPlaceholderDetected) {
+        setIsPlaceholderDetected(true);
+      }
+      if (!proxyPlaceholderFirstSeenRef.current) {
+        proxyPlaceholderFirstSeenRef.current = Date.now();
+      }
+
       // Capture error details NOW before stopIframeContent replaces the document.
       let capturedTitle = '';
       let capturedMessage = '';
@@ -898,19 +801,42 @@ const PreviewTab = forwardRef(
         capturedMessage = typeof code?.textContent === 'string' ? code.textContent.trim() : '';
       } catch { /* ignore */ }
 
-      handleProxyPlaceholderDetected({ title: capturedTitle, message: capturedMessage });
+      // Stop the placeholder's built-in reload script (900 ms setTimeout)
+      // to prevent rapid-fire load events. Our own escalation timeout
+      // handles the retry cadence.
+      stopIframeContent();
+
+      // Cancel the regular 8 s load timeout — the placeholder timeout
+      // manages the deadline from here.
+      if (loadTimeoutRef.current) { clearTimeout(loadTimeoutRef.current); loadTimeoutRef.current = null; }
+
+      // Start a 10 s placeholder escalation timeout (once).
+      if (!placeholderTimeoutRef.current) {
+        placeholderTimeoutRef.current = setTimeout(() => {
+          placeholderTimeoutRef.current = null;
+
+          confirmError(
+            capturedTitle || 'Preview proxy error',
+            capturedMessage || 'The preview proxy is returning an error and cannot reach the dev server.',
+            'proxy-placeholder'
+          );
+        }, 10000);
+      }
+
+      // Keep the loading phase active (overlay stays visible).
       return;
     }
 
-    // ── Content loaded — wait for bridge ready before showing preview ──
-    if (!previewReadyRef.current) {
-      setPreviewPhase('loading');
-      setPreviewFailureDetails(null);
-      setIsPlaceholderDetected(false);
-      return;
-    }
+    // ── Genuine content loaded — preview is ready ──
+    clearAllTimers();
+    proxyPlaceholderFirstSeenRef.current = 0;
+    setIsPlaceholderDetected(false);
+    setPreviewFailureDetails(null);
+    setPreviewPhase('ready');
+    autoRecoverAttemptRef.current = 0;
+    setAutoRecoverState({ attempt: 0, mode: 'idle' });
 
-    markPreviewReady();
+    updateDisplayedUrlFromIframe();
   };
 
   // ── Reload helpers ──────────────────────────────────────────────────
@@ -922,11 +848,8 @@ const PreviewTab = forwardRef(
     setPreviewPhase('loading');
     setIsSoftReloading(false);
     setIsPlaceholderDetected(false);
-    setIsPreviewFrozen(false);
     setPreviewFailureDetails(null);
     proxyPlaceholderFirstSeenRef.current = 0;
-    previewEscapeCountRef.current = 0;
-    previewEscapeWindowRef.current = 0;
     setIframeKey((prev) => prev + 1);
   };
 
@@ -953,11 +876,8 @@ const PreviewTab = forwardRef(
       setPreviewPhase('loading');
       setIsSoftReloading(true);
       setIsPlaceholderDetected(false);
-      setIsPreviewFrozen(false);
       setPreviewFailureDetails(null);
       proxyPlaceholderFirstSeenRef.current = 0;
-      previewEscapeCountRef.current = 0;
-      previewEscapeWindowRef.current = 0;
 
       loadTimeoutRef.current = setTimeout(() => {
         loadTimeoutRef.current = null;
@@ -983,6 +903,75 @@ const PreviewTab = forwardRef(
       softReloadIframe();
     }, 300);
   };
+
+  // ── Auto-recovery ───────────────────────────────────────────────────
+
+  const scheduleAutoRecoveryAttempt = useCallback(() => {
+    const projectId = project?.id;
+    if (!projectId) {
+      return;
+    }
+
+    if (typeof onRefreshProcessStatus !== 'function') {
+      return;
+    }
+
+    if (autoRecoverDisabledRef.current) {
+      return;
+    }
+
+    if (autoRecoverTimeoutRef.current) {
+      return;
+    }
+
+    const MAX_ATTEMPTS = 3;
+    const nextAttempt = autoRecoverAttemptRef.current + 1;
+    if (nextAttempt > MAX_ATTEMPTS) {
+      setAutoRecoverState((prev) => ({ ...prev, mode: 'exhausted' }));
+      return;
+    }
+
+    const delayMs = Math.min(8000, 900 * Math.pow(2, Math.max(0, nextAttempt - 1)));
+    setAutoRecoverState({ attempt: autoRecoverAttemptRef.current, mode: 'scheduled' });
+
+    autoRecoverTimeoutRef.current = setTimeout(async () => {
+      autoRecoverTimeoutRef.current = null;
+
+      if (autoRecoverDisabledRef.current) {
+        setAutoRecoverState((prev) => ({ ...prev, mode: 'paused' }));
+        return;
+      }
+
+      setAutoRecoverState({ attempt: nextAttempt, mode: 'running' });
+      autoRecoverAttemptRef.current = nextAttempt;
+
+      try {
+        await onRefreshProcessStatus(projectId);
+      } catch {
+        // ignore
+      }
+
+      reloadIframe();
+    }, delayMs);
+  }, [project?.id, onRefreshProcessStatus]);
+
+  useEffect(() => {
+    if (previewPhase !== 'error') {
+      return;
+    }
+
+    if (showNotRunningState || isStartingProject || isProjectStopped) {
+      return;
+    }
+
+    scheduleAutoRecoveryAttempt();
+  }, [
+    previewPhase,
+    showNotRunningState,
+    isStartingProject,
+    isProjectStopped,
+    scheduleAutoRecoveryAttempt
+  ]);
 
   const buildPreviewHelpPrompt = () => {
     const projectLabel = project?.name ? `${project.name} (${project.id})` : String(project?.id || 'unknown');
@@ -1076,6 +1065,33 @@ const PreviewTab = forwardRef(
     }
   };
 
+  const handleRefreshAndRetry = async () => {
+    if (!project?.id) {
+      return;
+    }
+
+    if (autoRecoverTimeoutRef.current) {
+      clearTimeout(autoRecoverTimeoutRef.current);
+      autoRecoverTimeoutRef.current = null;
+    }
+
+    setRestartStatus(null);
+
+    // Surface a helpful loading copy while we refresh.
+    setAutoRecoverState((prev) => ({
+      attempt: Math.max(1, Number(prev.attempt) || 0),
+      mode: 'running'
+    }));
+
+    try {
+      await onRefreshProcessStatus?.(project.id);
+    } catch {
+      // ignore
+    }
+
+    reloadIframe();
+  };
+
   const handleStartProject = async () => {
     setStartInFlight(true);
     setRestartStatus(null);
@@ -1102,6 +1118,7 @@ const PreviewTab = forwardRef(
     __testHooks: {
       triggerIframeError: handleIframeError,
       triggerIframeLoad: () => handleIframeLoad({ ignoreSuppression: true }),
+      triggerRefreshAndRetryForTests: handleRefreshAndRetry,
       normalizeHostname,
       resolveFrontendPort: chooseFrontendPort,
       applyHostnameOverride,
@@ -1135,6 +1152,16 @@ const PreviewTab = forwardRef(
         // No-op: grace period eliminated in phase-based state machine.
       },
       getErrorGraceUntilForTests: () => 0,
+      setAutoRecoverDisabledForTests: (value) => {
+        setAutoRecoverDisabled(Boolean(value));
+      },
+      setAutoRecoverStateForTests: (value) => {
+        setAutoRecoverState(value);
+      },
+      setAutoRecoverAttemptForTests: (value) => {
+        const nextValue = Number(value);
+        autoRecoverAttemptRef.current = Number.isFinite(nextValue) ? nextValue : 0;
+      },
       setErrorStateForTests: ({ error, loading, pending } = {}) => {
         if (error === true) {
           setPreviewPhase('error');
@@ -1170,7 +1197,7 @@ const PreviewTab = forwardRef(
     !showNotRunningState &&
     !isStartingProject &&
     (isFrontendReadyForPreview || !isProcessInfoCurrent);
-  const effectivePreviewUrl = shouldAttemptPreview && !isPreviewFrozen ? previewUrl : 'about:blank';
+  const effectivePreviewUrl = shouldAttemptPreview ? previewUrl : 'about:blank';
 
   const urlBarValue = (() => {
     const normalized = normalizedDisplayedUrl;
@@ -1266,7 +1293,6 @@ const PreviewTab = forwardRef(
   if (showNotRunningState) {
     return (
       <div className="preview-tab">
-        {renderUrlBar()}
         <div className="preview-not-running" data-testid="preview-not-running">
           <div className="preview-not-running-card">
             <h3>Project not running</h3>
@@ -1287,6 +1313,11 @@ const PreviewTab = forwardRef(
 
   if (previewPhase === 'error') {
     const expectedUrl = previewUrl;
+    const canRestart = Boolean(project?.id && onRestartProject);
+    const canRefresh = Boolean(project?.id && typeof onRefreshProcessStatus === 'function');
+    const canAutoRecover = canRefresh && !autoRecoverDisabled;
+    const showAutoRecoverSwoosh = canAutoRecover && (autoRecoverState.mode === 'scheduled' || autoRecoverState.mode === 'running');
+
     const currentHostname = normalizeHostname(window.location.hostname);
     const canSuggestLocalhost = currentHostname !== 'localhost' && !currentHostname.startsWith('127.');
 
@@ -1304,33 +1335,42 @@ const PreviewTab = forwardRef(
       const backendLabel = `Backend: ${normalizeStatus(backendProcess?.status)}${backendPort ? ` (:${backendPort})` : ''}`;
       return `${frontendLabel} • ${backendLabel}`;
     })();
-    const backendLogs = Array.isArray(processInfo?.processes?.backend?.logs)
-      ? processInfo.processes.backend.logs
-      : [];
-    const backendLogText = backendLogs
-      .map((entry) => entry?.message)
-      .filter(Boolean)
-      .join('\n');
-    const shouldShowFailureDetails = (() => {
-      if (!previewFailureDetails?.message) {
-        return false;
+    const autoRecoverCopy = (() => {
+      if (!canRefresh) {
+        return null;
       }
-      const title = previewFailureDetails.title || '';
-      const message = previewFailureDetails.message || '';
-      if (title === 'Load timeout' && /preview didn['’]t finish loading/i.test(message)) {
-        return false;
+      if (autoRecoverDisabled) {
+        return 'Auto-recovery is paused.';
       }
-      return true;
+      if (autoRecoverState.mode === 'exhausted') {
+        return 'Auto-recovery paused after repeated failures.';
+      }
+      if (autoRecoverState.mode === 'running') {
+        return `Attempting recovery… (attempt ${autoRecoverAttemptRef.current}/3)`;
+      }
+      if (autoRecoverState.mode === 'scheduled') {
+        return 'Attempting recovery…';
+      }
+      return null;
     })();
 
     return (
       <div className="preview-tab">
-        {renderUrlBar()}
         <div className="preview-error">
           <div className="preview-loading-card">
             <h3>Failed to load preview</h3>
 
-            {shouldShowFailureDetails && (
+            {showAutoRecoverSwoosh && (
+              <div className="preview-loading-bar" aria-hidden="true">
+                <span className="preview-loading-bar-swoosh" />
+              </div>
+            )}
+
+            {autoRecoverCopy ? (
+              <p className="expected-url">{autoRecoverCopy}</p>
+            ) : null}
+
+            {previewFailureDetails?.message && (
               <p className="expected-url">
                 <strong>{previewFailureDetails.title || 'Details'}:</strong> {previewFailureDetails.message}
               </p>
@@ -1364,45 +1404,20 @@ const PreviewTab = forwardRef(
               </details>
             )}
 
-            {backendLogs.length > 0 && (
-              <div className="preview-log-actions" style={{ marginTop: '0.5rem' }}>
-                <button
-                  type="button"
-                  className="preview-log-button"
-                  onClick={() => setIsBackendLogsOpen(true)}
-                >
-                  Backend logs
-                </button>
-              </div>
+            {(Array.isArray(processInfo?.processes?.backend?.logs) && processInfo.processes.backend.logs.length > 0) && (
+              <details className="expected-url" style={{ marginTop: '0.5rem' }}>
+                <summary>Backend logs</summary>
+                <pre style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem' }}>
+                  {processInfo.processes.backend.logs
+                    .slice(-20)
+                    .map((entry) => entry?.message)
+                    .filter(Boolean)
+                    .join('\n')}
+                </pre>
+              </details>
             )}
           </div>
         </div>
-        {isBackendLogsOpen && (
-          <div className="preview-logs-modal-backdrop" onClick={() => setIsBackendLogsOpen(false)}>
-            <div
-              className="preview-logs-modal"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Backend logs"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="preview-logs-modal-header">
-                <h4>Backend logs</h4>
-                <button
-                  type="button"
-                  className="preview-logs-modal-close"
-                  onClick={() => setIsBackendLogsOpen(false)}
-                  aria-label="Close backend logs"
-                >
-                  &times;
-                </button>
-              </div>
-              <div className="preview-logs-modal-body">
-                <pre className="preview-logs-modal-pre">{backendLogText || '(no logs)'}</pre>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -1412,9 +1427,15 @@ const PreviewTab = forwardRef(
       return null;
     }
 
+    const newTabUrl = toDevServerUrl(normalizedDisplayedUrl) || toDevServerUrl();
+
+    const showRecoveryCopy = autoRecoverState.mode === 'running' && (Number(autoRecoverState.attempt) || 0) > 0;
     const title = isPlaceholderDetected
       ? 'Preview is not loading'
-      : 'Loading preview…';
+      : showRecoveryCopy
+        ? 'Recovering preview…'
+        : 'Loading preview…';
+    const subtitle = showRecoveryCopy ? `Attempt ${autoRecoverState.attempt}/3` : null;
 
     return (
       <div className="preview-loading" data-testid="preview-loading">
@@ -1425,6 +1446,8 @@ const PreviewTab = forwardRef(
               <span className="preview-loading-bar-swoosh" />
             </div>
           )}
+          {subtitle ? <p className="expected-url">{subtitle}</p> : null}
+
           {isPlaceholderDetected && (
             <>
               <p>
@@ -1442,11 +1465,16 @@ const PreviewTab = forwardRef(
             </>
           )}
 
-          {normalizedDisplayedUrl !== 'about:blank' && (
-            <p className="expected-url">
-              URL: <code>{normalizedDisplayedUrl}</code>
-            </p>
-          )}
+          <p className="expected-url">
+            URL: <code>{normalizedDisplayedUrl}</code>
+          </p>
+          <p className="expected-url">
+            {newTabUrl ? (
+              <a href={newTabUrl} target="_blank" rel="noopener noreferrer">
+                Open in a new tab
+              </a>
+            ) : null}
+          </p>
         </div>
       </div>
     );
@@ -1461,32 +1489,32 @@ const PreviewTab = forwardRef(
     }
   };
 
-  function handleBack() {
+  const handleBack = () => {
     if (historyIndex > 0) {
       const prevUrl = history[historyIndex - 1];
       setHistoryIndex(historyIndex - 1);
       setDisplayedUrl(prevUrl);
       postNavigateToIframe(prevUrl);
     }
-  }
+  };
 
-  function handleForward() {
+  const handleForward = () => {
     if (historyIndex < history.length - 1) {
       const nextUrl = history[historyIndex + 1];
       setHistoryIndex(historyIndex + 1);
       setDisplayedUrl(nextUrl);
       postNavigateToIframe(nextUrl);
     }
-  }
+  };
 
-  function handleUrlInputChange(event) {
+  const handleUrlInputChange = (event) => {
     const raw = event.target.value;
     const origin = getUrlOrigin(urlBarValue);
     const normalized = normalizeUrlInput(raw, origin);
     setUrlInputValue(normalized);
-  }
+  };
 
-  function handleUrlInputKeyDown(event) {
+  const handleUrlInputKeyDown = (event) => {
     if (event.key !== 'Enter') {
       return;
     }
@@ -1514,9 +1542,9 @@ const PreviewTab = forwardRef(
       return newHistory;
     });
     postNavigateToIframe(proxyTarget);
-  }
+  };
 
-  function handleUrlInputFocus(event) {
+  const handleUrlInputFocus = (event) => {
     setIsEditingUrl(true);
     const origin = getUrlOrigin(urlBarValue);
     const prefix = origin ? `${origin}/` : '';
@@ -1529,87 +1557,85 @@ const PreviewTab = forwardRef(
     if (typeof event.target.select === 'function') {
       event.target.select();
     }
-  }
+  };
 
-  function handleUrlInputBlur() {
+  const handleUrlInputBlur = () => {
     setIsEditingUrl(false);
     setUrlInputValue(urlBarValue || '');
-  }
+  };
 
-  function renderUrlBar() {
-    return (
-      <div className="preview-url-bar" data-testid="preview-url-bar">
-        <div className="preview-url-actions preview-url-actions-left">
-          <button
-            type="button"
-            className="preview-nav-btn preview-nav-back"
-            aria-label="Back"
-            onClick={handleBack}
-            disabled={historyIndex <= 0}
-            tabIndex={historyIndex <= 0 ? -1 : 0}
-          >
-            <span className="preview-nav-icon">&#8592;</span>
-          </button>
-          <button
-            type="button"
-            className="preview-nav-btn preview-nav-forward"
-            aria-label="Forward"
-            onClick={handleForward}
-            disabled={historyIndex >= history.length - 1}
-            tabIndex={historyIndex >= history.length - 1 ? -1 : 0}
-          >
-            <span className="preview-nav-icon">&#8594;</span>
-          </button>
-        </div>
-        <input
-          aria-label="Preview URL"
-          className="preview-url-input"
-          value={urlInputValue}
-          readOnly={!urlBarValue || urlBarValue === 'about:blank'}
-          onChange={handleUrlInputChange}
-          onKeyDown={handleUrlInputKeyDown}
-          onFocus={handleUrlInputFocus}
-          onBlur={handleUrlInputBlur}
-        />
-        <div className="preview-url-actions preview-url-actions-right">
-          <button
-            type="button"
-            className="preview-nav-btn preview-nav-refresh"
-            aria-label="Reload preview"
-            onClick={onReloadPreview}
-            disabled={!project || typeof onReloadPreview !== 'function'}
-            tabIndex={!project || typeof onReloadPreview !== 'function' ? -1 : 0}
-            data-testid="reload-preview"
-          >
-            <span className="preview-nav-icon preview-nav-icon--lowered">&#8635;</span>
-          </button>
-          <button
-            type="button"
-            className="preview-nav-btn preview-nav-open"
-            aria-label="Open preview in new tab"
-            onClick={onOpenInNewTab}
-            disabled={!project || typeof onOpenInNewTab !== 'function'}
-            tabIndex={!project || typeof onOpenInNewTab !== 'function' ? -1 : 0}
-            data-testid="open-preview-tab"
-          >
-            <svg
-              className="preview-nav-icon preview-nav-icon--lowered"
-              viewBox="0 0 24 24"
-              width="18"
-              height="18"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <path
-                fill="currentColor"
-                d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z"
-              />
-            </svg>
-          </button>
-        </div>
+  const renderUrlBar = () => (
+    <div className="preview-url-bar" data-testid="preview-url-bar">
+      <div className="preview-url-actions preview-url-actions-left">
+        <button
+          type="button"
+          className="preview-nav-btn preview-nav-back"
+          aria-label="Back"
+          onClick={handleBack}
+          disabled={historyIndex <= 0}
+          tabIndex={historyIndex <= 0 ? -1 : 0}
+        >
+          <span className="preview-nav-icon">&#8592;</span>
+        </button>
+        <button
+          type="button"
+          className="preview-nav-btn preview-nav-forward"
+          aria-label="Forward"
+          onClick={handleForward}
+          disabled={historyIndex >= history.length - 1}
+          tabIndex={historyIndex >= history.length - 1 ? -1 : 0}
+        >
+          <span className="preview-nav-icon">&#8594;</span>
+        </button>
       </div>
-    );
-  }
+      <input
+        aria-label="Preview URL"
+        className="preview-url-input"
+        value={urlInputValue}
+        readOnly={!urlBarValue || urlBarValue === 'about:blank'}
+        onChange={handleUrlInputChange}
+        onKeyDown={handleUrlInputKeyDown}
+        onFocus={handleUrlInputFocus}
+        onBlur={handleUrlInputBlur}
+      />
+      <div className="preview-url-actions preview-url-actions-right">
+        <button
+          type="button"
+          className="preview-nav-btn preview-nav-refresh"
+          aria-label="Reload preview"
+          onClick={onReloadPreview}
+          disabled={!project || typeof onReloadPreview !== 'function'}
+          tabIndex={!project || typeof onReloadPreview !== 'function' ? -1 : 0}
+          data-testid="reload-preview"
+        >
+          <span className="preview-nav-icon preview-nav-icon--lowered">&#8635;</span>
+        </button>
+        <button
+          type="button"
+          className="preview-nav-btn preview-nav-open"
+          aria-label="Open preview in new tab"
+          onClick={onOpenInNewTab}
+          disabled={!project || typeof onOpenInNewTab !== 'function'}
+          tabIndex={!project || typeof onOpenInNewTab !== 'function' ? -1 : 0}
+          data-testid="open-preview-tab"
+        >
+          <svg
+            className="preview-nav-icon preview-nav-icon--lowered"
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              fill="currentColor"
+              d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="preview-tab">

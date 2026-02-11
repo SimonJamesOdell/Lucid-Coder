@@ -2,10 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 let moduleUnderTest;
 let processManager;
+let processManagerTestOnly;
 
 const loadModule = async () => {
   moduleUnderTest = await import('../routes/projects.js');
   processManager = moduleUnderTest.__processManager;
+  const processManagerModule = await import('../routes/projects/processManager.js');
+  processManagerTestOnly = processManagerModule.__testOnly;
 };
 
 describe('process manager host protection', () => {
@@ -83,5 +86,42 @@ describe('process manager host protection', () => {
 
     expect(result).toEqual({ wasRunning: false, freedPorts: [] });
     expect(storeSpy).not.toHaveBeenCalled();
+  });
+
+  it('covers waitForPidExit invalid pid guard', async () => {
+    await expect(processManagerTestOnly.waitForPidExit('not-a-pid')).resolves.toBe(true);
+  });
+
+  it('returns false when terminatePidWithRetry sees a protected pid', async () => {
+    await expect(processManagerTestOnly.terminatePidWithRetry(process.pid)).resolves.toBe(false);
+  });
+
+  it('covers waitForPortsToFree early return', async () => {
+    await expect(processManagerTestOnly.waitForPortsToFree([null, undefined, 'x'])).resolves.toBe(true);
+  });
+
+  it('logs and returns when killProcessTree receives a protected pid', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await moduleUnderTest.killProcessTree(process.pid);
+
+    expect(warnSpy).toHaveBeenCalledWith(`⚠️ Skipping protected PID ${process.pid} (host process)`);
+  });
+
+  it('waitForPortsToFree retries when ports stay busy', async () => {
+    const findPids = vi.fn().mockResolvedValue([99999]);
+    const terminatePid = vi.fn().mockResolvedValue();
+
+    await expect(
+      processManagerTestOnly.waitForPortsToFree([6200], {
+        timeoutMs: 2,
+        intervalMs: 1,
+        findPids,
+        terminatePid
+      })
+    ).resolves.toBe(false);
+
+    expect(findPids).toHaveBeenCalled();
+    expect(terminatePid).toHaveBeenCalled();
   });
 });

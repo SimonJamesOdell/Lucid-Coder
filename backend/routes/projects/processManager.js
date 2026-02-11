@@ -531,7 +531,15 @@ export const ensurePortsFreed = async (ports = [], { killFn = killProcessesOnPor
   }
 };
 
-const waitForPortsToFree = async (ports = [], { timeoutMs = 6000, intervalMs = 250 } = {}) => {
+const waitForPortsToFree = async (
+  ports = [],
+  {
+    timeoutMs = 6000,
+    intervalMs = 250,
+    findPids = findPidsByPort,
+    terminatePid = terminatePidWithRetry
+  } = {}
+) => {
   const uniquePorts = [...new Set(ports)].filter((port) => Number.isInteger(port));
   if (!uniquePorts.length) {
     return true;
@@ -546,13 +554,13 @@ const waitForPortsToFree = async (ports = [], { timeoutMs = 6000, intervalMs = 2
         continue;
       }
       // eslint-disable-next-line no-await-in-loop
-      const pids = await findPidsByPort(port);
+      const pids = await findPids(port);
       const eligible = pids.filter((pid) => !isProtectedPid(pid));
       if (eligible.length > 0) {
         hasBusyPort = true;
         for (const pid of eligible) {
           // eslint-disable-next-line no-await-in-loop
-          await terminatePidWithRetry(pid, { attempts: 2, waitForExitMs: intervalMs * 4 });
+          await terminatePid(pid, { attempts: 2, waitForExitMs: intervalMs * 4 });
         }
       }
     }
@@ -811,4 +819,10 @@ export const terminateRunningProcesses = async (projectId, options = {}) => {
     wasRunning: isActiveEntry,
     freedPorts: shouldReleasePorts ? portsToFree : []
   };
+};
+
+export const __testOnly = {
+  waitForPidExit,
+  terminatePidWithRetry,
+  waitForPortsToFree
 };

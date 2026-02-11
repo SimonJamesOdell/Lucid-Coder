@@ -409,7 +409,7 @@ describe('ProjectSelector Component', () => {
       await waitFor(() => {
         expect(axios.post).toHaveBeenCalledWith(
           `/api/projects/${project.id}/cleanup`,
-          {},
+          { targets: ['C:/projects/demo'] },
           expect.objectContaining({ headers: { 'x-confirm-destructive': 'true' } })
         );
       });
