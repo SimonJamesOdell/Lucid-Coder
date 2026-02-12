@@ -24,7 +24,7 @@ const Navigation = ({ versionLabel = null }) => {
     selectProject,
     closeProject,
     showCreateProject,
-    showImportProject,
+    
     toggleTheme,
     setPreviewPanelTab,
     gitSettings,
@@ -58,9 +58,6 @@ const Navigation = ({ versionLabel = null }) => {
     }
   };
 
-  const handleImportProject = () => {
-    showImportProject();
-  };
 
   const handleConfigureLLM = () => {
     setLLMConfigOpen(true);
@@ -189,11 +186,7 @@ const Navigation = ({ versionLabel = null }) => {
           <DropdownDivider />
           
           <DropdownItem onClick={handleCreateProject}>
-            Create new project
-          </DropdownItem>
-          
-          <DropdownItem onClick={handleImportProject}>
-            Import project
+            Add project
           </DropdownItem>
         </Dropdown>
 

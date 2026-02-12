@@ -1,3 +1,9 @@
+## 0.6.0 (2026-02-12)
+- Merge the create and import project flows into a single optimized flow.
+- Update the Projects navigation menu to link to the new flow.
+- Add coverage for the projects import handler fallback when request bodies are missing.
+- Adjust Create Project tests to cover local import mode toggles and add-project flows.
+
 ## 0.5.9 (2026-02-11)
 - Add manual cleanup-target support for project cleanup (explicit targets, empty-target guard, and forced port cleanup on delete).
 - Extend process cleanup helpers with PID/port retry utilities and test-only hooks to keep shutdown logic deterministic in coverage runs.

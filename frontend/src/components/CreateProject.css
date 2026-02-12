@@ -86,6 +86,10 @@
   gap: 1.5rem;
 }
 
+.form-section--full .form-row {
+  grid-template-columns: 1fr;
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
@@ -124,6 +128,120 @@
 
 .form-input::placeholder {
   color: var(--text-tertiary, #888888);
+}
+
+.path-input-group {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.path-input-group .form-input {
+  flex: 1;
+}
+
+.browse-btn {
+  background: var(--accent-color, #007acc);
+  color: #fff;
+  border: 1px solid var(--accent-color, #007acc);
+  padding: 0.65rem 1.5rem;
+  border-radius: 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  white-space: nowrap;
+}
+
+.browse-btn:hover:not(:disabled) {
+  background: var(--accent-hover, #005a9e);
+}
+
+.browse-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.radio-group {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.radio-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-color, #333333);
+  background: var(--background-secondary, #1a1a1a);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.radio-card input {
+  margin: 0;
+}
+
+.radio-card.selected {
+  border-color: var(--accent-color, #007acc);
+  background: rgba(0, 122, 204, 0.1);
+}
+
+.radio-title {
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.radio-subtitle {
+  font-size: 0.9rem;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.tech-detect-status {
+  margin-top: 1rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.setup-job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.setup-job-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-color, #333333);
+  background: var(--input-background, #2a2a2a);
+}
+
+.setup-job-title {
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.setup-job-status {
+  text-transform: capitalize;
+  font-size: 0.85rem;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.setup-job-status.status-running {
+  color: var(--primary-color, #4ea1ff);
+}
+
+.setup-job-status.status-succeeded {
+  color: #4ed38a;
+}
+
+.setup-job-status.status-failed,
+.setup-job-status.status-cancelled {
+  color: var(--error-color, #ff6b6b);
 }
 
 .error-message {

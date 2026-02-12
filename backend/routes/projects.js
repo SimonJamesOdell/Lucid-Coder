@@ -385,6 +385,35 @@ registerProjectProcessRoutes(router);
 registerProjectFileRoutes(router);
 registerProjectGitRoutes(router);
 
+// POST /api/projects/validate-local-path - Validate local import path
+router.post('/validate-local-path', async (req, res) => {
+  try {
+    /* c8 ignore next */
+    const payload = req.body || {};
+    const localPath = safeTrim(payload.path || payload.localPath);
+    const importMode = normalizeImportMode(payload.importMode);
+
+    if (!localPath) {
+      return res.status(400).json({ success: false, error: 'Project path is required' });
+    }
+
+    await assertDirectoryExists(localPath);
+
+    if (importMode === 'link' && !isWithinManagedProjectsRoot(localPath)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Linked projects must be inside the managed projects folder. Use copy instead.'
+      });
+    }
+
+    return res.json({ success: true, valid: true });
+  } catch (error) {
+    const status = error?.statusCode || 500;
+    const message = error?.message || 'Invalid project path';
+    return res.status(status).json({ success: false, error: message });
+  }
+});
+
 // GET /api/projects - Get all projects
 router.get('/', async (req, res) => {
   try {

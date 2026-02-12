@@ -151,8 +151,7 @@ describe('Navigation Component', () => {
     expect(screen.getByText(/Select Project/i)).toBeInTheDocument();
     expect(screen.getByText('Project Alpha')).toBeInTheDocument();
     expect(screen.getByText('Project Beta')).toBeInTheDocument();
-    expect(screen.getByText('Create new project')).toBeInTheDocument();
-    expect(screen.getByText('Import project')).toBeInTheDocument();
+    expect(screen.getByText('Add project')).toBeInTheDocument();
   });
 
   test('settings dropdown shows correct content when enabled', async () => {
@@ -483,7 +482,7 @@ describe('Navigation Component', () => {
     const { user } = renderNavigation({ showCreateProject, closeProject });
 
     await user.click(screen.getByRole('button', { name: /Projects/ }));
-    await user.click(screen.getByText('Create new project'));
+    await user.click(screen.getByText('Add project'));
 
     expect(closeProject).not.toHaveBeenCalled();
     expect(showCreateProject).toHaveBeenCalledTimes(1);
@@ -499,20 +498,20 @@ describe('Navigation Component', () => {
     });
 
     await user.click(screen.getByRole('button', { name: /Projects/ }));
-    await user.click(screen.getByText('Create new project'));
+    await user.click(screen.getByText('Add project'));
 
     await waitFor(() => expect(showCreateProject).toHaveBeenCalled());
     expect(closeProject).toHaveBeenCalledTimes(1);
     expect(closeProject.mock.invocationCallOrder[0]).toBeLessThan(showCreateProject.mock.invocationCallOrder[0]);
   });
 
-  test('import project triggers the import flow', async () => {
+  test('add project triggers the create project view', async () => {
     const { user, state } = renderNavigation();
 
     await user.click(screen.getByRole('button', { name: /Projects/ }));
-    await user.click(screen.getByText('Import project'));
+    await user.click(screen.getByText('Add project'));
 
-    expect(state.showImportProject).toHaveBeenCalled();
+    expect(state.showCreateProject).toHaveBeenCalled();
   });
 
   test('shows close project button when project is selected', () => {

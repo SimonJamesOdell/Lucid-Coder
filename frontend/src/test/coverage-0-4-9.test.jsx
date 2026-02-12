@@ -210,7 +210,7 @@ describe('coverage shard 0.4.9', () => {
     render(<Navigation />);
 
     await user.click(screen.getByRole('button', { name: /projects/i }));
-    await user.click(screen.getByText('Create new project'));
+    await user.click(screen.getByText('Add project'));
 
     await waitFor(() => {
       expect(showCreateProject).toHaveBeenCalledTimes(1);

@@ -5,7 +5,7 @@ import Modal from './Modal';
 import './ProjectSelector.css';
 
 const ProjectSelector = () => {
-  const { isLLMConfigured, currentProject, selectProject, showCreateProject, showImportProject } = useAppState();
+  const { isLLMConfigured, currentProject, selectProject, showCreateProject } = useAppState();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -213,20 +213,14 @@ const ProjectSelector = () => {
         <div className="header-content">
           <div className="header-text">
             <h2>Select Project</h2>
-            <p>Choose an existing project or create a new one to get started.</p>
+            <p>Choose an existing project or add a new one to get started.</p>
           </div>
           <div className="header-actions">
             <button
               onClick={showCreateProject}
               className="create-project-btn primary"
             >
-              Create New Project
-            </button>
-            <button
-              onClick={showImportProject}
-              className="import-project-btn secondary"
-            >
-              Import Project
+              Add Project
             </button>
           </div>
         </div>
@@ -276,7 +270,7 @@ const ProjectSelector = () => {
         <div className="empty-state">
           <div className="empty-icon">📁</div>
           <h3>No projects yet</h3>
-          <p>Create your first project to get started with AI-powered coding assistance.</p>
+          <p>Add your first project to get started with AI-powered coding assistance.</p>
         </div>
       ) : (
         <div className="projects-grid">

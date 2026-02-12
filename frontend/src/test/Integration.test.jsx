@@ -132,12 +132,14 @@ describe('Integration Tests', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('backend-offline-overlay')).not.toBeInTheDocument();
     });
-    await screen.findByRole('button', { name: 'Create New Project' });
+    await screen.findByRole('button', { name: 'Add Project' });
 
-    const createButton = await screen.findByRole('button', { name: 'Create New Project' });
+    const createButton = await screen.findByRole('button', { name: 'Add Project' });
     await user.click(createButton);
-    await screen.findByRole('heading', { name: 'Create New Project' });
+    await screen.findByRole('heading', { name: 'Add Project' });
 
+    await user.click(screen.getByText('Create a new project'));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.type(screen.getByLabelText('Project Name *'), 'Integration App');
@@ -156,7 +158,7 @@ describe('Integration Tests', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await screen.findByRole('button', { name: 'Create New Project' });
+    await screen.findByRole('button', { name: 'Add Project' });
 
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
 
@@ -167,55 +169,41 @@ describe('Integration Tests', () => {
     expect(localStorage.getItem('theme')).toBe('light');
     expect(toggle).toHaveAttribute('aria-label', 'Switch to dark mode');
 
-    await user.click(screen.getByRole('button', { name: 'Create New Project' }));
-    await screen.findByRole('heading', { name: 'Create New Project' });
+    await user.click(screen.getByRole('button', { name: 'Add Project' }));
+    await screen.findByRole('heading', { name: 'Add Project' });
 
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
   });
 
-  test('navigation between create and import views', async () => {
+  test('navigation between add project and main views', async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await screen.findByRole('button', { name: 'Create New Project' });
+    await screen.findByRole('button', { name: 'Add Project' });
 
-    await user.click(screen.getByRole('button', { name: 'Create New Project' }));
-    await screen.findByRole('heading', { name: 'Create New Project' });
+    await user.click(screen.getByRole('button', { name: 'Add Project' }));
+    await screen.findByRole('heading', { name: 'Add Project' });
 
-    await user.click(screen.getByRole('button', { name: /close create project/i }));
-    await screen.findByRole('button', { name: 'Create New Project' });
-
-    await user.click(screen.getByRole('button', { name: 'Import Project' }));
-    await screen.findByText('Choose an import source');
-
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
-    await screen.findByRole('button', { name: 'Create New Project' });
+    await user.click(screen.getByRole('button', { name: /close add project/i }));
+    await screen.findByRole('button', { name: 'Add Project' });
   });
 
   test('form validation across views', async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await screen.findByRole('button', { name: 'Create New Project' });
+    await screen.findByRole('button', { name: 'Add Project' });
 
-    await user.click(screen.getByRole('button', { name: 'Create New Project' }));
+    await user.click(screen.getByRole('button', { name: 'Add Project' }));
     const createForm = screen.getByRole('form');
     fireEvent.submit(createForm);
 
+    await screen.findByLabelText('Git Workflow *');
+    fireEvent.submit(createForm);
     expect(await screen.findByText('Git workflow selection is required')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /close create project/i }));
-    await screen.findByRole('button', { name: 'Create New Project' });
-
-    await user.click(screen.getByRole('button', { name: 'Import Project' }));
-    await screen.findByText('Choose an import source');
-    await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.click(screen.getByRole('button', { name: 'Next' }));
-    expect(await screen.findByText('Project path is required')).toBeInTheDocument();
-
-    await user.type(screen.getByLabelText('Project Folder Path *'), 'C:/Sample');
-    await user.click(screen.getByRole('button', { name: 'Next' }));
-    expect(await screen.findByLabelText('Project Name *')).toHaveValue('Sample');
+    await user.click(screen.getByRole('button', { name: /close add project/i }));
+    await screen.findByRole('button', { name: 'Add Project' });
   });
 
   test('error handling across views', async () => {
@@ -253,11 +241,13 @@ describe('Integration Tests', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('backend-offline-overlay')).not.toBeInTheDocument();
     });
-    await screen.findByRole('button', { name: 'Create New Project' });
+    await screen.findByRole('button', { name: 'Add Project' });
 
-    await user.click(screen.getByRole('button', { name: 'Create New Project' }));
-    await screen.findByRole('heading', { name: 'Create New Project' });
+    await user.click(screen.getByRole('button', { name: 'Add Project' }));
+    await screen.findByRole('heading', { name: 'Add Project' });
 
+    await user.click(screen.getByText('Create a new project'));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.type(screen.getByLabelText('Project Name *'), 'Failing Project');
@@ -285,7 +275,7 @@ describe('Integration Tests', () => {
     expect(screen.getByText('Persisted Project')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Close project' }));
-    await screen.findByRole('button', { name: 'Create New Project' });
+    await screen.findByRole('button', { name: 'Add Project' });
 
     expect(screen.queryByLabelText('Provider')).not.toBeInTheDocument();
   });
