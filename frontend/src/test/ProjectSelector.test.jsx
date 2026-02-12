@@ -56,7 +56,7 @@ describe('ProjectSelector Component', () => {
       render(<ProjectSelector />);
 
       expect(await screen.findByText('Select Project')).toBeInTheDocument();
-      expect(screen.getByText('Choose an existing project or create a new one to get started.')).toBeInTheDocument();
+      expect(screen.getByText('Choose an existing project or add a new one to get started.')).toBeInTheDocument();
     });
 
     test('does not render when LLM is not configured', () => {
@@ -84,10 +84,10 @@ describe('ProjectSelector Component', () => {
       render(<ProjectSelector />);
 
       expect(await screen.findByText('No projects yet')).toBeInTheDocument();
-      expect(screen.getByText('Create your first project to get started with AI-powered coding assistance.')).toBeInTheDocument();
+      expect(screen.getByText('Add your first project to get started with AI-powered coding assistance.')).toBeInTheDocument();
     });
 
-    test('shows create and import buttons in empty state', async () => {
+    test('shows add project button in empty state', async () => {
       useAppState.mockReturnValue(mockAppState());
       axios.get.mockResolvedValueOnce(mockProjectsPayload([]));
 
@@ -95,8 +95,7 @@ describe('ProjectSelector Component', () => {
 
       await screen.findByText('No projects yet');
 
-      expect(screen.getByRole('button', { name: 'Create New Project' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Import Project' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add Project' })).toBeInTheDocument();
     });
   });
 
@@ -700,39 +699,25 @@ describe('ProjectSelector Component', () => {
   });
 
   describe('Header Actions', () => {
-    test('shows create and import project buttons in header', async () => {
+    test('shows add project button in header', async () => {
       useAppState.mockReturnValue(mockAppState());
 
       render(<ProjectSelector />);
 
-      expect(await screen.findByRole('button', { name: 'Create New Project' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Import Project' })).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: 'Add Project' })).toBeInTheDocument();
     });
 
-    test('create project button triggers view change', async () => {
+    test('add project button triggers view change', async () => {
       const showCreateProject = vi.fn();
       useAppState.mockReturnValue(mockAppState({ showCreateProject }));
 
       const user = userEvent.setup();
       render(<ProjectSelector />);
 
-      const button = await screen.findByRole('button', { name: 'Create New Project' });
+      const button = await screen.findByRole('button', { name: 'Add Project' });
       await user.click(button);
 
       expect(showCreateProject).toHaveBeenCalledTimes(1);
-    });
-
-    test('import project button triggers view change', async () => {
-      const showImportProject = vi.fn();
-      useAppState.mockReturnValue(mockAppState({ showImportProject }));
-
-      const user = userEvent.setup();
-      render(<ProjectSelector />);
-
-      const button = await screen.findByRole('button', { name: 'Import Project' });
-      await user.click(button);
-
-      expect(showImportProject).toHaveBeenCalledTimes(1);
     });
   });
 

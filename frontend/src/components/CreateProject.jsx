@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAppState } from '../context/AppStateContext';
 import axios from 'axios';
 import { io } from 'socket.io-client';
+import FolderPickerModal from './FolderPickerModal';
 import './CreateProject.css';
 
 const PROGRESS_STEP_NAMES = [
@@ -85,9 +86,27 @@ const generateProgressKey = () => {
 
 const POLL_SUPPRESSION_WINDOW_MS = 1500;
 
+const guessProjectName = (value) => {
+  if (!value || typeof value !== 'string') {
+    return '';
+  }
+  const cleaned = value.trim().replace(/[?#].*$/, '');
+  if (!cleaned) {
+    return '';
+  }
+  const segments = cleaned.split(/[\\/]/).filter(Boolean);
+  let candidate = segments.length > 0 ? segments[segments.length - 1] : '';
+  if (candidate.includes(':')) {
+    const afterColon = candidate.split(':').pop();
+    candidate = afterColon || '';
+  }
+  return candidate.replace(/\.git$/i, '');
+};
+
 const CreateProject = () => {
   const {
     createProject,
+    importProject,
     selectProject,
     showMain,
     fetchProjects,
@@ -109,7 +128,25 @@ const CreateProject = () => {
   const [gitIgnoreSuggestion, setGitIgnoreSuggestion] = useState(null);
   const [gitIgnoreStatus, setGitIgnoreStatus] = useState({ state: 'idle', error: '' });
 
-  const [setupStep, setSetupStep] = useState('git');
+  const [setupStep, setSetupStep] = useState('source');
+  const [projectSource, setProjectSource] = useState('new');
+  const [localPath, setLocalPath] = useState('');
+  const [localImportMode, setLocalImportMode] = useState('copy');
+  const [isFolderPickerOpen, setFolderPickerOpen] = useState(false);
+  const [compatibilityStatus, setCompatibilityStatus] = useState({
+    isLoading: false,
+    error: ''
+  });
+  const [compatibilityPlan, setCompatibilityPlan] = useState(null);
+  const [compatibilityConsent, setCompatibilityConsent] = useState(false);
+  const [structureConsent, setStructureConsent] = useState(false);
+  const compatibilityPathRef = useRef('');
+  const [setupState, setSetupState] = useState({
+    isWaiting: false,
+    projectId: null,
+    jobs: [],
+    error: ''
+  });
   
   // New project form state
   const [newProject, setNewProject] = useState({
@@ -130,6 +167,9 @@ const CreateProject = () => {
   const [gitProvider, setGitProvider] = useState('github');
   const [gitToken, setGitToken] = useState('');
   const [gitRemoteUrl, setGitRemoteUrl] = useState('');
+  const [gitConnectionMode, setGitConnectionMode] = useState('local');
+  const [gitConnectionRemoteUrl, setGitConnectionRemoteUrl] = useState('');
+  const [cloneCreateRemote, setCloneCreateRemote] = useState(false);
   const [gitRepoName, setGitRepoName] = useState('');
   const [gitRepoOwner, setGitRepoOwner] = useState('');
   const [gitRepoVisibility, setGitRepoVisibility] = useState('private');
@@ -179,6 +219,51 @@ const CreateProject = () => {
       progressPollTimeoutRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    if (projectSource !== 'local') {
+      return;
+    }
+    if (newProject.name.trim()) {
+      return;
+    }
+    const suggested = guessProjectName(localPath);
+    if (suggested) {
+      setNewProject((prev) => ({
+        ...prev,
+        name: suggested
+      }));
+    }
+  }, [localPath, newProject.name, projectSource]);
+
+  useEffect(() => {
+    if (projectSource !== 'git') {
+      return;
+    }
+    if (newProject.name.trim()) {
+      return;
+    }
+    const suggested = guessProjectName(gitRemoteUrl);
+    if (suggested) {
+      setNewProject((prev) => ({
+        ...prev,
+        name: suggested
+      }));
+    }
+  }, [gitRemoteUrl, newProject.name, projectSource]);
+
+  useEffect(() => {
+    if (projectSource !== 'new') {
+      return;
+    }
+    if (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') {
+      if (!gitCloudMode) {
+        setGitCloudMode('create');
+      }
+    } else if (gitCloudMode) {
+      setGitCloudMode('');
+    }
+  }, [gitCloudMode, gitWorkflowMode, projectSource]);
 
   const clearInitialPollTimeout = () => {
     if (progressPollTimeoutRef.current) {
@@ -413,7 +498,80 @@ const CreateProject = () => {
   const handleCreateProject = async (e) => {
     e.preventDefault();
 
+    if (setupStep === 'source') {
+      setCreateError('');
+      setSetupStep('git');
+      return;
+    }
+
     if (setupStep === 'git') {
+      if (projectSource === 'local') {
+        if (!localPath.trim()) {
+          setCreateError('Project path is required');
+          return;
+        }
+
+        if (localImportMode === 'link') {
+          try {
+            setCreateLoading(true);
+            setCreateError('');
+            await axios.post('/api/projects/validate-local-path', {
+              path: localPath.trim(),
+              importMode: localImportMode
+            });
+          } catch (err) {
+            const errorMessage = err?.response?.data?.error || err?.message || 'Invalid project path';
+            setCreateError(errorMessage);
+            setCreateLoading(false);
+            return;
+          } finally {
+            setCreateLoading(false);
+          }
+        }
+
+        if (gitConnectionMode !== 'local' && !gitConnectionRemoteUrl.trim()) {
+          setCreateError('Repository URL is required for cloud workflows');
+          return;
+        }
+
+        if (gitConnectionMode === 'custom' && !gitToken.trim()) {
+          setCreateError('Personal access token is required for a custom cloud connection');
+          return;
+        }
+
+        setCreateError('');
+        setSetupStep('details');
+        return;
+      }
+
+      if (projectSource === 'git') {
+        if (!gitRemoteUrl.trim()) {
+          setCreateError('Git repository URL is required');
+          return;
+        }
+
+        if (gitConnectionMode === 'custom' && !gitToken.trim()) {
+          setCreateError('Personal access token is required for a custom cloud connection');
+          return;
+        }
+
+        if (gitConnectionMode !== 'local' && cloneCreateRemote) {
+          const derivedName = gitRepoName.trim() || deriveRepoName(gitRemoteUrl);
+          if (!derivedName) {
+            setCreateError('Repository name is required to continue');
+            return;
+          }
+        }
+
+        setNewProject((prev) => ({
+          ...prev,
+          name: prev.name.trim() ? prev.name : deriveRepoName(gitRemoteUrl)
+        }));
+        setCreateError('');
+        setSetupStep('details');
+        return;
+      }
+
       if (!gitWorkflowMode) {
         setCreateError('Git workflow selection is required');
         return;
@@ -421,15 +579,12 @@ const CreateProject = () => {
 
       const isCloudWorkflow = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
 
-      if (isCloudWorkflow && !gitCloudMode) {
+      /* v8 ignore start */
+      if (projectSource === 'new' && isCloudWorkflow && !gitCloudMode) {
         setCreateError('Remote setup selection is required for cloud workflows');
         return;
       }
-
-      if (isCloudWorkflow && gitCloudMode === 'connect' && !gitRemoteUrl.trim()) {
-        setCreateError('Repository URL is required to connect an existing repo');
-        return;
-      }
+      /* v8 ignore stop */
 
       if (gitWorkflowMode === 'custom' && !gitToken.trim()) {
         setCreateError('Personal access token is required for a custom cloud connection');
@@ -446,20 +601,195 @@ const CreateProject = () => {
         ? gitRepoName.trim()
         : deriveRepoName(gitRemoteUrl);
 
-      if (!derivedName) {
-        setCreateError('Repository name is required to continue');
+      if (derivedName) {
+        setNewProject((prev) => ({
+          ...prev,
+          name: derivedName,
+          description: prev.description || ''
+        }));
+      }
+      setCreateError('');
+      setSetupStep('details');
+      return;
+    }
+
+    if (setupStep === 'details' && projectSource === 'local') {
+      const effectiveName = newProject.name.trim();
+      if (!effectiveName) {
+        setCreateError('Project name is required');
         return;
       }
 
-      setNewProject((prev) => ({
-        ...prev,
-        name: derivedName,
-        description: prev.description || ''
-      }));
+      setCreateError('');
+      setSetupStep('compatibility');
+      return;
+    }
+
+    if (setupStep === 'details' && projectSource === 'git') {
+      const effectiveName = newProject.name.trim();
+      if (!effectiveName) {
+        setCreateError('Project name is required');
+        return;
+      }
+
+      try {
+        setCreateLoading(true);
+        setCreateError('');
+
+        const connectionMode = gitConnectionMode || 'local';
+        const providerFromGlobal = (gitSettings?.provider || 'github').toLowerCase();
+        const normalizedProvider = (connectionMode === 'custom' ? gitProvider : providerFromGlobal) || 'github';
+        const defaultBranch = (gitSettings?.defaultBranch || 'main').trim() || 'main';
+        const username = typeof gitSettings?.username === 'string' ? gitSettings.username.trim() : '';
+
+        const projectData = {
+          name: effectiveName,
+          description: newProject.description.trim(),
+          frontend: {
+            language: newProject.frontend.language,
+            framework: newProject.frontend.framework
+          },
+          backend: {
+            language: newProject.backend.language,
+            framework: newProject.backend.framework
+          },
+          importMethod: 'git',
+          gitUrl: gitRemoteUrl.trim(),
+          gitProvider: normalizedProvider,
+          gitDefaultBranch: defaultBranch,
+          gitConnectionMode: connectionMode
+        };
+
+        if (connectionMode !== 'local') {
+          projectData.gitRemoteUrl = gitRemoteUrl.trim();
+          projectData.gitConnectionProvider = normalizedProvider;
+          if (connectionMode === 'custom') {
+            projectData.gitToken = gitToken.trim();
+          }
+        }
+
+        const result = await importProject(projectData);
+
+        if (cloneCreateRemote && connectionMode !== 'local' && result?.project?.id) {
+          const derivedName = gitRepoName.trim() || deriveRepoName(gitRemoteUrl);
+          const options = {
+            provider: normalizedProvider,
+            name: derivedName,
+            owner: gitRepoOwner.trim(),
+            visibility: gitRepoVisibility,
+            description: newProject.description.trim()
+          };
+
+          if (username) {
+            options.username = username;
+          }
+
+          if (connectionMode === 'custom') {
+            options.token = gitToken.trim();
+          }
+
+          await createProjectRemoteRepository(result.project.id, options);
+        }
+
+        const importJobs = Array.isArray(result?.jobs) ? result.jobs : [];
+        if (importJobs.length > 0 && result?.project?.id) {
+          setSetupState({
+            isWaiting: true,
+            projectId: result.project.id,
+            jobs: importJobs,
+            error: ''
+          });
+          return;
+        }
+
+        showMain();
+      } catch (err) {
+        setCreateError(err?.message || 'Failed to import project');
+      } finally {
+        setCreateLoading(false);
+      }
+      return;
+    }
+
+    if (setupStep === 'compatibility' && projectSource === 'local') {
+      const compatibilityRequired = Boolean(compatibilityPlan?.needsChanges);
+      const structureRequired = Boolean(compatibilityPlan?.structure?.needsMove);
+
+      if (compatibilityRequired && !compatibilityConsent) {
+        setCreateError('Please allow compatibility updates to continue');
+        return;
+      }
+
+      if (structureRequired && !structureConsent) {
+        setCreateError('Please allow moving frontend files into a frontend folder');
+        return;
+      }
+
+      const effectiveName = newProject.name.trim();
+      if (!effectiveName) {
+        setCreateError('Project name is required');
+        return;
+      }
+
+      if (!localPath.trim()) {
+        setCreateError('Project path is required');
+        return;
+      }
+
+      try {
+        setCreateLoading(true);
+        setCreateError('');
+
+        const projectData = {
+          name: effectiveName,
+          description: newProject.description.trim(),
+          frontend: {
+            language: newProject.frontend.language,
+            framework: newProject.frontend.framework
+          },
+          backend: {
+            language: newProject.backend.language,
+            framework: newProject.backend.framework
+          },
+          importMethod: 'local',
+          importMode: localImportMode,
+          localPath: localPath.trim(),
+          applyCompatibility: compatibilityRequired && compatibilityConsent,
+          applyStructureFix: structureRequired && structureConsent,
+          gitConnectionMode: gitConnectionMode || 'local'
+        };
+
+        if (gitConnectionMode !== 'local') {
+          projectData.gitRemoteUrl = gitConnectionRemoteUrl.trim();
+          projectData.gitConnectionProvider = (gitConnectionMode === 'custom' ? gitProvider : (gitSettings?.provider || 'github')).toLowerCase();
+          if (gitConnectionMode === 'custom') {
+            projectData.gitToken = gitToken.trim();
+          }
+        }
+
+        const result = await importProject(projectData);
+        const importJobs = Array.isArray(result?.jobs) ? result.jobs : [];
+        if (importJobs.length > 0 && result?.project?.id) {
+          setSetupState({
+            isWaiting: true,
+            projectId: result.project.id,
+            jobs: importJobs,
+            error: ''
+          });
+          return;
+        }
+
+        showMain();
+      } catch (err) {
+        setCreateError(err?.message || 'Failed to import project');
+      } finally {
+        setCreateLoading(false);
+      }
+      return;
     }
 
     const derivedNameForValidation = gitWorkflowMode !== 'local'
-      ? (gitCloudMode === 'create' ? gitRepoName.trim() : deriveRepoName(gitRemoteUrl))
+      ? (gitCloudMode === 'create' ? (gitRepoName.trim() || newProject.name.trim()) : deriveRepoName(gitRemoteUrl))
       : '';
     const effectiveName = derivedNameForValidation || newProject.name.trim();
     if (!effectiveName) {
@@ -563,7 +893,7 @@ const CreateProject = () => {
 
           const options = {
             provider: normalizedProvider,
-            name: gitRepoName.trim(),
+            name: gitRepoName.trim() || nameForProject,
             owner: gitRepoOwner.trim(),
             visibility: gitRepoVisibility,
             description: descriptionForProject
@@ -633,7 +963,22 @@ const CreateProject = () => {
     setProcesses(null);
     setGitIgnoreSuggestion(null);
     setGitIgnoreStatus({ state: 'idle', error: '' });
-    setSetupStep('git');
+    setSetupStep('source');
+    setProjectSource('new');
+    setLocalPath('');
+    setLocalImportMode('copy');
+    setFolderPickerOpen(false);
+    setCompatibilityStatus({ isLoading: false, error: '' });
+    setCompatibilityPlan(null);
+    setCompatibilityConsent(false);
+    setStructureConsent(false);
+    compatibilityPathRef.current = '';
+    setSetupState({
+      isWaiting: false,
+      projectId: null,
+      jobs: [],
+      error: ''
+    });
     setNewProject({
       name: '',
       description: '',
@@ -651,6 +996,9 @@ const CreateProject = () => {
     setGitProvider('github');
     setGitToken('');
     setGitRemoteUrl('');
+    setGitConnectionMode('local');
+    setGitConnectionRemoteUrl('');
+    setCloneCreateRemote(false);
     setGitRepoName('');
     setGitRepoOwner('');
     setGitRepoVisibility('private');
@@ -659,7 +1007,27 @@ const CreateProject = () => {
 
   const handleBackToDetails = () => {
     setCreateError('');
-    setSetupStep('git');
+    if (setupStep === 'compatibility') {
+      setSetupStep('details');
+      return;
+    }
+    if (setupStep === 'details') {
+      setSetupStep('git');
+      return;
+    }
+    setSetupStep('source');
+  };
+
+  const handleFolderSelect = () => {
+    setCreateError('');
+    setFolderPickerOpen(true);
+  };
+
+  const handleFolderPicked = (pathValue) => {
+    if (pathValue) {
+      setLocalPath(pathValue);
+    }
+    setFolderPickerOpen(false);
   };
 
   const runPostCloneSetup = async (projectId) => {
@@ -757,6 +1125,55 @@ const CreateProject = () => {
   };
 
   useEffect(() => {
+    if (!setupState.isWaiting || !setupState.projectId) {
+      return;
+    }
+
+    let isCancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/projects/${setupState.projectId}/jobs`);
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || 'Failed to load setup jobs');
+        }
+        if (isCancelled) {
+          return;
+        }
+        const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+        const finalStates = new Set(['succeeded', 'failed', 'cancelled']);
+        const isComplete = jobs.length > 0 && jobs.every((job) => finalStates.has(job?.status));
+        setSetupState((prev) => ({
+          ...prev,
+          jobs,
+          error: ''
+        }));
+        if (isComplete) {
+          setSetupState((prev) => ({
+            ...prev,
+            isWaiting: false
+          }));
+          showMain();
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setSetupState((prev) => ({
+            ...prev,
+            error: error?.message || 'Failed to load setup jobs'
+          }));
+        }
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      isCancelled = true;
+      clearInterval(timer);
+    };
+  }, [setupState.isWaiting, setupState.projectId, showMain]);
+
+  useEffect(() => {
     if (process.env.NODE_ENV !== 'test') {
       return;
     }
@@ -773,6 +1190,14 @@ const CreateProject = () => {
     CreateProject.__testHooks.setGitIgnoreStatus = setGitIgnoreStatus;
     CreateProject.__testHooks.setProgress = setProgress;
     CreateProject.__testHooks.deriveRepoName = deriveRepoName;
+    CreateProject.__testHooks.setGitCloudMode = setGitCloudMode;
+    CreateProject.__testHooks.setLocalPath = setLocalPath;
+    CreateProject.__testHooks.setProjectSource = setProjectSource;
+    CreateProject.__testHooks.setGitRemoteUrl = setGitRemoteUrl;
+    CreateProject.__testHooks.setNewProject = setNewProject;
+    CreateProject.__testHooks.setGitWorkflowMode = setGitWorkflowMode;
+    CreateProject.__testHooks.setSetupState = setSetupState;
+    CreateProject.__testHooks.setGitConnectionMode = setGitConnectionMode;
 
     return () => {
       if (!CreateProject.__testHooks) {
@@ -786,6 +1211,14 @@ const CreateProject = () => {
       CreateProject.__testHooks.setGitIgnoreStatus = undefined;
       CreateProject.__testHooks.setProgress = undefined;
       CreateProject.__testHooks.deriveRepoName = undefined;
+      CreateProject.__testHooks.setGitCloudMode = undefined;
+      CreateProject.__testHooks.setLocalPath = undefined;
+      CreateProject.__testHooks.setProjectSource = undefined;
+      CreateProject.__testHooks.setGitRemoteUrl = undefined;
+      CreateProject.__testHooks.setNewProject = undefined;
+      CreateProject.__testHooks.setGitWorkflowMode = undefined;
+      CreateProject.__testHooks.setSetupState = undefined;
+      CreateProject.__testHooks.setGitConnectionMode = undefined;
     };
   }, [
     runPostCloneSetup,
@@ -801,6 +1234,52 @@ const CreateProject = () => {
   const getBackendFrameworks = () => {
     return backendFrameworks[newProject.backend.language] || ['express'];
   };
+
+  const compatibilityRequired = Boolean(compatibilityPlan?.needsChanges);
+  const structureRequired = Boolean(compatibilityPlan?.structure?.needsMove);
+  const compatibilityChanges = Array.isArray(compatibilityPlan?.changes) ? compatibilityPlan.changes : [];
+
+  useEffect(() => {
+    if (setupStep !== 'compatibility') {
+      return;
+    }
+
+    if (projectSource !== 'local') {
+      setCompatibilityPlan(null);
+      setCompatibilityStatus({ isLoading: false, error: '' });
+      setCompatibilityConsent(false);
+      return;
+    }
+
+    const pathValue = localPath.trim();
+    if (!pathValue) {
+      setCompatibilityPlan(null);
+      setCompatibilityStatus({ isLoading: false, error: '' });
+      return;
+    }
+
+    if (compatibilityPathRef.current === pathValue) {
+      return;
+    }
+
+    compatibilityPathRef.current = pathValue;
+    setCompatibilityStatus({ isLoading: true, error: '' });
+
+    fetch(`/api/fs/compatibility?path=${encodeURIComponent(pathValue)}`)
+      .then((response) => response.json().then((data) => ({ response, data })))
+      .then(({ response, data }) => {
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || 'Failed to scan compatibility');
+        }
+        const nextPlan = data?.plan;
+        setCompatibilityPlan(nextPlan ? nextPlan : null);
+        setCompatibilityStatus({ isLoading: false, error: '' });
+      })
+      .catch((error) => {
+        setCompatibilityPlan(null);
+        setCompatibilityStatus({ isLoading: false, error: error?.message || 'Failed to scan compatibility' });
+      });
+  }, [localPath, projectSource, setupStep]);
 
   const isProgressBlocking = Boolean(progress && progress.status !== 'failed');
   const isCloudWorkflowUi = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
@@ -818,6 +1297,48 @@ const CreateProject = () => {
         { label: 'Provider', value: (gitWorkflowMode === 'custom' ? gitProvider : (gitSettings?.provider || 'github')) }
       ]
     : [];
+
+  if (setupState.isWaiting) {
+    const setupJobs = setupState.jobs || [];
+    const setupError = setupState.error;
+    return (
+      <div className="create-project-view">
+        <div className="create-project-container">
+          <div className="create-project-header">
+            <div className="create-project-header-row">
+              <div>
+                <h1>Preparing your project</h1>
+                <p>We’re installing dependencies and getting everything ready.</p>
+              </div>
+              <button
+                type="button"
+                className="create-project-close"
+                onClick={handleCancel}
+                aria-label="Close add project"
+              >
+                &times;
+              </button>
+            </div>
+          </div>
+
+          <div className="create-project-form">
+            {setupError && <div className="error-message">{setupError}</div>}
+            <div className="setup-job-list">
+              {setupJobs.map((job) => (
+                <div key={job.id} className="setup-job-row">
+                  <div className="setup-job-title">{job.displayName || job.type}</div>
+                  <div className={`setup-job-status status-${job.status || 'pending'}`}>
+                    {job.status || 'pending'}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="tech-detect-status">Waiting for setup to finish…</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="create-project-view">
@@ -922,14 +1443,14 @@ const CreateProject = () => {
         <div className="create-project-header" style={{ display: isProgressBlocking ? 'none' : 'block' }}>
           <div className="create-project-header-row">
             <div>
-              <h1>Create New Project</h1>
-              <p>Set up a new project with AI-powered coding assistance.</p>
+              <h1>Add Project</h1>
+              <p>Create a new project or bring in an existing one.</p>
             </div>
             <button
               type="button"
               className="create-project-close"
               onClick={handleCancel}
-              aria-label="Close create project"
+              aria-label="Close add project"
             >
               &times;
             </button>
@@ -938,6 +1459,65 @@ const CreateProject = () => {
 
         <div className="create-project-form" style={{ display: isProgressBlocking ? 'none' : 'block' }}>
           <form onSubmit={handleCreateProject} role="form">
+            {setupStep === 'source' && (
+              <div className="form-section">
+                <h3>Project Source</h3>
+                <div className="radio-group">
+                  <label className={`radio-card ${projectSource === 'new' ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="projectSource"
+                      value="new"
+                      checked={projectSource === 'new'}
+                      onChange={() => {
+                        setProjectSource('new');
+                        setCreateError('');
+                      }}
+                      disabled={createLoading}
+                    />
+                    <div>
+                      <div className="radio-title">Create a new project</div>
+                      <div className="radio-subtitle">Scaffold a brand-new app with your chosen tech stack.</div>
+                    </div>
+                  </label>
+                  <label className={`radio-card ${projectSource === 'local' ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="projectSource"
+                      value="local"
+                      checked={projectSource === 'local'}
+                      onChange={() => {
+                        setProjectSource('local');
+                        setCreateError('');
+                      }}
+                      disabled={createLoading}
+                    />
+                    <div>
+                      <div className="radio-title">Import a local folder</div>
+                      <div className="radio-subtitle">Bring in an existing project from your machine.</div>
+                    </div>
+                  </label>
+                  <label className={`radio-card ${projectSource === 'git' ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="projectSource"
+                      value="git"
+                      checked={projectSource === 'git'}
+                      onChange={() => {
+                        setProjectSource('git');
+                        setCreateError('');
+                      }}
+                      disabled={createLoading}
+                    />
+                    <div>
+                      <div className="radio-title">Clone from Git</div>
+                      <div className="radio-subtitle">Connect an existing repository URL.</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
+
             {setupStep === 'details' && (
               <>
                 <div className="form-section">
@@ -1077,57 +1657,214 @@ const CreateProject = () => {
             )}
 
             {setupStep === 'git' && (
-              <div className="form-section">
-                <h3>Git Setup</h3>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label htmlFor="git-workflow-select">Git Workflow *</label>
-                    <select
-                      id="git-workflow-select"
-                      value={gitWorkflowMode}
-                      onChange={(e) => {
-                        const next = e.target.value;
-                        setGitWorkflowMode(next);
-                        setGitCloudMode('');
-                        if (createError) {
-                          setCreateError('');
-                        }
-                      }}
-                      className="form-select"
-                      disabled={createLoading}
-                      autoFocus
-                    >
-                      <option value="">Select a workflow</option>
-                      <option value="local">Local only</option>
-                      <option value="global">Cloud (use global git settings)</option>
-                      <option value="custom">Cloud (custom connection)</option>
-                    </select>
-                  </div>
+              <div className={`form-section${projectSource === 'local' ? ' form-section--full' : ''}`}>
+                <h3>
+                  {projectSource === 'local'
+                    ? 'Import setup'
+                    : (projectSource === 'git' ? 'Clone setup' : 'Git setup')}
+                </h3>
 
-                  {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && (
+                {projectSource === 'local' && (
+                  <>
+                    <div className="form-row">
+                      <div className="form-group" style={{ width: '100%' }}>
+                        <label htmlFor="project-path">Project Folder Path *</label>
+                        <div className="path-input-group">
+                          <input
+                            id="project-path"
+                            type="text"
+                            placeholder="Enter the path to your project folder"
+                            value={localPath}
+                            onChange={(event) => {
+                              setLocalPath(event.target.value);
+                              if (createError) {
+                                setCreateError('');
+                              }
+                            }}
+                            className="form-input"
+                            disabled={createLoading}
+                          />
+                          <button
+                            type="button"
+                            onClick={handleFolderSelect}
+                            className="browse-btn"
+                            disabled={createLoading}
+                          >
+                            Browse
+                          </button>
+                        </div>
+                        <div className="radio-group">
+                          <label className={`radio-card ${localImportMode === 'copy' ? 'selected' : ''}`}>
+                            <input
+                              type="radio"
+                              name="localImportMode"
+                              value="copy"
+                              checked={localImportMode === 'copy'}
+                              onChange={() => setLocalImportMode('copy')}
+                              disabled={createLoading}
+                            />
+                            <div>
+                              <div className="radio-title">Copy into managed folder</div>
+                              <div className="radio-subtitle">LucidCoder will copy the project into its workspace.</div>
+                            </div>
+                          </label>
+                          <label className={`radio-card ${localImportMode === 'link' ? 'selected' : ''}`}>
+                            <input
+                              type="radio"
+                              name="localImportMode"
+                              value="link"
+                              checked={localImportMode === 'link'}
+                              onChange={() => setLocalImportMode('link')}
+                              disabled={createLoading}
+                            />
+                            <div>
+                              <div className="radio-title">Link to existing folder</div>
+                              <div className="radio-subtitle">Keep the project in place (must be inside the managed folder).</div>
+                            </div>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label htmlFor="git-connection-select">Git Workflow *</label>
+                        <select
+                          id="git-connection-select"
+                          value={gitConnectionMode}
+                          onChange={(e) => {
+                            setGitConnectionMode(e.target.value);
+                            if (createError) {
+                              setCreateError('');
+                            }
+                          }}
+                          className="form-select"
+                          disabled={createLoading}
+                        >
+                          <option value="local">Local only</option>
+                          <option value="global">Cloud (use global git settings)</option>
+                          <option value="custom">Cloud (custom connection)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {gitConnectionMode !== 'local' && (
+                      <div className="form-row">
+                        <div className="form-group" style={{ width: '100%' }}>
+                          <label htmlFor="git-connection-remote-url">Repository URL *</label>
+                          <input
+                            id="git-connection-remote-url"
+                            type="text"
+                            placeholder="https://github.com/org/repo.git"
+                            value={gitConnectionRemoteUrl}
+                            onChange={(e) => {
+                              setGitConnectionRemoteUrl(e.target.value);
+                              if (createError) {
+                                setCreateError('');
+                              }
+                            }}
+                            className="form-input"
+                            disabled={createLoading}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {projectSource === 'git' && (
+                  <>
+                    <div className="form-row">
+                      <div className="form-group" style={{ width: '100%' }}>
+                        <label htmlFor="git-clone-url">Repository URL *</label>
+                        <input
+                          id="git-clone-url"
+                          type="text"
+                          placeholder="https://github.com/org/repo.git"
+                          value={gitRemoteUrl}
+                          onChange={(e) => {
+                            setGitRemoteUrl(e.target.value);
+                            if (createError) {
+                              setCreateError('');
+                            }
+                          }}
+                          className="form-input"
+                          disabled={createLoading}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label htmlFor="git-connection-select">Git Workflow *</label>
+                        <select
+                          id="git-connection-select"
+                          value={gitConnectionMode}
+                          onChange={(e) => {
+                            setGitConnectionMode(e.target.value);
+                            if (createError) {
+                              setCreateError('');
+                            }
+                          }}
+                          className="form-select"
+                          disabled={createLoading}
+                        >
+                          <option value="local">Local only</option>
+                          <option value="global">Cloud (use global git settings)</option>
+                          <option value="custom">Cloud (custom connection)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {gitConnectionMode !== 'local' && (
+                      <div className="radio-group">
+                        <label className={`radio-card ${cloneCreateRemote ? 'selected' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={cloneCreateRemote}
+                            onChange={(event) => setCloneCreateRemote(event.target.checked)}
+                            disabled={createLoading}
+                          />
+                          <div>
+                            <div className="radio-title">Create a new repo after cloning</div>
+                            <div className="radio-subtitle">Push the cloned project into a new repository you own.</div>
+                          </div>
+                        </label>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {projectSource === 'new' && (
+                  <div className="form-row">
                     <div className="form-group">
-                      <label htmlFor="git-remote-setup-select">Remote Setup *</label>
+                      <label htmlFor="git-workflow-select">Git Workflow *</label>
                       <select
-                        id="git-remote-setup-select"
-                        value={gitCloudMode}
+                        id="git-workflow-select"
+                        value={gitWorkflowMode}
                         onChange={(e) => {
-                          setGitCloudMode(e.target.value);
+                          const next = e.target.value;
+                          setGitWorkflowMode(next);
+                          setGitCloudMode('');
                           if (createError) {
                             setCreateError('');
                           }
                         }}
                         className="form-select"
                         disabled={createLoading}
+                        autoFocus
                       >
-                        <option value="">Select an option</option>
-                        <option value="create">Create a new repo</option>
-                        <option value="connect">Connect an existing repo (URL)</option>
+                        <option value="">Select a workflow</option>
+                        <option value="local">Local only</option>
+                        <option value="global">Cloud (use global git settings)</option>
+                        <option value="custom">Cloud (custom connection)</option>
                       </select>
                     </div>
-                  )}
-                </div>
 
-                {gitWorkflowMode === 'custom' && (
+                  </div>
+                )}
+
+                {(projectSource === 'new' ? gitWorkflowMode === 'custom' : gitConnectionMode === 'custom') && (
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="git-provider-select">Git Provider *</label>
@@ -1169,7 +1906,7 @@ const CreateProject = () => {
                   </div>
                 )}
 
-                {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'connect' && (
+                {projectSource === 'new' && (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'connect' && (
                   <div className="form-row">
                     <div className="form-group" style={{ width: '100%' }}>
                       <label htmlFor="git-remote-url-input">Repository URL *</label>
@@ -1191,7 +1928,8 @@ const CreateProject = () => {
                   </div>
                 )}
 
-                {(gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'create' && (
+                {(projectSource === 'new' && (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'create')
+                  || (projectSource === 'git' && cloneCreateRemote) ? (
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="git-repo-name">Repository Name</label>
@@ -1243,9 +1981,9 @@ const CreateProject = () => {
                       </select>
                     </div>
                   </div>
-                )}
+                ) : null}
 
-                {shouldShowGitSummary && gitSummaryItems.length > 0 && (
+                {projectSource === 'new' && shouldShowGitSummary && gitSummaryItems.length > 0 && (
                   <div className="git-summary-card">
                     <h4>Derived from repo</h4>
                     {gitSummaryItems.map((item) => (
@@ -1256,6 +1994,66 @@ const CreateProject = () => {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {setupStep === 'compatibility' && projectSource === 'local' && (
+              <div className="form-section">
+                <h3>Compatibility updates</h3>
+                <p>
+                  LucidCoder can update the imported project so the dev server binds to 0.0.0.0 and
+                  works over the network.
+                </p>
+                <div className="tech-detect-status">
+                  {compatibilityStatus.isLoading && <span>Scanning for required changes…</span>}
+                  {!compatibilityStatus.isLoading && compatibilityStatus.error && (
+                    <span>{compatibilityStatus.error}</span>
+                  )}
+                  {!compatibilityStatus.isLoading && !compatibilityStatus.error && compatibilityPlan && (
+                    compatibilityChanges.length > 0 ? (
+                      <ul>
+                        {compatibilityChanges.map((change, index) => (
+                          <li key={`${change.key || 'change'}-${index}`}>{change.description}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span>No compatibility changes required.</span>
+                    )
+                  )}
+                  {!compatibilityStatus.isLoading && !compatibilityStatus.error && compatibilityPlan?.structure?.needsMove && (
+                    <p>Frontend files will be moved into a frontend/ folder.</p>
+                  )}
+                </div>
+                <div className="radio-group">
+                  <label className={`radio-card ${compatibilityConsent ? 'selected' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={compatibilityConsent}
+                      onChange={(event) => setCompatibilityConsent(event.target.checked)}
+                      disabled={compatibilityStatus.isLoading}
+                    />
+                    <div>
+                      <div className="radio-title">Allow compatibility updates</div>
+                      <div className="radio-subtitle">
+                        LucidCoder may edit project files to make the dev server accessible on your network.
+                      </div>
+                    </div>
+                  </label>
+                  <label className={`radio-card ${structureConsent ? 'selected' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={structureConsent}
+                      onChange={(event) => setStructureConsent(event.target.checked)}
+                      disabled={compatibilityStatus.isLoading}
+                    />
+                    <div>
+                      <div className="radio-title">Move frontend files into a frontend folder</div>
+                      <div className="radio-subtitle">
+                        If the project is frontend-only, LucidCoder can move root files into frontend/.
+                      </div>
+                    </div>
+                  </label>
+                </div>
               </div>
             )}
 
@@ -1275,7 +2073,7 @@ const CreateProject = () => {
                 Cancel
               </button>
 
-              {setupStep === 'details' && (
+              {setupStep !== 'source' && (
                 <button
                   type="button"
                   onClick={handleBackToDetails}
@@ -1291,14 +2089,28 @@ const CreateProject = () => {
                 className="git-settings-button primary"
                 disabled={createLoading}
               >
-                {setupStep === 'git'
-                  ? (gitWorkflowMode === 'local' ? 'Next' : (createLoading ? 'Creating Project...' : 'Create Project'))
-                  : (createLoading ? 'Creating Project...' : 'Create Project')}
+                {setupStep === 'source'
+                  ? 'Next'
+                  : (setupStep === 'git'
+                    ? (projectSource === 'local'
+                      ? 'Next'
+                      : (projectSource === 'git'
+                        ? 'Next'
+                        : 'Next'))
+                  : (setupStep === 'compatibility' && projectSource === 'local')
+                    ? (createLoading ? 'Importing Project...' : 'Import Project')
+                  : (createLoading ? 'Creating Project...' : 'Create Project'))}
               </button>
             </div>
           </form>
         </div>
       </div>
+      <FolderPickerModal
+        isOpen={isFolderPickerOpen}
+        initialPath={localPath}
+        onSelect={handleFolderPicked}
+        onClose={() => setFolderPickerOpen(false)}
+      />
     </div>
   );
 };

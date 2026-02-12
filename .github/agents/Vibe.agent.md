@@ -41,8 +41,9 @@ Workflow
    - fix failures
    - repeat until green
 5) Integrate tests into the normal suite, remove temporary files.
-6) Run npm run test:coverage; if it fails, use the failing test(s) as the new inner loop target.
-7) Finish only when npm run test:coverage passes.
+6) Ask the user if they want you to run the full coverage tests, or make further changes before that.
+7) Run npm run test:coverage; if it fails, use the failing test(s) as the new inner loop target.
+8) Finish only when npm run test:coverage passes.
 
 Scope discipline
 - Keep diffs minimal and localized.

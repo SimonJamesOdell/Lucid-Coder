@@ -228,99 +228,62 @@ describe('App Component Integration', () => {
       expect(screen.queryByText('No projects yet')).not.toBeInTheDocument()
     })
 
-    test('navigates to create project view when create button clicked', async () => {
+    test('navigates to add project view when add button clicked', async () => {
       const user = userEvent.setup()
 
       render(<App />)
 
       await waitFor(() => {
-        expect(screen.getByText('Create New Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Create New Project'))
+      await user.click(screen.getByText('Add Project'))
 
       await waitFor(() => {
-        expect(screen.getByText('Set up a new project with AI-powered coding assistance.')).toBeInTheDocument()
-        expect(screen.getByLabelText('Git Workflow *')).toBeInTheDocument()
+        expect(screen.getByText('Create a new project or bring in an existing one.')).toBeInTheDocument()
+        expect(screen.getByText('Project Source')).toBeInTheDocument()
       })
     })
 
-    test('navigates to import project view when import button clicked', async () => {
+    test('navigates back to main view from add project', async () => {
       const user = userEvent.setup()
 
       render(<App />)
 
       await waitFor(() => {
-        expect(screen.getByText('Import Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Import Project'))
+      await user.click(screen.getByText('Add Project'))
 
       await waitFor(() => {
-        expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
-        expect(screen.getByText('Choose an import source')).toBeInTheDocument()
-      })
-    })
-
-    test('navigates back to main view from create project', async () => {
-      const user = userEvent.setup()
-
-      render(<App />)
-
-      await waitFor(() => {
-        expect(screen.getByText('Create New Project')).toBeInTheDocument()
+        expect(screen.getByText('Create a new project or bring in an existing one.')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Create New Project'))
-
-      await waitFor(() => {
-        expect(screen.getByText('Set up a new project with AI-powered coding assistance.')).toBeInTheDocument()
-      })
-
-      await user.click(screen.getByRole('button', { name: /close create project/i }))
+      await user.click(screen.getByRole('button', { name: /close add project/i }))
 
       await waitFor(() => {
         expect(screen.getByText('Select Project')).toBeInTheDocument()
       })
     })
 
-    test('navigates back to main view from import project', async () => {
+    test('cancels add project and returns to main view', async () => {
       const user = userEvent.setup()
 
       render(<App />)
 
       await waitFor(() => {
-        expect(screen.getByText('Import Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Import Project'))
+      await user.click(screen.getByText('Add Project'))
 
       await waitFor(() => {
-        expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
+        expect(screen.getByText('Create a new project or bring in an existing one.')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByRole('button', { name: 'Close import' }))
-
-      await waitFor(() => {
-        expect(screen.getByText('Select Project')).toBeInTheDocument()
-      })
-    })
-
-    test('cancels create project and returns to main view', async () => {
-      const user = userEvent.setup()
-
-      render(<App />)
-
-      await waitFor(() => {
-        expect(screen.getByText('Create New Project')).toBeInTheDocument()
-      })
-
-      await user.click(screen.getByText('Create New Project'))
-
-      await waitFor(() => {
-        expect(screen.getByText('Set up a new project with AI-powered coding assistance.')).toBeInTheDocument()
-      })
-
+      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Name *'), 'Temp Project')
@@ -332,19 +295,19 @@ describe('App Component Integration', () => {
       })
     })
 
-    test('cancels import project and returns to main view', async () => {
+    test('cancels add project and returns to main view', async () => {
       const user = userEvent.setup()
 
       render(<App />)
 
       await waitFor(() => {
-        expect(screen.getByText('Import Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Import Project'))
+      await user.click(screen.getByText('Add Project'))
 
       await waitFor(() => {
-        expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
+        expect(screen.getByText('Create a new project or bring in an existing one.')).toBeInTheDocument()
       })
 
       await user.click(screen.getByText('Cancel'))
@@ -374,11 +337,13 @@ describe('App Component Integration', () => {
       renderApp()
 
       await waitFor(() => {
-        expect(screen.getByText('Create New Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Create New Project'))
+      await user.click(screen.getByText('Add Project'))
 
+      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Name *'), 'Test Project')
@@ -406,11 +371,13 @@ describe('App Component Integration', () => {
       renderApp()
 
       await waitFor(() => {
-        expect(screen.getByText('Create New Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Create New Project'))
+      await user.click(screen.getByText('Add Project'))
 
+      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
       await user.click(screen.getByText('Create Project'))
@@ -429,11 +396,13 @@ describe('App Component Integration', () => {
       renderApp()
 
       await waitFor(() => {
-        expect(screen.getByText('Create New Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Create New Project'))
+      await user.click(screen.getByText('Add Project'))
 
+      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Name *'), 'Duplicate Project')
@@ -449,7 +418,7 @@ describe('App Component Integration', () => {
       await user.click(screen.getByText('Create Project'))
 
       await waitFor(() => {
-        expect(screen.getByText('Set up a new project with AI-powered coding assistance.')).toBeInTheDocument()
+        expect(screen.getByText('Create a new project or bring in an existing one.')).toBeInTheDocument()
       })
 
       expect(axios.post).toHaveBeenCalled()
@@ -462,11 +431,13 @@ describe('App Component Integration', () => {
       renderApp()
 
       await waitFor(() => {
-        expect(screen.getByText('Create New Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Create New Project'))
+      await user.click(screen.getByText('Add Project'))
 
+      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
       await user.type(screen.getByLabelText('Project Name *'), 'Flaky Project')
@@ -477,7 +448,7 @@ describe('App Component Integration', () => {
       await user.click(screen.getByText('Create Project'))
 
       await waitFor(() => {
-        const stillOnForm = screen.queryByText('Set up a new project with AI-powered coding assistance.')
+        const stillOnForm = screen.queryByText('Create a new project or bring in an existing one.')
         const backToMain = screen.queryByText('Select Project')
         expect(stillOnForm || backToMain).not.toBeNull()
       })
@@ -485,84 +456,22 @@ describe('App Component Integration', () => {
   })
 
   describe('Project Import Integration', () => {
-    test('shows import form with proper validation', async () => {
+    test('validates local import path before continuing', async () => {
       const user = userEvent.setup()
 
       queueAxiosProjects([])
       renderApp()
 
       await waitFor(() => {
-        expect(screen.getByText('Import Project')).toBeInTheDocument()
+        expect(screen.getByText('Add Project')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Import Project'))
-
-      await waitFor(() => {
-        expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
-      })
-
+      await user.click(screen.getByText(/add project/i))
+      await user.click(screen.getByText('Import a local folder'))
       await user.click(screen.getByText('Next'))
       await user.click(screen.getByText('Next'))
+
       expect(await screen.findByText('Project path is required')).toBeInTheDocument()
-    })
-
-    test('switches between import methods correctly', async () => {
-      const user = userEvent.setup()
-
-      renderApp()
-
-      await waitFor(() => {
-        expect(screen.getByText('Import Project')).toBeInTheDocument()
-      })
-
-      await user.click(screen.getByText('Import Project'))
-
-      await waitFor(() => {
-        expect(screen.getByText('Choose an import source')).toBeInTheDocument()
-      })
-
-      expect(screen.getByRole('tab', { name: 'Local Folder' })).toHaveAttribute('aria-selected', 'true')
-
-      await user.click(screen.getByRole('tab', { name: 'GitHub / GitLab' }))
-      expect(screen.getByRole('tab', { name: 'GitHub / GitLab' })).toHaveAttribute('aria-selected', 'true')
-
-      await user.click(screen.getByText('Next'))
-      expect(await screen.findByLabelText('Git Repository URL *')).toBeInTheDocument()
-
-      await user.click(screen.getByText('Back'))
-      await user.click(screen.getByRole('tab', { name: 'Local Folder' }))
-      await user.click(screen.getByText('Next'))
-      expect(await screen.findByLabelText('Project Folder Path *')).toBeInTheDocument()
-    })
-
-    test('successfully imports project with valid data', async () => {
-      const user = userEvent.setup()
-
-      renderApp()
-
-      await waitFor(() => {
-        expect(screen.getByText('Import Project')).toBeInTheDocument()
-      })
-
-      await user.click(screen.getByText('Import Project'))
-
-      await waitFor(() => {
-        expect(screen.getByText('Import an existing project from your local machine or a Git repository.')).toBeInTheDocument()
-      })
-
-      await user.click(screen.getByText('Next'))
-      await user.type(screen.getByLabelText('Project Folder Path *'), '/test/path')
-      await user.click(screen.getByText('Next'))
-      fireEvent.change(screen.getByLabelText('Project Name *'), { target: { value: 'Imported Project' } })
-      await user.type(screen.getByLabelText('Description'), 'Test imported project')
-      await user.click(screen.getByText('Next'))
-      await user.click(screen.getByText('Next'))
-      await user.click(screen.getByText('Next'))
-      await user.click(screen.getByText('Import Project'))
-
-      await waitFor(() => {
-        expect(screen.getByTestId('project-inspector')).toBeInTheDocument()
-      })
     })
   })
 
@@ -571,7 +480,14 @@ describe('App Component Integration', () => {
       const user = userEvent.setup()
 
       const mockProjects = [
-        { id: '1', name: 'Existing Project', description: 'Test project' },
+        {
+          id: '1',
+          name: 'Existing Project',
+          description: 'Test project',
+          language: 'javascript',
+          framework: 'react',
+          createdAt: '2024-01-01T00:00:00.000Z'
+        }
       ]
 
       projectsResponse = { success: true, projects: mockProjects }
@@ -609,8 +525,7 @@ describe('App Component Integration', () => {
         expect(screen.getByText('Select Project')).toBeInTheDocument()
       })
 
-      expect(screen.getByText('Create New Project')).toBeInTheDocument()
-      expect(screen.getByText('Import Project')).toBeInTheDocument()
+      expect(screen.getByText('Add Project')).toBeInTheDocument()
     })
 
     test('handles unconfigured LLM state appropriately', async () => {
