@@ -2,6 +2,8 @@
 - Add an automatic dependency-install step in branch workflow test gating for Node workspaces when dependency manifests change, preventing missing-module failures during coverage/test runs.
 - Harden branch workflow dependency-install trigger logic across workspace/root manifest changes and remove unreachable guard paths in the tests API decision flow.
 - Expand branch workflow regression coverage for pre-test dependency installation ordering and dependency-trigger edge cases.
+- Refine backend/frontend coverage-threshold handling and merged coverage evaluation so custom threshold runs and config-file exclusions stay deterministic.
+- Expand TestTab behavior and helper coverage for modal suppression, autofix flow controls, payload selection, and log rendering/scroll handling to restore full suite coverage.
 - Bump version metadata to 0.6.4 across root/frontend/backend packages, lockfiles, shared version module, and versioning docs.
 
 ## 0.6.3 (2026-02-13)
