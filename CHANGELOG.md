@@ -1,3 +1,9 @@
+## 0.6.2 (2026-02-13)
+- Bump version metadata and lockfiles for the 0.6.2 release across root, frontend, backend, shared version helpers, and docs.
+- Refine PreviewTab error/empty-state behavior and environment guards to keep runtime behavior consistent while preserving strict coverage expectations.
+- Expand PreviewTab tests for URL/origin resolution, modal lifecycle cleanup, reload fallbacks, and not-running/error-path handling.
+- Add focused process manager coverage for reserved-port cleanup behavior.
+
 ## 0.6.1 (2026-02-12)
 - Auto-detect tech stack for git clone imports and lock the tech selectors on the details step.
 - Add git tech detection endpoint and coverage for clone-based imports.
