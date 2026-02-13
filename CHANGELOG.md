@@ -1,3 +1,9 @@
+## 0.6.3 (2026-02-13)
+- Add global testing settings support with persisted `coverageTarget` values (backend DB table + settings routes) and policy threshold derivation from saved testing settings.
+- Add frontend testing settings state plumbing and persistence, including backend fetch/update helpers and AppState context integration.
+- Add a new Settings → Configure Testing modal with slider-based coverage target controls and save/cancel flows.
+- Expand backend/frontend tests for testing settings routes, database behavior, modal UI flows, and app-state/settings error-path coverage to keep strict coverage gates green.
+
 ## 0.6.2 (2026-02-13)
 - Refine PreviewTab error/empty-state behavior and environment guards to keep runtime behavior consistent while preserving strict coverage expectations.
 - Expand PreviewTab tests for URL/origin resolution, modal lifecycle cleanup, reload fallbacks, and not-running/error-path handling.
