@@ -1356,7 +1356,7 @@ describe('branchWorkflow.js coverage (runTestsForBranch workspace collection)', 
 
         const result = await branchWorkflow.runTestsForBranch(project.id, null, {
           real: true,
-          changedFiles: ['frontend/package.json']
+          changedFiles: ['////', 'frontend/package.json']
         });
 
         expect(result.status).toBe('passed');

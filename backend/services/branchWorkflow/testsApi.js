@@ -82,10 +82,6 @@ export const createBranchWorkflowTests = (core) => {
 
     return changedPaths.some((filePath) => {
       const normalized = normalizePathForCompare(filePath);
-      if (!normalized) {
-        return false;
-      }
-
       if (workspacePrefix && rootDependencyFiles.has(normalized)) {
         return true;
       }
@@ -816,7 +812,8 @@ export const createBranchWorkflowTests = (core) => {
   api.__testHooks = {
     collectJobProofCandidates,
     resolveWorkspaceLabel,
-    recordCssOnlySkipRun
+    recordCssOnlySkipRun,
+    shouldInstallNodeDependencies
   };
 
   return api;

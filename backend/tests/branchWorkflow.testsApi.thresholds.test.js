@@ -195,4 +195,48 @@ describe('branchWorkflow testsApi thresholds normalization', () => {
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it('evaluates dependency-install trigger paths for root and workspace-scoped changes', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-testsapi-install-trigger-'));
+    try {
+      await writeFrontendWorkspace(projectRoot);
+      await fs.writeFile(
+        path.join(projectRoot, 'package.json'),
+        JSON.stringify({ scripts: { 'test:coverage': 'echo ok' } })
+      );
+
+      const api = buildApi({
+        projectRoot,
+        getTestingSettings: async () => ({ coverageTarget: 100 }),
+        getProjectTestingSettings: async () => null
+      });
+
+      expect(api.__testHooks.shouldInstallNodeDependencies({
+        workspaceName: 'frontend',
+        changedPaths: ['package-lock.json']
+      })).toBe(true);
+
+      expect(api.__testHooks.shouldInstallNodeDependencies({
+        workspaceName: 'root',
+        changedPaths: ['package.json']
+      })).toBe(true);
+
+      expect(api.__testHooks.shouldInstallNodeDependencies({
+        workspaceName: 'frontend',
+        changedPaths: ['backend/package.json']
+      })).toBe(false);
+
+      expect(api.__testHooks.shouldInstallNodeDependencies({
+        workspaceName: '',
+        changedPaths: ['package.json']
+      })).toBe(true);
+
+      expect(api.__testHooks.shouldInstallNodeDependencies({
+        workspaceName: 'frontend',
+        changedPaths: ['   ']
+      })).toBe(false);
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
