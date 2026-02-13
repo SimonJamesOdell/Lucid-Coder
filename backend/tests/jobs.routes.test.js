@@ -858,6 +858,55 @@ describe('Jobs Routes', () => {
     }));
   });
 
+  it('uses payload coverage target override for backend tests when useGlobal is false', async () => {
+    configureFsState({ projectRoot: true, backendDir: true, backendPackage: true });
+    getTestingSettings.mockResolvedValueOnce({ coverageTarget: 100 });
+    getProjectTestingSettings.mockResolvedValueOnce({
+      frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 },
+      backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+    });
+
+    await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'backend:test', payload: { useGlobal: false, coverageTarget: 50 } })
+      .expect(202);
+
+    expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
+      env: { LUCIDCODER_COVERAGE_TARGET: '50' },
+      coverageThresholds: { lines: 50, statements: 50, functions: 50, branches: 50 }
+    }));
+  });
+
+  it('ignores payload coverage target override when useGlobal is true', async () => {
+    configureFsState({ projectRoot: true, backendDir: true, backendPackage: true });
+
+    await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'backend:test', payload: { useGlobal: true, coverageTarget: 50 } })
+      .expect(202);
+
+    expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
+      env: { LUCIDCODER_COVERAGE_TARGET: '100' },
+      coverageThresholds: { lines: 100, statements: 100, functions: 100, branches: 100 }
+    }));
+  });
+
+  it('treats non-object payloads as no coverage override for backend tests', async () => {
+    configureFsState({ projectRoot: true, backendDir: true, backendPackage: true });
+    getTestingSettings.mockResolvedValue({ coverageTarget: 90 });
+    getProjectTestingSettings.mockResolvedValue(null);
+
+    await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'backend:test', payload: 'not-an-object' })
+      .expect(202);
+
+    expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
+      env: { LUCIDCODER_COVERAGE_TARGET: '90' },
+      coverageThresholds: { lines: 90, statements: 90, functions: 90, branches: 90 }
+    }));
+  });
+
   it('runs backend tests via python when requirements exist', async () => {
     configureFsState({ projectRoot: true, backendDir: true, backendRequirements: true });
 

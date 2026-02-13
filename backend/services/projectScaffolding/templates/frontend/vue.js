@@ -42,7 +42,16 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.js'],
     include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}'],
     coverage: {
-      reporter: ['text', 'json', 'html']
+      reporter: ['text', 'json', 'html'],
+      exclude: [
+        'node_modules/**',
+        'src/test/**',
+        'src/**/__tests__/**',
+        '**/*.config.{js,ts,cjs,mjs}',
+        'playwright.config.{js,ts,cjs,mjs}',
+        'vite.config.{js,ts,cjs,mjs}',
+        'vitest.config.{js,ts,cjs,mjs}'
+      ]
     }
   }
 })`,

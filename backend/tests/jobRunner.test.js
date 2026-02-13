@@ -323,6 +323,23 @@ describe('jobRunner', () => {
       });
     });
 
+    it('uses default process error message when error has no message text', async () => {
+      const job = startJob({
+        projectId: 1,
+        type: 'build',
+        command: 'invalid-command',
+        cwd: '/path'
+      });
+
+      mockChild.emit('error', { message: '' });
+
+      await waitFor(() => {
+        const updatedJob = getJob(job.id);
+        expect(updatedJob.status).toBe(JOB_STATUS.FAILED);
+        expect(updatedJob.logs.some((log) => log.message.includes('Job failed'))).toBe(true);
+      });
+    });
+
     it('captures signal when process is terminated', async () => {
       const job = startJob({
         projectId: 1,
@@ -770,6 +787,38 @@ describe('jobRunner', () => {
         expect(updatedJob.logs.some(log => log.message.includes('No such process'))).toBe(true);
         killSpy.mockRestore();
       });
+    });
+
+    it('uses default cancel error message when kill throws a non-error value', async () => {
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw new Error('');
+      });
+
+      if (isWindows) {
+        spawn.mockImplementation((cmd, args) => {
+          if (cmd === 'taskkill') {
+            throw new Error('');
+          }
+          return mockChild;
+        });
+      }
+
+      const job = startJob({
+        projectId: 1,
+        type: 'build',
+        command: 'npm',
+        cwd: '/path'
+      });
+
+      const cancelledJob = cancelJob(job.id);
+      expect(cancelledJob.status).toBe(JOB_STATUS.CANCELLED);
+
+      await waitFor(() => {
+        const updatedJob = getJob(job.id);
+        expect(updatedJob.logs.some((log) => log.message.includes('Job failed'))).toBe(true);
+      });
+
+      killSpy.mockRestore();
     });
 
     it('does not attempt to kill if process has no pid', () => {

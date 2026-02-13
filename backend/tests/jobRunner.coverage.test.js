@@ -321,6 +321,135 @@ describe('jobRunner coverage branches', () => {
     await expect(jobRunner.__testing.readCoverageTotals('/tmp/project')).resolves.toBeNull();
   });
 
+  it('normalizes non-object coverage summaries to null', async () => {
+    const readFileImpl = () => Promise.resolve(JSON.stringify('not-an-object'));
+    const { jobRunner } = await importJobRunnerWithMocks({ readFileImpl });
+
+    await expect(jobRunner.__testing.readCoverageTotals('/tmp/project')).resolves.toBeNull();
+  });
+
+  it('falls back invalid threshold inputs to defaults', async () => {
+    const { jobRunner } = await importJobRunnerWithMocks();
+
+    const job = {
+      status: jobRunner.JOB_STATUS.SUCCEEDED,
+      type: 'frontend:test',
+      cwd: '/tmp/project',
+      logs: [
+        { message: 'All files          |   99 |    99 |      99 |   99 |' }
+      ],
+      coverageThresholds: {
+        lines: Number.NaN,
+        statements: undefined,
+        functions: null,
+        branches: 'oops'
+      }
+    };
+
+    await jobRunner.__testing.evaluateCoverageGate(job, { assumeSucceeded: true });
+
+    expect(job.summary.coverage.thresholds).toEqual({
+      lines: 100,
+      statements: 100,
+      functions: 0,
+      branches: 100
+    });
+    expect(job.summary.coverage.message).toBe('Coverage gate failed: coverage below 100%.');
+  });
+
+  it('skips invalid per-file metrics in summary aggregation', async () => {
+    const readFileImpl = () => Promise.resolve(JSON.stringify({
+      total: {
+        lines: { pct: 10 },
+        statements: { pct: 10 },
+        functions: { pct: 10 },
+        branches: { pct: 10 }
+      },
+      'broken.js': {
+        lines: { total: 10, covered: 'NaN' },
+        statements: { total: 10, covered: 5 },
+        functions: { total: 10, covered: 5 },
+        branches: { total: 10, covered: 5 }
+      },
+      'valid.js': {
+        lines: { total: 8, covered: 7 },
+        statements: { total: 8, covered: 7 },
+        functions: { total: 5, covered: 4 },
+        branches: { total: 4, covered: 2 }
+      }
+    }));
+
+    const { jobRunner } = await importJobRunnerWithMocks({ readFileImpl });
+    const totals = await jobRunner.__testing.readCoverageTotals('/tmp/project');
+
+    expect(totals).toMatchObject({
+      lines: 87.5,
+      statements: 66.66666666666666,
+      functions: 60,
+      branches: 50
+    });
+  });
+
+  it('returns 100% totals when aggregated metrics have zero total counts', async () => {
+    const readFileImpl = () => Promise.resolve(JSON.stringify({
+      total: {
+        lines: { pct: 10 },
+        statements: { pct: 10 },
+        functions: { pct: 10 },
+        branches: { pct: 10 }
+      },
+      'empty.js': {
+        lines: { total: 0, covered: 0 },
+        statements: { total: 0, covered: 0 },
+        functions: { total: 0, covered: 0 },
+        branches: { total: 0, covered: 0 }
+      }
+    }));
+
+    const { jobRunner } = await importJobRunnerWithMocks({ readFileImpl });
+    const totals = await jobRunner.__testing.readCoverageTotals('/tmp/project');
+
+    expect(totals).toEqual({
+      lines: 100,
+      statements: 100,
+      functions: 100,
+      branches: 100
+    });
+  });
+
+  it('ignores config files when computing coverage totals from summary', async () => {
+    const readFileImpl = () => Promise.resolve(JSON.stringify({
+      total: {
+        lines: { pct: 77.7 },
+        statements: { pct: 77.7 },
+        functions: { pct: 66.6 },
+        branches: { pct: 40 }
+      },
+      'server.js': {
+        lines: { total: 8, covered: 7, skipped: 0, pct: 87.5 },
+        statements: { total: 8, covered: 7, skipped: 0, pct: 87.5 },
+        functions: { total: 5, covered: 4, skipped: 0, pct: 80 },
+        branches: { total: 4, covered: 2, skipped: 0, pct: 50 }
+      },
+      'jest.config.js': {
+        lines: { total: 1, covered: 0, skipped: 0, pct: 0 },
+        statements: { total: 1, covered: 0, skipped: 0, pct: 0 },
+        functions: { total: 1, covered: 0, skipped: 0, pct: 0 },
+        branches: { total: 1, covered: 0, skipped: 0, pct: 0 }
+      }
+    }));
+
+    const { jobRunner } = await importJobRunnerWithMocks({ readFileImpl });
+    const totals = await jobRunner.__testing.readCoverageTotals('/tmp/project');
+
+    expect(totals).toMatchObject({
+      lines: 87.5,
+      statements: 87.5,
+      functions: 80,
+      branches: 50
+    });
+  });
+
   it('skips invalid coverage totals when parsing logs directly', async () => {
     const { jobRunner } = await importJobRunnerWithMocks();
 
@@ -343,6 +472,57 @@ describe('jobRunner coverage branches', () => {
       branches: 100,
       functions: 100,
       lines: 100
+    });
+  });
+
+  it('parses All files rows with percentage symbols', async () => {
+    const { jobRunner } = await importJobRunnerWithMocks();
+
+    const totals = jobRunner.__testing.parseCoverageTotalsFromLogs([
+      { message: 'All files          |   53.62% |    77.77% |      50% |   53.62% |' }
+    ]);
+
+    expect(totals).toMatchObject({
+      statements: 53.62,
+      branches: 77.77,
+      functions: 50,
+      lines: 53.62
+    });
+  });
+
+  it('averages included file rows when excluded config rows are also present', async () => {
+    const { jobRunner } = await importJobRunnerWithMocks();
+
+    const totals = jobRunner.__testing.parseCoverageTotalsFromLogs([
+      {
+        message: [
+          'server-a.js      |    80 |    40 |      60 |    80 |',
+          'server-b.js      |    90 |    60 |      80 |    90 |',
+          'vite.config.js   |     0 |     0 |       0 |     0 |'
+        ].join('\n')
+      }
+    ]);
+
+    expect(totals).toEqual({
+      statements: 85,
+      branches: 50,
+      functions: 70,
+      lines: 85
+    });
+  });
+
+  it('handles empty file labels in coverage rows without exclusion', async () => {
+    const { jobRunner } = await importJobRunnerWithMocks();
+
+    const totals = jobRunner.__testing.parseCoverageTotalsFromLogs([
+      { message: '               |   90 |    90 |      90 |   90 |' }
+    ]);
+
+    expect(totals).toEqual({
+      statements: 90,
+      branches: 90,
+      functions: 90,
+      lines: 90
     });
   });
 
@@ -589,6 +769,175 @@ describe('jobRunner coverage branches', () => {
     expect(job.status).toBe(jobRunner.JOB_STATUS.FAILED);
     expect(job.summary.coverage.passed).toBe(false);
     expect(job.summary.coverage.totals.lines).toBe(99);
+  });
+
+  it('uses configured threshold in coverage gate failure messages', async () => {
+    const readFileImpl = () => Promise.resolve(JSON.stringify({
+      total: {
+        lines: { pct: 49 },
+        statements: { pct: 49 },
+        functions: { pct: 49 },
+        branches: { pct: 49 }
+      }
+    }));
+
+    const { jobRunner } = await importJobRunnerWithMocks({ readFileImpl });
+
+    const job = {
+      status: jobRunner.JOB_STATUS.SUCCEEDED,
+      type: 'backend:test',
+      cwd: '/tmp/project',
+      coverageThresholds: {
+        lines: 50,
+        statements: 50,
+        functions: 50,
+        branches: 50
+      }
+    };
+
+    await jobRunner.__testing.evaluateCoverageGate(job, { assumeSucceeded: true });
+
+    expect(job.status).toBe(jobRunner.JOB_STATUS.FAILED);
+    expect(job.summary.coverage.message).toBe('Coverage gate failed: coverage below 50%.');
+  });
+
+  it('passes coverage gate at 50% when only config files are below threshold', async () => {
+    const readFileImpl = () => Promise.resolve(JSON.stringify({
+      total: {
+        lines: { pct: 87.5 },
+        statements: { pct: 87.5 },
+        functions: { pct: 80 },
+        branches: { pct: 50 }
+      },
+      'jest.config.js': {
+        lines: { total: 1, covered: 0, skipped: 0, pct: 0 },
+        statements: { total: 1, covered: 0, skipped: 0, pct: 0 },
+        functions: { total: 1, covered: 0, skipped: 0, pct: 0 },
+        branches: { total: 1, covered: 0, skipped: 0, pct: 0 }
+      },
+      'server.js': {
+        lines: { total: 8, covered: 7, skipped: 0, pct: 87.5 },
+        statements: { total: 8, covered: 7, skipped: 0, pct: 87.5 },
+        functions: { total: 5, covered: 4, skipped: 0, pct: 80 },
+        branches: { total: 4, covered: 2, skipped: 0, pct: 50 }
+      }
+    }));
+
+    const { jobRunner } = await importJobRunnerWithMocks({ readFileImpl });
+
+    const job = {
+      status: jobRunner.JOB_STATUS.SUCCEEDED,
+      type: 'backend:test',
+      cwd: '/tmp/project',
+      logs: [],
+      coverageThresholds: {
+        lines: 50,
+        statements: 50,
+        functions: 50,
+        branches: 50
+      }
+    };
+
+    await jobRunner.__testing.evaluateCoverageGate(job, { assumeSucceeded: true });
+
+    expect(job.status).toBe(jobRunner.JOB_STATUS.SUCCEEDED);
+    expect(job.summary.coverage.passed).toBe(true);
+    expect(job.summary.coverage.message).toBe('Coverage gate passed.');
+    expect(job.summary.coverage.totals).toMatchObject({
+      lines: 87.5,
+      statements: 87.5,
+      functions: 80,
+      branches: 50
+    });
+  });
+
+  it('prefers coverage totals parsed from logs when summary totals are lower', async () => {
+    const readFileImpl = () => Promise.resolve(JSON.stringify({
+      total: {
+        lines: { pct: 49 },
+        statements: { pct: 49 },
+        functions: { pct: 49 },
+        branches: { pct: 49 }
+      }
+    }));
+
+    const { jobRunner } = await importJobRunnerWithMocks({ readFileImpl });
+
+    const job = {
+      status: jobRunner.JOB_STATUS.SUCCEEDED,
+      type: 'backend:test',
+      cwd: '/tmp/project',
+      logs: [
+        {
+          message: [
+            '----------------|---------|----------|---------|---------|',
+            'File            | % Stmts | % Branch | % Funcs | % Lines |',
+            '----------------|---------|----------|---------|---------|',
+            'All files       |    87.5 |       50 |      80 |    87.5 |',
+            ' jest.config.js |       0 |        0 |       0 |       0 |',
+            ' server.js      |    87.5 |       50 |      80 |    87.5 |',
+            '----------------|---------|----------|---------|---------|'
+          ].join('\n')
+        }
+      ],
+      coverageThresholds: {
+        lines: 50,
+        statements: 50,
+        functions: 50,
+        branches: 50
+      }
+    };
+
+    await jobRunner.__testing.evaluateCoverageGate(job, { assumeSucceeded: true });
+
+    expect(job.status).toBe(jobRunner.JOB_STATUS.SUCCEEDED);
+    expect(job.summary.coverage.passed).toBe(true);
+    expect(job.summary.coverage.totals).toMatchObject({
+      lines: 87.5,
+      statements: 87.5,
+      functions: 80,
+      branches: 50
+    });
+  });
+
+  it('parses all-files totals when the coverage line is split across log chunks', async () => {
+    const readFileImpl = () => Promise.resolve(JSON.stringify({
+      total: {
+        lines: { pct: 49 },
+        statements: { pct: 49 },
+        functions: { pct: 49 },
+        branches: { pct: 49 }
+      }
+    }));
+
+    const { jobRunner } = await importJobRunnerWithMocks({ readFileImpl });
+
+    const job = {
+      status: jobRunner.JOB_STATUS.SUCCEEDED,
+      type: 'backend:test',
+      cwd: '/tmp/project',
+      logs: [
+        { message: 'All files       |    87.5 |       50 |' },
+        { message: '      80 |    87.5 |                    ' }
+      ],
+      coverageThresholds: {
+        lines: 50,
+        statements: 50,
+        functions: 50,
+        branches: 50
+      }
+    };
+
+    await jobRunner.__testing.evaluateCoverageGate(job, { assumeSucceeded: true });
+
+    expect(job.status).toBe(jobRunner.JOB_STATUS.SUCCEEDED);
+    expect(job.summary.coverage.passed).toBe(true);
+    expect(job.summary.coverage.totals).toMatchObject({
+      lines: 87.5,
+      statements: 87.5,
+      functions: 80,
+      branches: 50
+    });
   });
 
   it('marks coverage gate failures when summary is missing', async () => {

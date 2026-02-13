@@ -25,7 +25,7 @@ Write-Host ''
 Write-Host 'Generating Frontend Coverage...' -ForegroundColor Yellow
 Push-Location frontend
 
-npm run test:coverage
+npm run test:coverage:html
 if ($LASTEXITCODE -eq 0) {
     Write-Host 'Frontend coverage generated: frontend/coverage/index.html' -ForegroundColor Green
 } else {

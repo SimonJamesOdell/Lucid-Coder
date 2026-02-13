@@ -76,9 +76,15 @@ NODE_ENV=development`,
   testEnvironment: 'node',
   collectCoverageFrom: [
     '**/*.js',
+    '!**/*.config.js',
+    '!**/*.config.cjs',
+    '!**/jest.config.js',
+    '!**/babel.config.cjs',
     '!**/node_modules/**',
     '!**/coverage/**',
-    '!**/tests/**'
+    '!**/tests/**',
+    '!**/test/**',
+    '!**/__tests__/**'
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],

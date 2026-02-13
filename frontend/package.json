@@ -1,7 +1,7 @@
 {
   "name": "lucidcoder-frontend",
   "private": true,
-  "version": "0.6.3",
+  "version": "0.6.4",
   "type": "module",
   "scripts": {
     "start": "vite --host 0.0.0.0",
@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:run": "vitest run",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest run --reporter=verbose --coverage",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json",
+    "test:coverage:quick": "vitest run --coverage --coverage.reporter=text-summary --coverage.reporter=json",
     "test:coverage:html": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html"
   },
   "dependencies": {

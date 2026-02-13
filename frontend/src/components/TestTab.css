@@ -178,6 +178,37 @@
   min-height: 0;
 }
 
+.job-logs-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.job-logs-catchup {
+  position: absolute;
+  right: 0.6rem;
+  bottom: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, #2a2a2a);
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--text-primary, #f5f5f5);
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.job-logs-catchup:hover {
+  background: rgba(0, 0, 0, 0.88);
+}
+
 .job-logs-header {
   display: flex;
   align-items: center;
