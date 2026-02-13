@@ -27,4 +27,21 @@ describe('process manager coverage', () => {
     expect(findPids).toHaveBeenCalled();
     expect(terminatePid).toHaveBeenCalled();
   });
+
+  it('waitForPortsToFree skips reserved host ports', async () => {
+    const findPids = vi.fn().mockResolvedValue([99999]);
+    const terminatePid = vi.fn().mockResolvedValue();
+
+    await expect(
+      processManager.__testOnly.waitForPortsToFree([5173], {
+        timeoutMs: 5,
+        intervalMs: 1,
+        findPids,
+        terminatePid
+      })
+    ).resolves.toBe(true);
+
+    expect(findPids).not.toHaveBeenCalled();
+    expect(terminatePid).not.toHaveBeenCalled();
+  });
 });

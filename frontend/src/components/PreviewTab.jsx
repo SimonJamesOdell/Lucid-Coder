@@ -1,4 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import SettingsModal from './SettingsModal';
 import './PreviewTab.css';
 
 const PORT_MAP = {
@@ -94,6 +95,7 @@ const PreviewTab = forwardRef(
   const [isSoftReloading, setIsSoftReloading] = useState(false);
   const [isPlaceholderDetected, setIsPlaceholderDetected] = useState(false);
   const [previewFailureDetails, setPreviewFailureDetails] = useState(null);
+  const [showBackendLogsModal, setShowBackendLogsModal] = useState(false);
 
   // ── Auto-recovery ────────────────────────────────────────────────────
   const [autoRecoverState, setAutoRecoverState] = useState({
@@ -133,9 +135,11 @@ const PreviewTab = forwardRef(
   }, [autoRecoverDisabled]);
 
   const guessBackendOrigin = () => {
+    /* c8 ignore start */
     if (typeof window === 'undefined') {
       return '';
     }
+    /* c8 ignore end */
 
     if (!window.location) {
       return '';
@@ -214,10 +218,11 @@ const PreviewTab = forwardRef(
   }, [autoRecoverState.attempt]);
 
   useEffect(() => {
-    /* v8 ignore next */
+    /* c8 ignore start */
     if (typeof window === 'undefined') {
       return;
     }
+    /* c8 ignore end */
 
     if (!previewContextMenu) {
       return;
@@ -277,6 +282,26 @@ const PreviewTab = forwardRef(
       !isFrontendReadyForPreview &&
       !isStartingProject
   );
+  const shouldAttemptPreview =
+    !showNotRunningState &&
+    !isStartingProject &&
+    (isFrontendReadyForPreview || !isProcessInfoCurrent);
+  const resolvedPreviewPhase = showNotRunningState ? 'error' : previewPhase;
+  const backendLogs = Array.isArray(processInfo?.processes?.backend?.logs)
+    ? processInfo.processes.backend.logs
+    : [];
+  const hasBackendLogs = backendLogs.length > 0;
+  const backendLogsText = backendLogs
+    .slice(-50)
+    .map((entry) => entry?.message)
+    .filter(Boolean)
+    .join('\n');
+
+  useEffect(() => {
+    if (resolvedPreviewPhase !== 'error' && showBackendLogsModal) {
+      setShowBackendLogsModal(false);
+    }
+  }, [resolvedPreviewPhase, showBackendLogsModal]);
   const resolvePortValue = (portBundle, key) => {
     if (!portBundle) {
       return null;
@@ -354,6 +379,7 @@ const PreviewTab = forwardRef(
   };
 
   const previewUrl = previewUrlOverride ?? getPreviewProxyUrl();
+  const effectivePreviewUrl = shouldAttemptPreview ? previewUrl : 'about:blank';
   // Navigation history state
   const [displayedUrl, setDisplayedUrl] = useState(previewUrl);
   const previewUrlRef = useRef(previewUrl);
@@ -429,7 +455,8 @@ const PreviewTab = forwardRef(
     stopIframeContent();
     setIsSoftReloading(false);
     setIsPlaceholderDetected(false);
-    if (title || message) {
+    const hasDetails = Boolean(title || message);
+    if (hasDetails) {
       setPreviewFailureDetails({ kind: kind || 'generic', title: title || '', message: message || '' });
     }
     setPreviewPhase('error');
@@ -748,6 +775,10 @@ const PreviewTab = forwardRef(
   // ── Iframe event handlers ───────────────────────────────────────────
 
   const handleIframeError = () => {
+    if (!shouldAttemptPreview || !previewUrl || previewUrl === 'about:blank' || effectivePreviewUrl === 'about:blank') {
+      return;
+    }
+
     setIsSoftReloading(false);
     // Cancel the main load timeout — we know the load failed.
     if (loadTimeoutRef.current) { clearTimeout(loadTimeoutRef.current); loadTimeoutRef.current = null; }
@@ -756,7 +787,10 @@ const PreviewTab = forwardRef(
     if (!errorDelayRef.current) {
       errorDelayRef.current = setTimeout(() => {
         errorDelayRef.current = null;
-        confirmError('', '');
+        confirmError(
+          'Preview error',
+          'The preview didn\u2019t finish loading. The dev server may have crashed or is unreachable.'
+        );
       }, 1200);
     }
   };
@@ -770,6 +804,10 @@ const PreviewTab = forwardRef(
       if (!ignoreSuppression) {
         return;
       }
+    }
+
+    if (!shouldAttemptPreview || !previewUrl || previewUrl === 'about:blank' || effectivePreviewUrl === 'about:blank') {
+      return;
     }
 
     setIsSoftReloading(false);
@@ -1193,11 +1231,6 @@ const PreviewTab = forwardRef(
   }, [updateDisplayedUrlFromIframe]);
 
   const normalizedDisplayedUrl = displayedUrl || previewUrl || 'about:blank';
-  const shouldAttemptPreview =
-    !showNotRunningState &&
-    !isStartingProject &&
-    (isFrontendReadyForPreview || !isProcessInfoCurrent);
-  const effectivePreviewUrl = shouldAttemptPreview ? previewUrl : 'about:blank';
 
   const urlBarValue = (() => {
     const normalized = normalizedDisplayedUrl;
@@ -1290,28 +1323,7 @@ const PreviewTab = forwardRef(
   /* c8 ignore next */
   const startLabel = startInFlight ? 'Starting…' : 'Start project';
 
-  if (showNotRunningState) {
-    return (
-      <div className="preview-tab">
-        <div className="preview-not-running" data-testid="preview-not-running">
-          <div className="preview-not-running-card">
-            <h3>Project not running</h3>
-            <p>The preview is unavailable because the project isn’t currently running.</p>
-            <button
-              type="button"
-              className="retry-button"
-              onClick={handleStartProject}
-              disabled={startInFlight}
-            >
-              {startLabel}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (previewPhase === 'error') {
+  if (resolvedPreviewPhase === 'error') {
     const expectedUrl = previewUrl;
     const canRestart = Boolean(project?.id && onRestartProject);
     const canRefresh = Boolean(project?.id && typeof onRefreshProcessStatus === 'function');
@@ -1335,7 +1347,17 @@ const PreviewTab = forwardRef(
       const backendLabel = `Backend: ${normalizeStatus(backendProcess?.status)}${backendPort ? ` (:${backendPort})` : ''}`;
       return `${frontendLabel} • ${backendLabel}`;
     })();
+    const notRunningDetails = showNotRunningState
+      ? {
+          title: 'Project not running',
+          message: 'The preview is unavailable because the project isn’t currently running.'
+        }
+      : null;
+    const failureDetails = notRunningDetails || previewFailureDetails;
     const autoRecoverCopy = (() => {
+      if (showNotRunningState) {
+        return null;
+      }
       if (!canRefresh) {
         return null;
       }
@@ -1370,25 +1392,51 @@ const PreviewTab = forwardRef(
               <p className="expected-url">{autoRecoverCopy}</p>
             ) : null}
 
-            {previewFailureDetails?.message && (
+            {failureDetails?.message && (
               <p className="expected-url">
-                <strong>{previewFailureDetails.title || 'Details'}:</strong> {previewFailureDetails.message}
+                {failureDetails.title ? (
+                  <>
+                    <strong>{failureDetails.title}</strong>: {failureDetails.message}
+                  </>
+                ) : (
+                  <>
+                    <strong>Details:</strong> {failureDetails.message}
+                  </>
+                )}
               </p>
             )}
 
-            <p>
-              The preview didn’t finish loading. This can happen if the dev server crashed, the URL is
-              unreachable, or the app blocks embedding via security headers.
-            </p>
-
             <div className="preview-error-actions">
-              <button type="button" className="retry-button" onClick={reloadIframe}>
-                Retry
-              </button>
+              {showNotRunningState ? (
+                <button
+                  type="button"
+                  className="retry-button"
+                  onClick={handleStartProject}
+                  disabled={startInFlight}
+                >
+                  {startLabel}
+                </button>
+              ) : (
+                <>
+                  <button type="button" className="retry-button" onClick={reloadIframe}>
+                    Retry
+                  </button>
 
-              <button type="button" className="retry-button" onClick={dispatchPreviewFixGoal}>
-                Fix with AI
-              </button>
+                  <button type="button" className="retry-button" onClick={dispatchPreviewFixGoal}>
+                    Fix with AI
+                  </button>
+
+                  {hasBackendLogs ? (
+                    <button
+                      type="button"
+                      className="retry-button"
+                      onClick={() => setShowBackendLogsModal(true)}
+                    >
+                      View backend logs
+                    </button>
+                  ) : null}
+                </>
+              )}
             </div>
 
             {(Array.isArray(frontendProcess?.logs) && frontendProcess.logs.length > 0) && (
@@ -1403,31 +1451,49 @@ const PreviewTab = forwardRef(
                 </pre>
               </details>
             )}
-
-            {(Array.isArray(processInfo?.processes?.backend?.logs) && processInfo.processes.backend.logs.length > 0) && (
-              <details className="expected-url" style={{ marginTop: '0.5rem' }}>
-                <summary>Backend logs</summary>
-                <pre style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem' }}>
-                  {processInfo.processes.backend.logs
-                    .slice(-20)
-                    .map((entry) => entry?.message)
-                    .filter(Boolean)
-                    .join('\n')}
-                </pre>
-              </details>
-            )}
           </div>
         </div>
+        {showNotRunningState ? (
+          <div className="preview-canvas" ref={canvasRef}>
+            {renderContextMenu()}
+            <iframe
+              ref={iframeRef}
+              data-testid="preview-iframe"
+              className={`full-iframe${resolvedPreviewPhase !== 'ready' && !isSoftReloading ? ' full-iframe--loading' : ''}`}
+              key={iframeKey}
+              src={effectivePreviewUrl}
+              title={`${project?.name || 'Project'} Preview`}
+              onError={handleIframeError}
+              onLoad={handleIframeLoad}
+              sandbox="allow-scripts allow-same-origin allow-forms"
+            />
+          </div>
+        ) : null}
+        <SettingsModal
+          isOpen={showBackendLogsModal}
+          onClose={() => setShowBackendLogsModal(false)}
+          title="Backend logs"
+          subtitle="Latest entries from the backend process"
+          testId="preview-backend-logs-modal"
+          panelClassName="preview-logs-modal-panel"
+          bodyClassName="preview-logs-modal-body"
+          closeLabel="Close backend logs"
+        >
+          <pre className="preview-logs-modal-content">
+            {backendLogsText || 'No backend logs available.'}
+          </pre>
+        </SettingsModal>
       </div>
     );
   }
 
   const renderLoadingOverlay = () => {
-    if (previewPhase !== 'loading' || (!previewUrl || previewUrl === 'about:blank') && !isPlaceholderDetected) {
+    if (resolvedPreviewPhase !== 'loading' || (!project?.id && !isStartingProject)) {
       return null;
     }
 
     const newTabUrl = toDevServerUrl(normalizedDisplayedUrl) || toDevServerUrl();
+    const shouldShowUrl = normalizedDisplayedUrl && normalizedDisplayedUrl !== 'about:blank';
 
     const showRecoveryCopy = autoRecoverState.mode === 'running' && (Number(autoRecoverState.attempt) || 0) > 0;
     const title = isPlaceholderDetected
@@ -1465,16 +1531,18 @@ const PreviewTab = forwardRef(
             </>
           )}
 
-          <p className="expected-url">
-            URL: <code>{normalizedDisplayedUrl}</code>
-          </p>
-          <p className="expected-url">
-            {newTabUrl ? (
+          {shouldShowUrl && (
+            <p className="expected-url">
+              URL: <code>{normalizedDisplayedUrl}</code>
+            </p>
+          )}
+          {newTabUrl && shouldShowUrl ? (
+            <p className="expected-url">
               <a href={newTabUrl} target="_blank" rel="noopener noreferrer">
                 Open in a new tab
               </a>
-            ) : null}
-          </p>
+            </p>
+          ) : null}
         </div>
       </div>
     );
@@ -1646,7 +1714,7 @@ const PreviewTab = forwardRef(
         <iframe
           ref={iframeRef}
           data-testid="preview-iframe"
-          className={`full-iframe${previewPhase !== 'ready' && !isSoftReloading ? ' full-iframe--loading' : ''}`}
+          className={`full-iframe${resolvedPreviewPhase !== 'ready' && !isSoftReloading ? ' full-iframe--loading' : ''}`}
           key={iframeKey}
           src={effectivePreviewUrl}
           title={`${project?.name || 'Project'} Preview`}
