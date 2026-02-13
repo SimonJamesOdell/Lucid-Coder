@@ -57,6 +57,52 @@ export const createBranchWorkflowTests = (core) => {
     branches: target
   });
 
+  const shouldInstallNodeDependencies = ({ workspaceName, changedPaths = [] }) => {
+    if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
+      return false;
+    }
+
+    const normalizedWorkspace = String(workspaceName || '').trim().toLowerCase();
+    const workspacePrefix = normalizedWorkspace && normalizedWorkspace !== 'root'
+      ? `${normalizedWorkspace}/`
+      : '';
+
+    const rootDependencyFiles = new Set([
+      'package-lock.json',
+      'npm-shrinkwrap.json',
+      'yarn.lock',
+      'pnpm-lock.yaml',
+      'bun.lockb'
+    ]);
+
+    const workspaceDependencyFiles = new Set([
+      'package.json',
+      ...rootDependencyFiles
+    ]);
+
+    return changedPaths.some((filePath) => {
+      const normalized = normalizePathForCompare(filePath);
+      if (!normalized) {
+        return false;
+      }
+
+      if (workspacePrefix && rootDependencyFiles.has(normalized)) {
+        return true;
+      }
+
+      if (!workspacePrefix) {
+        return workspaceDependencyFiles.has(normalized);
+      }
+
+      if (!normalized.startsWith(workspacePrefix)) {
+        return false;
+      }
+
+      const relativePath = normalized.slice(workspacePrefix.length);
+      return workspaceDependencyFiles.has(relativePath);
+    });
+  };
+
   const resolveWorkspaceThresholdConfig = async (projectId, options = {}) => {
     const globalSettings = typeof getTestingSettings === 'function'
       ? await getTestingSettings().catch(() => null)
@@ -349,6 +395,15 @@ export const createBranchWorkflowTests = (core) => {
         let coverageSummary = null;
 
         if (workspace.kind === 'node') {
+          if (shouldInstallNodeDependencies({ workspaceName: workspace.name, changedPaths })) {
+            await runJob({
+              displayName: `${workspace.name} install dependencies`,
+              command: 'npm',
+              args: ['install'],
+              cwd: workspace.cwd
+            });
+          }
+
           // Run coverage command (it also runs tests).
           // Prefer npm run test:coverage, fall back to npm test -- --coverage.
           const pkgPath = path.join(workspace.cwd, 'package.json');

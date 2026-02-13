@@ -1325,6 +1325,58 @@ describe('branchWorkflow.js coverage (runTestsForBranch workspace collection)', 
     });
   });
 
+  it('installs node dependencies before frontend tests when dependency manifests changed', async () => {
+    const projectRoot = `C:/tmp/branchworkflow-install-deps-before-tests-${Date.now()}`;
+    const frontendPkg = `${projectRoot}/frontend/package.json`;
+    const frontendSummary = `${projectRoot}/frontend/coverage/coverage-summary.json`;
+
+    const fsMock = makeFsMock({
+      accessible: [frontendPkg],
+      files: {
+        [frontendPkg]: JSON.stringify({ scripts: { 'test:coverage': 'echo ok' } }),
+        [frontendSummary]: coverageSummaryJson(100)
+      }
+    });
+
+    const jobRunnerMock = makeJobRunnerMock();
+
+    await runScenario({
+      fsMock,
+      jobRunnerMock,
+      testBody: async ({ branchWorkflow, createProject }) => {
+        const project = await createProject({
+          name: `BranchWorkflow Install Deps Before Tests ${Date.now()}`,
+          description: 'Ensures npm install runs before test gate after dependency manifest changes',
+          language: 'javascript',
+          framework: 'react',
+          path: projectRoot
+        });
+
+        branchWorkflow.__testing.setGitContextOverride(project.id, projectRoot);
+
+        const result = await branchWorkflow.runTestsForBranch(project.id, null, {
+          real: true,
+          changedFiles: ['frontend/package.json']
+        });
+
+        expect(result.status).toBe('passed');
+        expect(jobRunnerMock.startJob).toHaveBeenCalledTimes(2);
+        expect(jobRunnerMock.startJob.mock.calls[0]?.[0]).toMatchObject({
+          displayName: 'frontend install dependencies',
+          command: 'npm',
+          args: ['install']
+        });
+        expect(jobRunnerMock.startJob.mock.calls[1]?.[0]).toMatchObject({
+          displayName: 'frontend tests (coverage)',
+          command: 'npm',
+          args: ['run', 'test:coverage']
+        });
+
+        branchWorkflow.__testing.setGitContextOverride(project.id, null);
+      }
+    });
+  });
+
   it('filters changed files per workspace when multiple node workspaces exist', async () => {
     const projectRoot = `C:/tmp/branchworkflow-changed-files-multi-${Date.now()}`;
     const frontendPkg = `${projectRoot}/frontend/package.json`;
