@@ -1990,6 +1990,23 @@ describe('TestTab coverage helpers', () => {
     expect(hooks.isCoverageGateFailed({ summary: { coverage: { changedFiles: { passed: false } } } })).toBe(true);
     expect(hooks.isCoverageGateFailed({ summary: { coverage: { totals: { lines: 99 } } } })).toBe(true);
     expect(hooks.isCoverageGateFailed({ summary: { coverage: { totals: { lines: 100, statements: 100, functions: 100, branches: 100 } } } })).toBe(false);
+    expect(hooks.isCoverageGateFailed({
+      summary: {
+        coverage: {
+          thresholds: { lines: 50, statements: 50, functions: 50, branches: 50 },
+          totals: { lines: 87.5, statements: 87.5, functions: 80, branches: 50 }
+        }
+      }
+    })).toBe(false);
+    expect(hooks.isCoverageGateFailed({
+      summary: {
+        coverage: {
+          passed: true,
+          thresholds: { lines: 50, statements: 50, functions: 50, branches: 50 },
+          totals: { lines: 87.5, statements: 87.5, functions: 80, branches: 49 }
+        }
+      }
+    })).toBe(false);
   });
 
   test('buildCoverageGateMessage appends coverage guidance and line refs', () => {
@@ -2238,6 +2255,19 @@ describe('TestTab coverage helpers', () => {
     expect(view.container.textContent).toContain('Tests:       12 passed, 12 total');
   });
 
+  test('renderLogLines keeps older log lines so output can be scrolled back', () => {
+    const logs = Array.from({ length: 12 }, (_, idx) => ({
+      timestamp: `t-${idx}`,
+      message: `line ${idx + 1}`
+    }));
+    const job = { logs };
+
+    const view = render(<div>{hooks.renderLogLines(job)}</div>);
+
+    expect(view.container.textContent).toContain('line 1');
+    expect(view.container.textContent).toContain('line 12');
+  });
+
   test('renderLogLines appends a coverage gate failure line in red when coverage fails', () => {
     const job = {
       logs: [{ message: 'All files          |   53.62 |    77.77 |      50 |   53.62 |' }],
@@ -2268,7 +2298,41 @@ describe('TestTab coverage helpers', () => {
 
     const view = render(<div>{hooks.renderLogLines(job)}</div>);
 
-    expect(view.container.textContent).toContain('Coverage gate failed: coverage below 100%.');
+    expect(view.container.textContent).toContain('Coverage gate failed.');
+  });
+
+  test('renderLogLines does not render a contradictory coverage passed message in red', () => {
+    const job = {
+      logs: [{ message: 'All files | 0 | 0 | 0 | 0 | 1' }],
+      summary: {
+        coverage: {
+          passed: false,
+          message: 'Coverage gate passed.'
+        }
+      }
+    };
+
+    const view = render(<div>{hooks.renderLogLines(job)}</div>);
+
+    expect(view.container.textContent).toContain('Coverage gate failed.');
+    expect(view.container.textContent).not.toContain('Coverage gate passed.');
+  });
+
+  test('renderLogLines uses thresholds for fallback coverage message when available', () => {
+    const job = {
+      logs: [{ message: 'All files | 49 | 49 | 49 | 49 | 1' }],
+      summary: {
+        coverage: {
+          passed: false,
+          message: '',
+          thresholds: { lines: 50 }
+        }
+      }
+    };
+
+    const view = render(<div>{hooks.renderLogLines(job)}</div>);
+
+    expect(view.container.textContent).toContain('Coverage gate failed: coverage below 50%.');
   });
 
   test('buildTestFailureContext returns null for missing or empty inputs', () => {

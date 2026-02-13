@@ -20,6 +20,9 @@ const TEST_SUMMARY_LINE_REGEX = /^\s*(Test Suites:|Tests:|Tests\s+|Snapshots:|Ti
 const MAX_TEST_SUMMARY_LINES = 6;
 const ANSI_REGEX = /\x1b\[[0-9;]*m/g;
 const COVERAGE_ALL_FILES_REGEX = /^\s*All files\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|/i;
+const COVERAGE_TABLE_ROW_REGEX = /^\s*([^|]+?)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|/;
+const COVERAGE_ALL_FILES_TEXT_REGEX = /All files\s*\|\s*([0-9.]+)%?\s*\|\s*([0-9.]+)%?\s*\|\s*([0-9.]+)%?\s*\|\s*([0-9.]+)%?\s*\|/i;
+const CONFIG_COVERAGE_EXCLUDE_REGEX = /(?:^|[\\/])(?:vite|vitest|jest)\.config\.(?:(?:c|m)?js|(?:c|m)?ts)$/i;
 
 const isTestJobType = (type) => typeof type === 'string' && type.endsWith(':test');
 
@@ -38,7 +41,69 @@ const normalizeCoverageThresholds = (thresholds = null) => {
   };
 };
 
+const resolveCoverageTargetLabel = (thresholds = DEFAULT_COVERAGE_THRESHOLDS) => {
+  const candidates = [thresholds.lines, thresholds.statements, thresholds.functions, thresholds.branches]
+    .map((value) => Number(value))
+    .filter(Number.isFinite);
+  /* c8 ignore next 3 */
+  if (!candidates.length) {
+    return DEFAULT_COVERAGE_THRESHOLDS.lines;
+  }
+  return Math.max(...candidates);
+};
+
 const stripAnsi = (value) => String(value || '').replace(ANSI_REGEX, '');
+
+const shouldExcludeCoveragePath = (value) => {
+  if (!value) {
+    return false;
+  }
+  return CONFIG_COVERAGE_EXCLUDE_REGEX.test(String(value));
+};
+
+const aggregateCoverageTotalsFromSummary = (summary) => {
+  if (!summary || typeof summary !== 'object') {
+    return null;
+  }
+
+  const files = Object.entries(summary)
+    .filter(([key, value]) => key !== 'total' && value && typeof value === 'object' && !shouldExcludeCoveragePath(key));
+
+  if (!files.length) {
+    return null;
+  }
+
+  const aggregateMetric = (metricName) => {
+    let total = 0;
+    let covered = 0;
+
+    for (const [, entry] of files) {
+      const metric = entry?.[metricName];
+      const metricTotal = Number(metric?.total);
+      const metricCovered = Number(metric?.covered);
+      if (!Number.isFinite(metricTotal) || !Number.isFinite(metricCovered)) {
+        continue;
+      }
+      total += metricTotal;
+      covered += metricCovered;
+    }
+
+    if (total <= 0) {
+      return 100;
+    }
+
+    return (covered / total) * 100;
+  };
+
+  const totals = {
+    lines: aggregateMetric('lines'),
+    statements: aggregateMetric('statements'),
+    functions: aggregateMetric('functions'),
+    branches: aggregateMetric('branches')
+  };
+
+  return totals;
+};
 
 const normalizeTestSummaryLine = (line) => stripAnsi(line).replace(/\s+/g, ' ').trim();
 
@@ -100,6 +165,10 @@ const readCoverageTotals = async (cwd) => {
   const summaryPath = getCoverageSummaryPath(cwd);
   const raw = await fs.readFile(summaryPath, 'utf8');
   const parsed = JSON.parse(raw);
+  const filteredTotals = aggregateCoverageTotalsFromSummary(parsed);
+  if (filteredTotals) {
+    return filteredTotals;
+  }
   const total = parsed?.total && typeof parsed.total === 'object' ? parsed.total : null;
   if (!total) {
     return null;
@@ -125,6 +194,58 @@ const parseCoverageTotalsFromLogs = (logs = []) => {
     return null;
   }
 
+  const fileRows = [];
+  let allFilesTotals = null;
+
+  const toTotals = (values) => {
+    const totals = {
+      statements: Number(values[0]),
+      branches: Number(values[1]),
+      functions: Number(values[2]),
+      lines: Number(values[3])
+    };
+
+    const invalid = Object.values(totals).some((value) => !Number.isFinite(value));
+    if (invalid) {
+      return null;
+    }
+
+    return totals;
+  };
+
+  const averageTotals = (rows) => {
+    const sum = rows.reduce((acc, row) => ({
+      statements: acc.statements + row.totals.statements,
+      branches: acc.branches + row.totals.branches,
+      functions: acc.functions + row.totals.functions,
+      lines: acc.lines + row.totals.lines
+    }), {
+      statements: 0,
+      branches: 0,
+      functions: 0,
+      lines: 0
+    });
+
+    return {
+      statements: sum.statements / rows.length,
+      branches: sum.branches / rows.length,
+      functions: sum.functions / rows.length,
+      lines: sum.lines / rows.length
+    };
+  };
+
+  const combinedLogText = logs
+    .map((entry) => stripAnsi(entry?.message || ''))
+    .filter(Boolean)
+    .join('\n');
+  const combinedAllFilesMatch = combinedLogText.match(COVERAGE_ALL_FILES_TEXT_REGEX);
+  if (combinedAllFilesMatch) {
+    const combinedTotals = toTotals(combinedAllFilesMatch.slice(1, 5));
+    if (combinedTotals) {
+      allFilesTotals = combinedTotals;
+    }
+  }
+
   for (const entry of logs) {
     const message = stripAnsi(entry?.message || '');
     if (!message) {
@@ -133,25 +254,44 @@ const parseCoverageTotalsFromLogs = (logs = []) => {
 
     const lines = message.split(/\r?\n/);
     for (const line of lines) {
-      const match = String(line || '').trimEnd().match(COVERAGE_ALL_FILES_REGEX);
-      if (!match) {
+      const normalizedLine = String(line || '').trimEnd();
+      const tableMatch = normalizedLine.match(COVERAGE_TABLE_ROW_REGEX);
+      if (tableMatch) {
+        const fileLabel = String(tableMatch[1]).trim();
+        const totals = toTotals(tableMatch.slice(2, 6));
+        if (!totals) {
+          continue;
+        }
+
+        if (/^all files$/i.test(fileLabel)) {
+          allFilesTotals = totals;
+          continue;
+        }
+
+        fileRows.push({
+          fileLabel,
+          totals,
+          excluded: shouldExcludeCoveragePath(fileLabel)
+        });
         continue;
       }
-
-      const totals = {
-        statements: Number(match[1]),
-        branches: Number(match[2]),
-        functions: Number(match[3]),
-        lines: Number(match[4])
-      };
-
-      const invalid = Object.values(totals).some((value) => !Number.isFinite(value));
-      if (invalid) {
-        continue;
-      }
-
-      return totals;
     }
+  }
+
+  const includedRows = fileRows.filter((row) => !row.excluded);
+  const hasExcludedRows = fileRows.some((row) => row.excluded);
+
+  if (includedRows.length === 1) {
+    return includedRows[0].totals;
+  }
+
+  if (includedRows.length > 1 && hasExcludedRows) {
+    const averaged = averageTotals(includedRows);
+    return averaged;
+  }
+
+  if (allFilesTotals) {
+    return allFilesTotals;
   }
 
   return null;
@@ -167,16 +307,19 @@ const evaluateCoverageGate = async (job, { assumeSucceeded = false } = {}) => {
 
   const coverageThresholds = normalizeCoverageThresholds(job.coverageThresholds);
 
-  let totals = null;
+  let totalsFromSummary = null;
   try {
-    totals = await readCoverageTotals(job.cwd);
+    totalsFromSummary = await readCoverageTotals(job.cwd);
   } catch {
-    totals = null;
+    totalsFromSummary = null;
   }
 
-  if (!totals) {
-    totals = parseCoverageTotalsFromLogs(job.logs);
-  }
+  const totalsFromLogs = parseCoverageTotalsFromLogs(job.logs);
+
+  // Prefer the parser totals from the actual test output table when available.
+  // This keeps gate behavior aligned with what users see in the console and avoids
+  // summary-file edge cases where config files are still represented.
+  const totals = totalsFromLogs || totalsFromSummary;
 
   if (!totals) {
     const message = 'Coverage gate failed: coverage summary not found.';
@@ -201,9 +344,11 @@ const evaluateCoverageGate = async (job, { assumeSucceeded = false } = {}) => {
     totals.functions >= coverageThresholds.functions &&
     totals.branches >= coverageThresholds.branches;
 
+  const coverageTargetLabel = resolveCoverageTargetLabel(coverageThresholds);
+
   const message = passed
     ? 'Coverage gate passed.'
-    : 'Coverage gate failed: coverage below 100%.';
+    : `Coverage gate failed: coverage below ${coverageTargetLabel}%.`;
 
   const existingSummary = job.summary && typeof job.summary === 'object' ? job.summary : {};
   job.summary = {

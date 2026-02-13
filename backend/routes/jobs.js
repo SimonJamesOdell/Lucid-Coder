@@ -64,6 +64,19 @@ const buildCoverageThresholds = (target) => ({
   branches: target
 });
 
+const resolveCoverageTargetOverride = (payload = {}) => {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+
+  if (payload.useGlobal === true) {
+    return null;
+  }
+
+  const requestedTarget = normalizeCoverageTarget(payload.coverageTarget);
+  return requestedTarget || null;
+};
+
 const resolveTestingCoverageTarget = async (projectId, workspace) => {
   const globalSettings = await getTestingSettings().catch(() => null);
   const globalCoverageTarget = normalizeCoverageTarget(globalSettings?.coverageTarget) || DEFAULT_COVERAGE_TARGET;
@@ -154,7 +167,8 @@ const buildJobDefinition = async (project, type, payload = {}) => {
         throw Object.assign(new Error('Frontend package.json not found'), { statusCode: 400 });
       }
       {
-        const coverageTarget = await resolveTestingCoverageTarget(project.id, 'frontend');
+        const coverageTarget = resolveCoverageTargetOverride(payload)
+          || await resolveTestingCoverageTarget(project.id, 'frontend');
       return {
         displayName: 'Frontend tests',
         command: 'npm',
@@ -198,17 +212,22 @@ const buildJobDefinition = async (project, type, payload = {}) => {
       };
     case 'backend:test':
       if (hasBackendPackage) {
-        const coverageTarget = await resolveTestingCoverageTarget(project.id, 'backend');
+        const coverageTarget = resolveCoverageTargetOverride(payload)
+          || await resolveTestingCoverageTarget(project.id, 'backend');
         return {
           displayName: 'Backend tests',
           command: 'npm',
           args: ['run', 'test:coverage'],
           cwd: await ensureWorkingDir('Backend workspace', backendPath),
+          env: {
+            LUCIDCODER_COVERAGE_TARGET: String(coverageTarget)
+          },
           coverageThresholds: buildCoverageThresholds(coverageTarget)
         };
       }
       if (hasBackendRequirements) {
-        const coverageTarget = await resolveTestingCoverageTarget(project.id, 'backend');
+        const coverageTarget = resolveCoverageTargetOverride(payload)
+          || await resolveTestingCoverageTarget(project.id, 'backend');
         return {
           displayName: 'Backend tests',
           command: 'python',

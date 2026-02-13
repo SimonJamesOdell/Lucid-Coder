@@ -21,6 +21,19 @@ if (args.length === 0) {
 const projectRoot = path.join(__dirname, '..');
 const outDir = path.join(projectRoot, 'coverage');
 
+const normalizeCoverageTarget = (value, fallback = 100) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  if (numeric < 0 || numeric > 100) {
+    return fallback;
+  }
+  return numeric;
+};
+
+const coverageTarget = normalizeCoverageTarget(process.env.LUCIDCODER_COVERAGE_TARGET, 100);
+
 const sleepSync = (ms) => {
   if (!Number.isFinite(ms) || ms <= 0) {
     return;
@@ -114,18 +127,16 @@ for (const reporterName of ['text', 'html', 'json']) {
   reports.create(reporterName).execute(context);
 }
 
-// Enforce a fully-green merged report.
-// The text/html reports include yellow when some branches are not exercised; we fail the script
-// unless all global metrics are at 100%.
+// Enforce merged coverage at the configured threshold.
 try {
   const summary = coverageMap.getCoverageSummary();
   const metrics = ['lines', 'statements', 'functions', 'branches'];
   const failures = metrics
     .map((metric) => ({ metric, pct: summary?.[metric]?.pct }))
-    .filter((entry) => Number.isFinite(entry.pct) && entry.pct < 100);
+    .filter((entry) => Number.isFinite(entry.pct) && entry.pct < coverageTarget);
 
   if (failures.length) {
-    console.error('❌ Merged coverage is below 100% for one or more metrics:');
+    console.error(`❌ Merged coverage is below ${coverageTarget}% for one or more metrics:`);
     for (const entry of failures) {
       console.error(`- ${entry.metric}: ${entry.pct}%`);
     }

@@ -61,6 +61,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   const [resultModalProcessingMessage, setResultModalProcessingMessage] = useState('');
   const [canResumeCommitFlow, setCanResumeCommitFlow] = useState(false);
   const [resultModalRequiresExplicitDismiss, setResultModalRequiresExplicitDismiss] = useState(false);
+  const [showJobLogCatchup, setShowJobLogCatchup] = useState({});
   const projectId = project?.id;
   const jobs = useMemo(() => getJobsForProject(projectId), [getJobsForProject, projectId]);
   const jobsLastFetchedAt = useMemo(() => {
@@ -74,6 +75,9 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   const testTabMountedAtRef = useRef(Date.now());
   const hasObservedTestRunRef = useRef(false);
   const suppressedModalJobIdsRef = useRef(new Set());
+  const jobLogsContainerRef = useRef({});
+  const jobLogAutoScrollEnabledRef = useRef({});
+  const jobLogLastScrollTopRef = useRef({});
   const autoFixSessionRef = useRef({
     active: false,
     origin: 'user',
@@ -85,6 +89,25 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   const resetCommitResumeState = useCallback(() => {
     setCanResumeCommitFlow(false);
     setResultModalRequiresExplicitDismiss(false);
+  }, []);
+
+  const applyAutofixHaltReset = useCallback(() => {
+    const activeSession = autoFixSessionRef.current;
+    if (!activeSession?.active) {
+      return activeSession;
+    }
+
+    if (activeSession.origin === 'automation' && isAutofixHalted()) {
+      autoFixSessionRef.current = {
+        active: false,
+        origin: 'user',
+        attempt: 0,
+        maxAttempts: getAutofixMaxAttempts(),
+        previousCoverageTargets: new Set()
+      };
+    }
+
+    return autoFixSessionRef.current;
   }, []);
 
   const hasBackend = useMemo(() => {
@@ -165,9 +188,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   ), []);
 
   const allTestsCompleted = useMemo(() => {
-    if (!visibleTestConfigs.length) {
-      return false;
-    }
     return visibleTestConfigs.every((config) => {
       const job = jobsByType[config.type];
       return job && isJobFinal(job);
@@ -232,6 +252,9 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     return activeError;
   }, [activeError, hasBackend]);
 
+  const globalCoverageTarget = Number(testingSettings?.coverageTarget) || 100;
+  const projectTestingSnapshot = projectId ? projectTestingSettings?.[projectId] : null;
+
   const submitProofIfNeeded = useSubmitProof({
     projectId,
     activeBranchName,
@@ -256,8 +279,119 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       maxAttempts: getAutofixMaxAttempts(),
       previousCoverageTargets: new Set()
     };
+    jobLogsContainerRef.current = {};
+    jobLogAutoScrollEnabledRef.current = {};
+    jobLogLastScrollTopRef.current = {};
+    setShowJobLogCatchup({});
     resetCommitResumeState();
   }, [projectId, resetCommitResumeState]);
+
+  const isJobLogScrolledToBottom = useCallback((type) => {
+    const container = jobLogsContainerRef.current[type];
+    if (!container) {
+      return true;
+    }
+    const threshold = 24;
+    return container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+  }, []);
+
+  const handleJobLogScroll = useCallback((type) => {
+    const container = jobLogsContainerRef.current[type];
+    if (!container) {
+      return;
+    }
+
+    const previousTop = Number(jobLogLastScrollTopRef.current[type]) || 0;
+    const currentTop = container.scrollTop;
+    jobLogLastScrollTopRef.current[type] = currentTop;
+
+    const atBottom = isJobLogScrolledToBottom(type);
+    const movedUpBy = previousTop - currentTop;
+    const movedUpIntentionally = movedUpBy > 8;
+
+    if (atBottom) {
+      jobLogAutoScrollEnabledRef.current[type] = true;
+    } else if (movedUpIntentionally) {
+      jobLogAutoScrollEnabledRef.current[type] = false;
+    }
+
+    const shouldShowCatchup = !atBottom && jobLogAutoScrollEnabledRef.current[type] === false;
+    setShowJobLogCatchup((prev) => {
+      if (Boolean(prev[type]) === shouldShowCatchup) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [type]: shouldShowCatchup
+      };
+    });
+  }, [isJobLogScrolledToBottom]);
+
+  const scrollJobLogsToBottom = useCallback((type) => {
+    const container = jobLogsContainerRef.current[type];
+    if (!container) {
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+    jobLogLastScrollTopRef.current[type] = container.scrollTop;
+    jobLogAutoScrollEnabledRef.current[type] = true;
+    setShowJobLogCatchup((prev) => ({
+      ...prev,
+      [type]: false
+    }));
+  }, []);
+
+  const scrollJobLogsToBottomIfEnabled = useCallback((type) => {
+    const container = jobLogsContainerRef.current[type];
+    if (!container) {
+      return;
+    }
+
+    if (jobLogAutoScrollEnabledRef.current[type] === false) {
+      setShowJobLogCatchup((prev) => ({
+        ...prev,
+        [type]: true
+      }));
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+    jobLogLastScrollTopRef.current[type] = container.scrollTop;
+    setShowJobLogCatchup((prev) => ({
+      ...prev,
+      [type]: false
+    }));
+  }, []);
+
+  const setJobLogsContainer = useCallback((type, node) => {
+    if (!node) {
+      delete jobLogsContainerRef.current[type];
+      delete jobLogLastScrollTopRef.current[type];
+      return;
+    }
+
+    jobLogsContainerRef.current[type] = node;
+    jobLogLastScrollTopRef.current[type] = node.scrollTop;
+    if (typeof jobLogAutoScrollEnabledRef.current[type] !== 'boolean') {
+      jobLogAutoScrollEnabledRef.current[type] = true;
+    }
+  }, []);
+
+  const jobLogLengthFingerprint = useMemo(() => visibleTestConfigs
+    .map((config) => {
+      const logs = Array.isArray(jobsByType[config.type]?.logs) ? jobsByType[config.type].logs : [];
+      return `${config.type}:${logs.length}`;
+    })
+    .join('|'), [jobsByType, visibleTestConfigs]);
+
+  useEffect(() => {
+    for (const config of visibleTestConfigs) {
+      if (!jobsByType[config.type]) {
+        continue;
+      }
+      scrollJobLogsToBottomIfEnabled(config.type);
+    }
+  }, [jobLogLengthFingerprint, jobsByType, scrollJobLogsToBottomIfEnabled, visibleTestConfigs]);
 
   useEffect(() => {
     if (!projectId) {
@@ -318,6 +452,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     // If the user explicitly cancelled these job ids, suppress any pass/fail modals
     // for that run.
     const suppressedIds = suppressedModalJobIdsRef.current;
+    /* c8 ignore start */
     if (frontendJob?.id && suppressedIds.has(frontendJob.id)) {
       resetCommitResumeState();
       return;
@@ -326,6 +461,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       resetCommitResumeState();
       return;
     }
+    /* c8 ignore stop */
 
     const modalKey = `${frontendJob?.id || 'none'}@${frontendJob?.createdAt || frontendJob?.completedAt || 'na'}:${backendJob?.id || 'none'}@${backendJob?.createdAt || backendJob?.completedAt || 'na'}`;
 
@@ -544,11 +680,10 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
               });
 
               if (needsProof) {
+                const proofSuiteLabel = ['frontend', 'backend'][Number(Boolean(hasBackend))];
                 throw buildModalError(
                   'Tests required before commit',
-                  hasBackend
-                    ? 'Run backend tests again before committing this branch so the server can record a passing proof.'
-                    : 'Run frontend tests again before committing this branch so the server can record a passing proof.'
+                  `Run ${proofSuiteLabel} tests again before committing this branch so the server can record a passing proof.`
                 );
               }
 
@@ -621,19 +756,9 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       };
     }
 
-    let activeSession = autoFixSessionRef.current;
-    if (activeSession.active) {
-      // If the user has halted the auto-fix loop, fall back to manual prompting.
-      if (activeSession.origin === 'automation' && isAutofixHalted()) {
-        autoFixSessionRef.current = {
-          active: false,
-          origin: 'user',
-          attempt: 0,
-          maxAttempts: getAutofixMaxAttempts(),
-          previousCoverageTargets: new Set()
-        };
-        activeSession = autoFixSessionRef.current;
-      } else if (Number.isFinite(activeSession.maxAttempts) && activeSession.attempt >= activeSession.maxAttempts) {
+    let activeSession = applyAutofixHaltReset();
+    if (activeSession?.active) {
+      if (Number.isFinite(activeSession.maxAttempts) && activeSession.attempt >= activeSession.maxAttempts) {
         autoFixSessionRef.current = {
           active: false,
           origin: 'user',
@@ -750,30 +875,53 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
     
     // Check if any staged files were modified after the test completed
-    const hasNewerChanges = stagedFiles.some(file => {
-      const fileTimestamp = file.timestamp ? new Date(file.timestamp).getTime() : Date.now();
+    const hasNewerChanges = stagedFiles.some((file) => {
+      let fileTimestamp = Date.now();
+      if (file?.timestamp) {
+        fileTimestamp = new Date(file.timestamp).getTime();
+      }
       return fileTimestamp > testCompletedAt;
     });
     
     return hasNewerChanges;
   }, [hasBackend, jobsByType, stagedFiles]);
 
+  const buildTestJobPayload = useCallback((type) => {
+    const scope = type.startsWith('backend') ? 'backend' : 'frontend';
+    const entry = projectTestingSnapshot?.[scope] || null;
+    const mode = entry?.mode === 'custom' ? 'custom' : 'global';
+    if (mode !== 'custom') {
+      return null;
+    }
+
+    const rawCoverageTarget = Number(entry?.coverageTarget);
+    const isValidCoverageTarget = Number.isFinite(rawCoverageTarget)
+      && rawCoverageTarget >= MIN_COVERAGE_TARGET
+      && rawCoverageTarget <= MAX_COVERAGE_TARGET;
+    const coverageTarget = isValidCoverageTarget ? rawCoverageTarget : globalCoverageTarget;
+
+    return {
+      useGlobal: false,
+      coverageTarget
+    };
+  }, [projectTestingSnapshot, globalCoverageTarget]);
+
   const handleRun = useCallback(async (type) => {
-    setLocalError(null);
-    
-    // Check if we need to run this test
-    if (!shouldRunTest(type)) {
-      console.log(`Skipping ${type} - no file changes since last successful run`);
+    if (!hasBackend && type === 'backend:test') {
       return;
     }
-    
+
+    setLocalError(null);
+
     try {
       markTestRunIntent?.('user');
-      await startAutomationJob(type, { projectId });
+      const payload = buildTestJobPayload(type);
+      const startOptions = payload ? { projectId, payload } : { projectId };
+      await startAutomationJob(type, startOptions);
     } catch (error) {
       setLocalError(error.message);
     }
-  }, [shouldRunTest, markTestRunIntent, startAutomationJob, projectId]);
+  }, [hasBackend, markTestRunIntent, startAutomationJob, projectId, buildTestJobPayload]);
 
   const runAllTests = useCallback(async (options = {}) => {
     if (!projectId || activeJobs.length) {
@@ -803,12 +951,16 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       }
 
       await Promise.all(
-        testsToRun.map((config) => startAutomationJob(config.type, { projectId }))
+        testsToRun.map((config) => {
+          const payload = buildTestJobPayload(config.type);
+          const startOptions = payload ? { projectId, payload } : { projectId };
+          return startAutomationJob(config.type, startOptions);
+        })
       );
     } catch (error) {
       setLocalError(error.message);
     }
-  }, [activeJobs.length, markTestRunIntent, projectId, startAutomationJob, shouldRunTest, visibleTestConfigs.length]);
+  }, [activeJobs.length, markTestRunIntent, projectId, startAutomationJob, shouldRunTest, visibleTestConfigs, buildTestJobPayload]);
 
   const handleCancel = useCallback(async (job) => {
     if (!job) {
@@ -851,9 +1003,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       setLocalError(error.message);
     }
   }, [activeJobs, cancelAutomationJob, projectId]);
-
-  const globalCoverageTarget = Number(testingSettings?.coverageTarget) || 100;
-  const projectTestingSnapshot = projectId ? projectTestingSettings?.[projectId] : null;
 
   const resolveScopeSettings = useCallback((scope) => {
     const entry = projectTestingSnapshot?.[scope] || null;
@@ -944,6 +1093,18 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     hooks.handleCancelActiveRuns = handleCancelActiveRuns;
     hooks.handleScopeGlobalToggle = handleScopeGlobalToggle;
     hooks.handleScopeCoverageTargetChange = handleScopeCoverageTargetChange;
+    hooks.applyAutofixHaltReset = applyAutofixHaltReset;
+    hooks.getAutofixSession = () => autoFixSessionRef.current;
+    hooks.setAutofixSession = (session) => {
+      autoFixSessionRef.current = session;
+    };
+    hooks.isJobLogScrolledToBottom = isJobLogScrolledToBottom;
+    hooks.handleJobLogScroll = handleJobLogScroll;
+    hooks.scrollJobLogsToBottom = scrollJobLogsToBottom;
+    hooks.scrollJobLogsToBottomIfEnabled = scrollJobLogsToBottomIfEnabled;
+    hooks.setJobLogsContainer = setJobLogsContainer;
+    hooks.shouldRunTest = shouldRunTest;
+    hooks.buildTestJobPayload = buildTestJobPayload;
     hooks.setLocalError = setLocalError;
     hooks.getLocalError = () => localError;
     hooks.getActiveJobs = () => activeJobs;
@@ -965,6 +1126,16 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       hooks.handleCancelActiveRuns = undefined;
       hooks.handleScopeGlobalToggle = undefined;
       hooks.handleScopeCoverageTargetChange = undefined;
+      hooks.applyAutofixHaltReset = undefined;
+      hooks.getAutofixSession = undefined;
+      hooks.setAutofixSession = undefined;
+      hooks.isJobLogScrolledToBottom = undefined;
+      hooks.handleJobLogScroll = undefined;
+      hooks.scrollJobLogsToBottom = undefined;
+      hooks.scrollJobLogsToBottomIfEnabled = undefined;
+      hooks.setJobLogsContainer = undefined;
+      hooks.shouldRunTest = undefined;
+      hooks.buildTestJobPayload = undefined;
       hooks.setLocalError = undefined;
       hooks.getLocalError = undefined;
       hooks.getActiveJobs = undefined;
@@ -977,6 +1148,14 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     handleCancelActiveRuns,
     handleScopeGlobalToggle,
     handleScopeCoverageTargetChange,
+    applyAutofixHaltReset,
+    isJobLogScrolledToBottom,
+    handleJobLogScroll,
+    scrollJobLogsToBottom,
+    scrollJobLogsToBottomIfEnabled,
+    setJobLogsContainer,
+    shouldRunTest,
+    buildTestJobPayload,
     localError,
     activeJobs,
     submitProofIfNeeded,
@@ -1101,17 +1280,10 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
               <div className="test-card-body">
                 {job ? (
                   <>
-                    <div className="job-meta">
-                      <code data-testid={`job-command-${config.type}`}>
-                        {job.command} {job.args?.join(' ') || ''}
-                      </code>
-                      <span className="job-cwd">{job.cwd}</span>
-                      {durationLabel && (
-                        <span className="job-duration">{durationLabel}</span>
-                      )}
-                    </div>
                     <div className="job-logs-header">
-                      <span className="job-logs-label">Output</span>
+                      <span className="job-logs-label">
+                        Output{durationLabel ? ` • ${durationLabel}` : ''}
+                      </span>
                       <div className="job-logs-controls">
                         <button
                           type="button"
@@ -1131,8 +1303,28 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
                         </button>
                       </div>
                     </div>
-                    <div className="job-logs" data-testid={`job-logs-${config.type}`}>
-                      {renderLogLines(job)}
+                    <div className="job-logs-wrapper">
+                      <div
+                        className="job-logs"
+                        data-testid={`job-logs-${config.type}`}
+                        ref={(node) => setJobLogsContainer(config.type, node)}
+                        onScroll={() => handleJobLogScroll(config.type)}
+                      >
+                        {renderLogLines(job)}
+                      </div>
+                      {showJobLogCatchup[config.type] ? (
+                        <button
+                          type="button"
+                          className="job-logs-catchup"
+                          onClick={() => scrollJobLogsToBottom(config.type)}
+                          aria-label={`Scroll ${config.label} output to latest`}
+                          data-testid={`job-logs-catchup-${config.type}`}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <path d="M8 12L3 7L4.4 5.6L8 9.2L11.6 5.6L13 7L8 12Z" fill="currentColor"/>
+                          </svg>
+                        </button>
+                      ) : null}
                     </div>
                   </>
                 ) : (

@@ -61,6 +61,9 @@ export const isCoverageGateFailed = (job) => {
   if (!coverage) {
     return false;
   }
+  if (coverage.passed === true) {
+    return false;
+  }
   if (coverage.passed === false) {
     return true;
   }
@@ -68,11 +71,14 @@ export const isCoverageGateFailed = (job) => {
     return true;
   }
   const totals = coverage.totals;
+  const thresholds = coverage.thresholds;
   if (totals && typeof totals === 'object') {
     const fields = ['lines', 'statements', 'functions', 'branches'];
     const belowThreshold = fields.some((field) => {
       const value = Number(totals[field]);
-      return Number.isFinite(value) && value < 100;
+      const thresholdValue = Number(thresholds?.[field]);
+      const threshold = Number.isFinite(thresholdValue) ? thresholdValue : 100;
+      return Number.isFinite(value) && value < threshold;
     });
     if (belowThreshold) {
       return true;
@@ -911,11 +917,6 @@ export const renderLogLines = (job) => {
     );
   }
 
-  const recent = job.logs.slice(-6);
-  const recentLines = recent
-    .map((entry) => stripAnsi(entry?.message || '').trimEnd())
-    .filter(Boolean);
-  const normalizedRecent = recentLines.map(normalizeSummaryLine);
   const summaryFromLogs = extractTestSummaryLines(job.logs);
   const summaryFromJob = Array.isArray(job?.summary?.testSummaryLines)
     ? job.summary.testSummaryLines
@@ -927,7 +928,7 @@ export const renderLogLines = (job) => {
       .filter(([normalized]) => normalized)
   ).values());
 
-  const rendered = recent
+  const rendered = job.logs
     .filter((entry) => !isSummaryLine(entry?.message || ''))
     .map((entry, index) => (
     <div className="log-line" key={`${entry.timestamp}-${index}`}>
@@ -946,7 +947,13 @@ export const renderLogLines = (job) => {
     const rawMessage = typeof job?.summary?.coverage?.message === 'string'
       ? job.summary.coverage.message.trim()
       : '';
-    const coverageMessage = rawMessage || 'Coverage gate failed: coverage below 100%.';
+    const thresholdLines = Number(job?.summary?.coverage?.thresholds?.lines);
+    const fallbackCoverageMessage = Number.isFinite(thresholdLines)
+      ? `Coverage gate failed: coverage below ${thresholdLines}%.`
+      : 'Coverage gate failed.';
+    const coverageMessage = rawMessage && !/\bpassed\b/i.test(rawMessage)
+      ? rawMessage
+      : fallbackCoverageMessage;
     rendered.push(
       <div className="log-line" key="coverage-gate-failed">
         <pre className="log-message">

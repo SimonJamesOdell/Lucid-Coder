@@ -39,6 +39,8 @@ describe('Project Scaffolding Integration Tests', () => {
 
       const vitestConfig = await fs.readFile(path.join(frontendPath, `vitest.config.${configExt}`), 'utf8');
       expect(vitestConfig).toContain("include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}']");
+      expect(vitestConfig).toContain("'**/*.config.{js,ts,cjs,mjs}'");
+      expect(vitestConfig).toContain("'playwright.config.{js,ts,cjs,mjs}'");
     }
 
     if (config.framework === 'vue') {
@@ -50,6 +52,8 @@ describe('Project Scaffolding Integration Tests', () => {
 
       const vitestConfig = await fs.readFile(path.join(frontendPath, 'vitest.config.js'), 'utf8');
       expect(vitestConfig).toContain("include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}']");
+      expect(vitestConfig).toContain("'**/*.config.{js,ts,cjs,mjs}'");
+      expect(vitestConfig).toContain("'playwright.config.{js,ts,cjs,mjs}'");
     }
 
     await fs.access(path.join(frontendPath, 'e2e', 'app.spec.js'));
