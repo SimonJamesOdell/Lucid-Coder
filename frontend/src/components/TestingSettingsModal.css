@@ -1,0 +1,40 @@
+.testing-settings-panel {
+  --settings-modal-panel-width: 960px;
+}
+
+.testing-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.testing-settings-label {
+  font-weight: 500;
+}
+
+.testing-settings-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.testing-settings-slider-row input[type='range'] {
+  flex: 1;
+}
+
+.testing-settings-value {
+  min-width: 3.5rem;
+  text-align: right;
+  font-weight: 600;
+}
+
+.testing-settings-hint {
+  color: var(--text-secondary, var(--text-muted));
+  margin: 0;
+}
+
+.testing-settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}

@@ -1,5 +1,12 @@
 import express from 'express';
-import { getGitSettings, saveGitSettings, getPortSettings, savePortSettings } from '../database.js';
+import {
+  getGitSettings,
+  saveGitSettings,
+  getPortSettings,
+  savePortSettings,
+  getTestingSettings,
+  saveTestingSettings
+} from '../database.js';
 import { resolveCoveragePolicy, DEFAULT_COVERAGE_THRESHOLDS } from '../constants/coveragePolicy.js';
 import { DEFAULT_CHANGE_SCOPE_POLICY } from '../constants/changeScopePolicy.js';
 import { DEFAULT_DONE_SIGNALS } from '../constants/doneSignals.js';
@@ -11,6 +18,8 @@ const allowedWorkflows = ['local', 'cloud'];
 const allowedProviders = ['github', 'gitlab'];
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;
+const MIN_COVERAGE_TARGET = 50;
+const MAX_COVERAGE_TARGET = 100;
 
 const normalizeString = (value = '') => (typeof value === 'string' ? value.trim() : '');
 const normalizeDateString = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -24,6 +33,27 @@ const normalizePort = (value) => {
   }
   return numeric;
 };
+
+const normalizeCoverageTarget = (value) => {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric)) {
+    return null;
+  }
+  if (numeric < MIN_COVERAGE_TARGET || numeric > MAX_COVERAGE_TARGET) {
+    return null;
+  }
+  if (numeric % 10 !== 0) {
+    return null;
+  }
+  return numeric;
+};
+
+const buildCoverageThresholdsFromTarget = (target) => ({
+  lines: target,
+  statements: target,
+  functions: target,
+  branches: target
+});
 
 export const validateGitSettingsPayload = (payload = {}, { requireRemoteUrl = true } = {}) => {
   const errors = [];
@@ -96,6 +126,20 @@ export const validatePortSettingsPayload = (payload = {}) => {
     errors.push(`backendPortBase must be an integer between ${MIN_PORT} and ${MAX_PORT}`);
   } else {
     nextSettings.backendPortBase = backend;
+  }
+
+  return { errors, nextSettings };
+};
+
+export const validateTestingSettingsPayload = (payload = {}) => {
+  const errors = [];
+  const nextSettings = {};
+
+  const coverageTarget = normalizeCoverageTarget(payload.coverageTarget);
+  if (!coverageTarget) {
+    errors.push(`coverageTarget must be one of ${MIN_COVERAGE_TARGET}, 60, 70, 80, 90, 100`);
+  } else {
+    nextSettings.coverageTarget = coverageTarget;
   }
 
   return { errors, nextSettings };
@@ -177,16 +221,55 @@ export const putPortSettingsHandler = async (req, res) => {
 
 router.put('/ports', putPortSettingsHandler);
 
+router.get('/testing', async (req, res) => {
+  try {
+    const settings = await getTestingSettings();
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Failed to load testing settings:', error);
+    res.status(500).json({ success: false, error: 'Failed to load testing settings' });
+  }
+});
+
+export const putTestingSettingsHandler = async (req, res) => {
+  const { errors, nextSettings } = validateTestingSettingsPayload(req.body || {});
+  if (errors.length > 0) {
+    return res.status(400).json({ success: false, error: errors.join(', ') });
+  }
+
+  try {
+    const saved = await saveTestingSettings(nextSettings);
+    res.json({ success: true, message: 'Testing settings updated', settings: saved });
+  } catch (error) {
+    console.error('Failed to save testing settings:', error);
+    res.status(500).json({ success: false, error: 'Failed to save testing settings' });
+  }
+};
+
+router.put('/testing', putTestingSettingsHandler);
+
 router.get('/policy', async (req, res) => {
   try {
-    const coverage = resolveCoveragePolicy({});
+    const testingSettings = await getTestingSettings();
+    const target = normalizeCoverageTarget(testingSettings?.coverageTarget) || DEFAULT_COVERAGE_THRESHOLDS.lines;
+    const thresholds = buildCoverageThresholdsFromTarget(target);
+    const coverage = resolveCoveragePolicy({
+      coverageThresholds: thresholds,
+      changedFileCoverageThresholds: thresholds
+    });
     res.json({
       success: true,
       policy: {
         coverage,
+        testing: {
+          coverageTarget: target,
+          minCoverageTarget: MIN_COVERAGE_TARGET,
+          maxCoverageTarget: MAX_COVERAGE_TARGET,
+          step: 10
+        },
         changeScope: DEFAULT_CHANGE_SCOPE_POLICY,
         defaults: {
-          coverageThresholds: DEFAULT_COVERAGE_THRESHOLDS,
+          coverageThresholds: thresholds,
           enforceChangedFileCoverage: true,
           changeScope: DEFAULT_CHANGE_SCOPE_POLICY
         }

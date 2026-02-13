@@ -135,6 +135,10 @@ const defaultPortSettingsRecord = {
   backendPortBase: Number(process.env.LUCIDCODER_PROJECT_BACKEND_PORT_BASE) || 5500
 };
 
+const defaultTestingSettingsRecord = {
+  coverageTarget: 100
+};
+
 const normalizePortValue = (value) => {
   if (value === undefined) {
     return undefined;
@@ -340,6 +344,15 @@ export const initializeDatabase = async () => {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         frontend_port_base INTEGER NOT NULL DEFAULT ${defaultPortSettingsRecord.frontendPortBase},
         backend_port_base INTEGER NOT NULL DEFAULT ${defaultPortSettingsRecord.backendPortBase},
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS testing_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        coverage_target INTEGER NOT NULL DEFAULT ${defaultTestingSettingsRecord.coverageTarget},
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -725,6 +738,39 @@ export const db_operations = {
     };
   },
 
+  async saveTestingSettings(settings = {}) {
+    const parsed = Number(settings.coverageTarget);
+    const coverageTarget = Number.isInteger(parsed)
+      ? Math.max(50, Math.min(100, parsed))
+      : defaultTestingSettingsRecord.coverageTarget;
+
+    await dbRun(`
+      INSERT INTO testing_settings (id, coverage_target, created_at, updated_at)
+      VALUES (1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET
+        coverage_target = excluded.coverage_target,
+        updated_at = CURRENT_TIMESTAMP
+    `, [coverageTarget]);
+
+    return {
+      coverageTarget
+    };
+  },
+
+  async getTestingSettings() {
+    const row = await dbGet('SELECT * FROM testing_settings WHERE id = 1');
+    if (!row) {
+      return { ...defaultTestingSettingsRecord };
+    }
+
+    const parsed = Number(row.coverage_target);
+    const coverageTarget = Number.isInteger(parsed)
+      ? Math.max(50, Math.min(100, parsed))
+      : defaultTestingSettingsRecord.coverageTarget;
+
+    return { coverageTarget };
+  },
+
   async saveProjectGitSettings(projectId, settings = {}) {
     if (!projectId) {
       throw new Error('projectId is required');
@@ -829,6 +875,8 @@ export const saveGitSettings = db_operations.saveGitSettings;
 export const getGitSettings = db_operations.getGitSettings;
 export const savePortSettings = db_operations.savePortSettings;
 export const getPortSettings = db_operations.getPortSettings;
+export const saveTestingSettings = db_operations.saveTestingSettings;
+export const getTestingSettings = db_operations.getTestingSettings;
 export const saveProjectGitSettings = db_operations.saveProjectGitSettings;
 export const getProjectGitSettings = db_operations.getProjectGitSettings;
 export const deleteProjectGitSettings = db_operations.deleteProjectGitSettings;

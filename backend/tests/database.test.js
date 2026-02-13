@@ -21,6 +21,8 @@ import {
   getGitSettings,
   savePortSettings,
   getPortSettings,
+  saveTestingSettings,
+  getTestingSettings,
   saveProjectGitSettings,
   getProjectGitSettings,
   deleteProjectGitSettings,
@@ -76,6 +78,7 @@ describe('Database Tests', () => {
     'project_git_settings',
     'git_settings',
     'port_settings',
+    'testing_settings',
     'test_runs',
     'branches',
     'api_logs',
@@ -1029,6 +1032,43 @@ describe('Database Tests', () => {
       expect(settings.frontendPortBase).toBe(5100);
       expect(settings.backendPortBase).toBe(5500);
       expect(settings.isCustomized).toBe(true);
+    });
+  });
+
+  describe('Testing Settings', () => {
+    test('should return defaults when no testing settings exist', async () => {
+      const settings = await getTestingSettings();
+
+      expect(settings.coverageTarget).toBe(100);
+    });
+
+    test('should clamp and persist testing coverage target', async () => {
+      const saved = await saveTestingSettings({ coverageTarget: 70 });
+      expect(saved.coverageTarget).toBe(70);
+
+      const stored = await getTestingSettings();
+      expect(stored.coverageTarget).toBe(70);
+    });
+
+    test('should normalize invalid testing coverage target to default', async () => {
+      const saved = await saveTestingSettings({ coverageTarget: 5 });
+      expect(saved.coverageTarget).toBe(50);
+    });
+
+    test('should use default testing coverage target when input is not an integer', async () => {
+      const saved = await saveTestingSettings({ coverageTarget: 'not-a-number' });
+      expect(saved.coverageTarget).toBe(100);
+    });
+
+    test('should fall back to default when persisted testing coverage target is not an integer', async () => {
+      await runSql('DELETE FROM testing_settings');
+      await runSql(`
+        INSERT INTO testing_settings (id, coverage_target, created_at, updated_at)
+        VALUES (1, 'invalid', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `);
+
+      const settings = await getTestingSettings();
+      expect(settings.coverageTarget).toBe(100);
     });
   });
 

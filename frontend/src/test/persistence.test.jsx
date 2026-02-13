@@ -3,8 +3,10 @@ import {
   loadGitSettingsFromStorage,
   loadProjectGitSettingsFromStorage,
   loadGitConnectionStatusFromStorage,
+  loadTestingSettingsFromStorage,
   defaultGitSettings,
-  defaultGitConnectionStatus
+  defaultGitConnectionStatus,
+  defaultTestingSettings
 } from '../context/appState/persistence.js';
 
 describe('persistence helpers', () => {
@@ -112,5 +114,27 @@ describe('persistence helpers', () => {
     localStorage.setItem('projectGitSettings', JSON.stringify('nope'));
     const loaded = loadProjectGitSettingsFromStorage();
     expect(loaded).toEqual({});
+  });
+
+  test('loadTestingSettingsFromStorage returns defaults when missing or invalid', () => {
+    expect(loadTestingSettingsFromStorage()).toEqual(defaultTestingSettings);
+
+    localStorage.setItem('testingSettings', '{not-json');
+    expect(loadTestingSettingsFromStorage()).toEqual(defaultTestingSettings);
+  });
+
+  test('loadTestingSettingsFromStorage merges stored values', () => {
+    localStorage.setItem('testingSettings', JSON.stringify({ coverageTarget: 70 }));
+
+    expect(loadTestingSettingsFromStorage()).toEqual({ coverageTarget: 70 });
+  });
+
+  test('loadTestingSettingsFromStorage returns defaults when window is undefined', () => {
+    const originalWindow = global.window;
+    global.window = undefined;
+
+    expect(loadTestingSettingsFromStorage()).toEqual(defaultTestingSettings);
+
+    global.window = originalWindow;
   });
 });

@@ -14,6 +14,10 @@ const defaultPortSettings = {
   backendPortBase: 6500
 };
 
+const defaultTestingSettings = {
+  coverageTarget: 100
+};
+
 const MIN_ASSISTANT_PANEL_WIDTH = 240;
 const DEFAULT_ASSISTANT_PANEL_WIDTH = 320;
 
@@ -213,9 +217,31 @@ const loadGitConnectionStatusFromStorage = () => {
   }
 };
 
+const loadTestingSettingsFromStorage = () => {
+  if (typeof window === 'undefined') {
+    return defaultTestingSettings;
+  }
+
+  try {
+    const stored = localStorage.getItem('testingSettings');
+    if (!stored) {
+      return defaultTestingSettings;
+    }
+    const parsed = JSON.parse(stored);
+    return {
+      ...defaultTestingSettings,
+      ...parsed
+    };
+  } catch (error) {
+    console.warn('Failed to parse testingSettings from storage', error);
+    return defaultTestingSettings;
+  }
+};
+
 export {
   defaultGitSettings,
   defaultPortSettings,
+  defaultTestingSettings,
   getMaxAssistantPanelWidth,
   clampAssistantPanelWidth,
   loadAssistantPanelState,
@@ -226,5 +252,6 @@ export {
   loadGitSettingsFromStorage,
   loadProjectGitSettingsFromStorage,
   defaultGitConnectionStatus,
-  loadGitConnectionStatusFromStorage
+  loadGitConnectionStatusFromStorage,
+  loadTestingSettingsFromStorage
 };

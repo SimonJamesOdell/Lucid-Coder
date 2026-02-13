@@ -3,6 +3,7 @@ import {
   defaultGitSettings,
   defaultGitConnectionStatus,
   defaultPortSettings,
+  defaultTestingSettings,
   getMaxAssistantPanelWidth,
   clampAssistantPanelWidth,
   loadAssistantPanelState,
@@ -12,7 +13,8 @@ import {
   loadPreviewPanelStateByProject,
   loadGitSettingsFromStorage,
   loadProjectGitSettingsFromStorage,
-  loadGitConnectionStatusFromStorage
+  loadGitConnectionStatusFromStorage,
+  loadTestingSettingsFromStorage
 } from './appState/persistence.js';
 import {
   detectFileTokens,
@@ -40,6 +42,7 @@ import {
 import {
   fetchGitSettingsFromBackend as fetchGitSettingsFromBackendAction,
   fetchPortSettingsFromBackend as fetchPortSettingsFromBackendAction,
+  fetchTestingSettingsFromBackend as fetchTestingSettingsFromBackendAction,
   fetchProjectGitSettings as fetchProjectGitSettingsAction,
   fetchProjectGitStatus as fetchProjectGitStatusAction,
   fetchProjectGitRemote as fetchProjectGitRemoteAction,
@@ -51,6 +54,7 @@ import {
   updateGitSettings as updateGitSettingsAction,
   testGitConnection as testGitConnectionAction,
   updatePortSettings as updatePortSettingsAction,
+  updateTestingSettings as updateTestingSettingsAction,
   getEffectiveGitSettings as getEffectiveGitSettingsAction,
   getProjectGitSettingsSnapshot as getProjectGitSettingsSnapshotAction,
   createProjectRemoteRepository as createProjectRemoteRepositoryAction,
@@ -143,6 +147,7 @@ export const AppStateProvider = ({ children }) => {
   const [projectGitSettings, setProjectGitSettings] = useState(loadProjectGitSettingsFromStorage);
   const [projectGitStatus, setProjectGitStatus] = useState({});
   const [portSettings, setPortSettings] = useState(defaultPortSettings);
+  const [testingSettings, setTestingSettings] = useState(loadTestingSettingsFromStorage);
   const [projectProcesses, setProjectProcesses] = useState(null);
   const [fileExplorerStateByProject, setFileExplorerStateByProject] = useState(loadFileExplorerState);
   const [assistantPanelState, setAssistantPanelState] = useState(loadAssistantPanelState);
@@ -512,6 +517,10 @@ export const AppStateProvider = ({ children }) => {
     fetchPortSettingsFromBackend();
   }, []);
 
+  useEffect(() => {
+    fetchTestingSettingsFromBackend();
+  }, []);
+
   // Jobs refresh/polling is handled in useJobs.
 
   useEffect(() => {
@@ -562,6 +571,12 @@ export const AppStateProvider = ({ children }) => {
     }
   }, [projectGitSettings]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('testingSettings', JSON.stringify(testingSettings));
+    }
+  }, [testingSettings]);
+
   // Fetch projects from backend
   const fetchProjects = useCallback(
     () => fetchProjectsFromBackend({ trackedFetch, setProjects }),
@@ -575,6 +590,11 @@ export const AppStateProvider = ({ children }) => {
 
   const fetchPortSettingsFromBackend = useCallback(
     () => fetchPortSettingsFromBackendAction({ trackedFetch, setPortSettings }),
+    [trackedFetch]
+  );
+
+  const fetchTestingSettingsFromBackend = useCallback(
+    () => fetchTestingSettingsFromBackendAction({ trackedFetch, setTestingSettings }),
     [trackedFetch]
   );
 
@@ -1078,6 +1098,16 @@ export const AppStateProvider = ({ children }) => {
     [currentProject?.id, isProjectStopping, portSettings, restartProject, trackedFetch]
   );
 
+  const updateTestingSettings = useCallback(
+    (updates = {}) => updateTestingSettingsAction({
+      trackedFetch,
+      testingSettings,
+      setTestingSettings,
+      updates
+    }),
+    [testingSettings, trackedFetch]
+  );
+
   const getEffectiveGitSettings = useCallback(
     (projectId) => getEffectiveGitSettingsAction({ gitSettings, projectGitSettings, projectId }),
     [gitSettings, projectGitSettings]
@@ -1277,6 +1307,7 @@ export const AppStateProvider = ({ children }) => {
     gitSettings,
     projectGitSettings,
     portSettings,
+    testingSettings,
     projectProcesses,
     jobState,
     projectShutdownState,
@@ -1327,6 +1358,7 @@ export const AppStateProvider = ({ children }) => {
     getEffectiveGitSettings,
     getProjectGitSettingsSnapshot,
     updatePortSettings,
+    updateTestingSettings,
     refreshProcessStatus,
     restartProject,
     createBackend,

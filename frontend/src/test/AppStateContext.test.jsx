@@ -80,6 +80,14 @@ const portSettingsResponse = (overrides = {}) => mockApiResponse({
   }
 })
 
+const testingSettingsResponse = (overrides = {}) => mockApiResponse({
+  success: true,
+  settings: {
+    coverageTarget: 100,
+    ...overrides
+  }
+})
+
 const processStatusResponse = (overrides = {}) => mockApiResponse({
   success: true,
   ...defaultProcessStatusPayload,
@@ -457,6 +465,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' })) // llm status
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
     const { result } = renderUseAppState()
     const project = { id: 'p1', name: 'Project One' }
 
@@ -491,6 +500,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' })) // llm status
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(mockApiResponse({ success: true, project: serverProject })) // create
       .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
       .mockResolvedValueOnce(mockApiResponse({ message: 'started' })) // start project
@@ -517,6 +527,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' }))
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(mockApiResponse({ success: true, project: serverProject }))
       .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
       .mockResolvedValueOnce(mockApiResponse({ message: 'started' }))
@@ -540,6 +551,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' }))
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(mockApiResponse({ success: true, project: serverProject }))
       .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
       .mockResolvedValueOnce(mockApiResponse({ message: 'started' }))
@@ -639,6 +651,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' })) // llm status
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(gitSettingsResponse({ workflow: 'cloud', provider: 'gitlab' }))
 
     const { result } = renderUseAppState()
@@ -670,12 +683,35 @@ describe('AppStateContext', () => {
     })
   })
 
+  test('updateTestingSettings updates testing settings state', async () => {
+    fetch
+      .mockResolvedValueOnce(mockApiResponse({ success: true, projects: [] }))
+      .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' }))
+      .mockResolvedValueOnce(gitSettingsResponse())
+      .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse({ coverageTarget: 70 }))
+
+    const { result } = renderUseAppState()
+
+    await act(async () => {
+      await result.current.updateTestingSettings({ coverageTarget: 70 })
+    })
+
+    expect(result.current.testingSettings.coverageTarget).toBe(70)
+    expect(fetch).toHaveBeenCalledWith('/api/settings/testing', expect.objectContaining({
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' }
+    }))
+  })
+
   test('selectProject loads project-specific git settings when available', async () => {
     fetch
       .mockResolvedValueOnce(mockApiResponse({ success: true, projects: [] }))
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' })) // llm status
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(projectGitSettingsResponse({ provider: 'gitlab', remoteUrl: 'https://gitlab.com/oss/repo.git' }, false))
       .mockResolvedValueOnce(mockApiResponse({ message: 'Project started' }))
 
@@ -975,6 +1011,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' }))
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(projectGitSettingsResponse({ remoteUrl: 'https://github.com/demo/repo.git' }, false))
       .mockResolvedValueOnce(mockApiResponse({ message: 'Project started' }))
 
@@ -1065,6 +1102,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' })) // llm status
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(projectGitSettingsResponse({ provider: 'gitlab' }, false))
       .mockResolvedValueOnce(mockApiResponse({ message: 'Project started' }))
 
@@ -1110,6 +1148,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' })) // llm status
       .mockResolvedValueOnce(gitSettingsResponse({ remoteUrl: 'https://github.com/lucid/base.git' }))
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(projectGitSettingsResponse({ remoteUrl: 'https://gitlab.com/team/project.git' }, false))
       .mockResolvedValueOnce(mockApiResponse({ message: 'Project started' }))
 
@@ -1156,6 +1195,7 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(mockApiResponse({ success: true, configured: false, ready: false, reason: 'No LLM configuration found' })) // llm status
       .mockResolvedValueOnce(gitSettingsResponse())
       .mockResolvedValueOnce(portSettingsResponse())
+      .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(mockApiResponse({ success: true, project: { id: 'a', name: 'First' } }))
       .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
       .mockResolvedValueOnce(mockApiResponse({ message: 'started a' }))
