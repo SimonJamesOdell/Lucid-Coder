@@ -3,6 +3,8 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { scanCompatibility } from '../services/importCompatibility.js';
+import { buildCloneUrl } from '../utils/gitUrl.js';
+import { runGitCommand } from '../utils/git.js';
 
 const router = express.Router();
 const isWindows = process.platform === 'win32';
@@ -364,6 +366,53 @@ router.get('/detect-tech', async (req, res) => {
     }
     console.error('Error detecting tech stack:', error);
     return res.status(500).json({ success: false, error: 'Failed to detect tech stack' });
+  }
+});
+
+router.post('/detect-git-tech', async (req, res) => {
+  let tempRoot = null;
+  try {
+    const payload = req.body || {};
+    const rawUrl = typeof payload.gitUrl === 'string' ? payload.gitUrl.trim() : '';
+    if (!rawUrl) {
+      return res.status(400).json({ success: false, error: 'Git repository URL is required' });
+    }
+
+    if (isUnsafePath(rawUrl)) {
+      return res.status(400).json({ success: false, error: 'Invalid git repository URL' });
+    }
+
+    const cloneAuthMethod = typeof payload.authMethod === 'string' ? payload.authMethod.trim() : '';
+    const cloneToken = typeof payload.token === 'string' ? payload.token.trim() : '';
+    const cloneUsername = typeof payload.username === 'string' ? payload.username.trim() : '';
+    const cloneProvider = typeof payload.provider === 'string' ? payload.provider.trim() : '';
+
+    const { cloneUrl } = buildCloneUrl({
+      url: rawUrl,
+      authMethod: cloneAuthMethod || undefined,
+      token: cloneToken || undefined,
+      username: cloneUsername || undefined,
+      provider: cloneProvider || undefined
+    });
+
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-git-detect-'));
+    const repoDir = path.join(tempRoot, 'repo');
+
+    await runGitCommand(tempRoot, ['clone', '--depth', '1', cloneUrl, repoDir]);
+
+    const detected = await detectTechStack(repoDir);
+    return res.json({ success: true, frontend: detected.frontend, backend: detected.backend });
+  } catch (error) {
+    console.error('Error detecting git tech stack:', error);
+    return res.status(500).json({ success: false, error: 'Failed to detect git tech stack' });
+  } finally {
+    if (tempRoot) {
+      try {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      } catch (cleanupError) {
+        console.warn('Failed to clean up git tech detection temp folder:', cleanupError?.message || cleanupError);
+      }
+    }
   }
 });
 

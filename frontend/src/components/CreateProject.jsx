@@ -169,6 +169,8 @@ const CreateProject = () => {
   const [gitRemoteUrl, setGitRemoteUrl] = useState('');
   const [gitConnectionMode, setGitConnectionMode] = useState('local');
   const [gitConnectionRemoteUrl, setGitConnectionRemoteUrl] = useState('');
+  const [gitTechStatus, setGitTechStatus] = useState({ isLoading: false, error: '' });
+  const gitTechKeyRef = useRef('');
   const [cloneCreateRemote, setCloneCreateRemote] = useState(false);
   const [gitRepoName, setGitRepoName] = useState('');
   const [gitRepoOwner, setGitRepoOwner] = useState('');
@@ -998,6 +1000,8 @@ const CreateProject = () => {
     setGitRemoteUrl('');
     setGitConnectionMode('local');
     setGitConnectionRemoteUrl('');
+    setGitTechStatus({ isLoading: false, error: '' });
+    gitTechKeyRef.current = '';
     setCloneCreateRemote(false);
     setGitRepoName('');
     setGitRepoOwner('');
@@ -1029,6 +1033,89 @@ const CreateProject = () => {
     }
     setFolderPickerOpen(false);
   };
+
+  const applyDetectedTech = (detected) => {
+    if (!detected || typeof detected !== 'object') {
+      return;
+    }
+
+    setNewProject((prev) => {
+      const nextFrontendLang = detected?.frontend?.language || prev.frontend.language;
+      const nextBackendLang = detected?.backend?.language || prev.backend.language;
+
+      const frontendOptions = frontendFrameworks[nextFrontendLang] || frontendFrameworks.javascript;
+      const backendOptions = backendFrameworks[nextBackendLang] || backendFrameworks.javascript;
+
+      const nextFrontendFramework = frontendOptions.includes(detected?.frontend?.framework)
+        ? detected.frontend.framework
+        : frontendOptions[0];
+
+      const nextBackendFramework = backendOptions.includes(detected?.backend?.framework)
+        ? detected.backend.framework
+        : backendOptions[0];
+
+      return {
+        ...prev,
+        frontend: {
+          language: nextFrontendLang,
+          framework: nextFrontendFramework
+        },
+        backend: {
+          language: nextBackendLang,
+          framework: nextBackendFramework
+        }
+      };
+    });
+  };
+
+  useEffect(() => {
+    if (setupStep !== 'details' || projectSource !== 'git') {
+      return;
+    }
+
+    const url = gitRemoteUrl.trim();
+    if (!url) {
+      return;
+    }
+
+    const connectionMode = gitConnectionMode || 'local';
+    const provider = (connectionMode === 'custom' ? gitProvider : (gitSettings?.provider || 'github')).toLowerCase();
+    const token = connectionMode === 'custom' ? gitToken.trim() : '';
+    const detectKey = `${url}|${connectionMode}|${provider}|${token}`;
+    if (gitTechKeyRef.current === detectKey) {
+      return;
+    }
+    gitTechKeyRef.current = detectKey;
+
+    setGitTechStatus({ isLoading: true, error: '' });
+
+    axios
+      .post('/api/fs/detect-git-tech', {
+        gitUrl: url,
+        provider,
+        token: token || undefined
+      })
+      .then((response) => {
+        const data = response?.data;
+        if (!data?.success) {
+          throw new Error(data?.error || 'Failed to detect tech stack');
+        }
+        applyDetectedTech(data);
+        setGitTechStatus({ isLoading: false, error: '' });
+      })
+      .catch((error) => {
+        const message = error?.response?.data?.error || error?.message || 'Failed to detect tech stack';
+        setGitTechStatus({ isLoading: false, error: message });
+      });
+  }, [
+    setupStep,
+    projectSource,
+    gitRemoteUrl,
+    gitConnectionMode,
+    gitProvider,
+    gitToken,
+    gitSettings?.provider
+  ]);
 
   const runPostCloneSetup = async (projectId) => {
     if (!projectId) {
@@ -1194,6 +1281,8 @@ const CreateProject = () => {
     CreateProject.__testHooks.setLocalPath = setLocalPath;
     CreateProject.__testHooks.setProjectSource = setProjectSource;
     CreateProject.__testHooks.setGitRemoteUrl = setGitRemoteUrl;
+    CreateProject.__testHooks.applyDetectedTech = applyDetectedTech;
+    CreateProject.__testHooks.handleFolderPicked = handleFolderPicked;
     CreateProject.__testHooks.setNewProject = setNewProject;
     CreateProject.__testHooks.setGitWorkflowMode = setGitWorkflowMode;
     CreateProject.__testHooks.setSetupState = setSetupState;
@@ -1215,6 +1304,8 @@ const CreateProject = () => {
       CreateProject.__testHooks.setLocalPath = undefined;
       CreateProject.__testHooks.setProjectSource = undefined;
       CreateProject.__testHooks.setGitRemoteUrl = undefined;
+      CreateProject.__testHooks.applyDetectedTech = undefined;
+      CreateProject.__testHooks.handleFolderPicked = undefined;
       CreateProject.__testHooks.setNewProject = undefined;
       CreateProject.__testHooks.setGitWorkflowMode = undefined;
       CreateProject.__testHooks.setSetupState = undefined;
@@ -1574,7 +1665,7 @@ const CreateProject = () => {
                           }
                         }))}
                         className="form-select"
-                        disabled={createLoading}
+                        disabled={createLoading || projectSource === 'git'}
                       >
                         {frontendLanguages.map(lang => (
                           <option key={lang} value={lang}>
@@ -1594,7 +1685,7 @@ const CreateProject = () => {
                           frontend: { ...prev.frontend, framework: e.target.value }
                         }))}
                         className="form-select"
-                        disabled={createLoading}
+                        disabled={createLoading || projectSource === 'git'}
                       >
                         {getFrontendFrameworks().map(framework => (
                           <option key={framework} value={framework}>
@@ -1622,7 +1713,7 @@ const CreateProject = () => {
                           }
                         }))}
                         className="form-select"
-                        disabled={createLoading}
+                        disabled={createLoading || projectSource === 'git'}
                       >
                         {backendLanguages.map(lang => (
                           <option key={lang} value={lang}>
@@ -1642,7 +1733,7 @@ const CreateProject = () => {
                           backend: { ...prev.backend, framework: e.target.value }
                         }))}
                         className="form-select"
-                        disabled={createLoading}
+                        disabled={createLoading || projectSource === 'git'}
                       >
                         {getBackendFrameworks().map(framework => (
                           <option key={framework} value={framework}>
@@ -1667,7 +1758,7 @@ const CreateProject = () => {
                 {projectSource === 'local' && (
                   <>
                     <div className="form-row">
-                      <div className="form-group" style={{ width: '100%' }}>
+                      <div className="form-group form-group--inline" style={{ width: '100%' }}>
                         <label htmlFor="project-path">Project Folder Path *</label>
                         <div className="path-input-group">
                           <input
@@ -1727,7 +1818,7 @@ const CreateProject = () => {
                     </div>
 
                     <div className="form-row">
-                      <div className="form-group">
+                      <div className="form-group form-group--inline">
                         <label htmlFor="git-connection-select">Git Workflow *</label>
                         <select
                           id="git-connection-select"
@@ -1774,50 +1865,46 @@ const CreateProject = () => {
 
                 {projectSource === 'git' && (
                   <>
-                    <div className="form-row">
-                      <div className="form-group" style={{ width: '100%' }}>
-                        <label htmlFor="git-clone-url">Repository URL *</label>
-                        <input
-                          id="git-clone-url"
-                          type="text"
-                          placeholder="https://github.com/org/repo.git"
-                          value={gitRemoteUrl}
-                          onChange={(e) => {
-                            setGitRemoteUrl(e.target.value);
-                            if (createError) {
-                              setCreateError('');
-                            }
-                          }}
-                          className="form-input"
-                          disabled={createLoading}
-                        />
-                      </div>
+                    <div className="form-row form-row--inline" style={{ gridTemplateColumns: '30% 70%' }}>
+                      <label className="form-label" htmlFor="git-clone-url">Repository URL *</label>
+                      <input
+                        id="git-clone-url"
+                        type="text"
+                        placeholder="https://github.com/org/repo.git"
+                        value={gitRemoteUrl}
+                        onChange={(e) => {
+                          setGitRemoteUrl(e.target.value);
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-input"
+                        disabled={createLoading}
+                      />
                     </div>
 
-                    <div className="form-row">
-                      <div className="form-group">
-                        <label htmlFor="git-connection-select">Git Workflow *</label>
-                        <select
-                          id="git-connection-select"
-                          value={gitConnectionMode}
-                          onChange={(e) => {
-                            setGitConnectionMode(e.target.value);
-                            if (createError) {
-                              setCreateError('');
-                            }
-                          }}
-                          className="form-select"
-                          disabled={createLoading}
-                        >
-                          <option value="local">Local only</option>
-                          <option value="global">Cloud (use global git settings)</option>
-                          <option value="custom">Cloud (custom connection)</option>
-                        </select>
-                      </div>
+                    <div className="form-row form-row--inline" style={{ gridTemplateColumns: '30% 70%' }}>
+                      <label className="form-label" htmlFor="git-connection-select">Git Workflow *</label>
+                      <select
+                        id="git-connection-select"
+                        value={gitConnectionMode}
+                        onChange={(e) => {
+                          setGitConnectionMode(e.target.value);
+                          if (createError) {
+                            setCreateError('');
+                          }
+                        }}
+                        className="form-select"
+                        disabled={createLoading}
+                      >
+                        <option value="local">Local only</option>
+                        <option value="global">Cloud (use global git settings)</option>
+                        <option value="custom">Cloud (custom connection)</option>
+                      </select>
                     </div>
 
                     {gitConnectionMode !== 'local' && (
-                      <div className="radio-group">
+                      <div className="radio-group radio-group--spaced radio-group--clone">
                         <label className={`radio-card ${cloneCreateRemote ? 'selected' : ''}`}>
                           <input
                             type="checkbox"
@@ -1826,7 +1913,7 @@ const CreateProject = () => {
                             disabled={createLoading}
                           />
                           <div>
-                            <div className="radio-title">Create a new repo after cloning</div>
+                            <div className="radio-title">Create a new repo after cloning (create fork)</div>
                             <div className="radio-subtitle">Push the cloned project into a new repository you own.</div>
                           </div>
                         </label>
