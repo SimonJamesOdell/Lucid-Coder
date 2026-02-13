@@ -6,7 +6,9 @@ vi.mock('../database.js', () => ({
   getGitSettings: vi.fn(),
   saveGitSettings: vi.fn(),
   getPortSettings: vi.fn(),
-  savePortSettings: vi.fn()
+  savePortSettings: vi.fn(),
+  getTestingSettings: vi.fn(),
+  saveTestingSettings: vi.fn()
 }));
 
 vi.mock('../services/gitConnectionService.js', () => ({
@@ -163,6 +165,29 @@ describe('settings routes', () => {
     const { errors } = validatePortSettingsPayload({ frontendPortBase: 1000, backendPortBase: 'wat' });
     expect(errors).toContain('frontendPortBase must be an integer between 1024 and 65535');
     expect(errors).toContain('backendPortBase must be an integer between 1024 and 65535');
+  });
+
+  test('validateTestingSettingsPayload accepts valid slider values and rejects invalid inputs', async () => {
+    const { validateTestingSettingsPayload } = await import('../routes/settings.js');
+
+    expect(validateTestingSettingsPayload({ coverageTarget: 70 })).toEqual({
+      errors: [],
+      nextSettings: { coverageTarget: 70 }
+    });
+
+    expect(validateTestingSettingsPayload({ coverageTarget: '80' })).toEqual({
+      errors: [],
+      nextSettings: { coverageTarget: 80 }
+    });
+
+    const invalid = validateTestingSettingsPayload({ coverageTarget: 75 });
+    expect(invalid.errors).toContain('coverageTarget must be one of 50, 60, 70, 80, 90, 100');
+
+    const tooLow = validateTestingSettingsPayload({ coverageTarget: 40 });
+    expect(tooLow.errors).toContain('coverageTarget must be one of 50, 60, 70, 80, 90, 100');
+
+    const tooHigh = validateTestingSettingsPayload({ coverageTarget: 110 });
+    expect(tooHigh.errors).toContain('coverageTarget must be one of 50, 60, 70, 80, 90, 100');
   });
 
   test('GET /api/settings/git returns saved settings', async () => {
@@ -454,6 +479,132 @@ describe('settings routes', () => {
       .expect(500);
 
     expect(response.body).toEqual({ success: false, error: 'Failed to save port settings' });
+  });
+
+  test('GET /api/settings/testing returns saved settings', async () => {
+    const { getTestingSettings } = await import('../database.js');
+    getTestingSettings.mockResolvedValueOnce({ coverageTarget: 90 });
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .get('/api/settings/testing')
+      .expect(200);
+
+    expect(response.body).toEqual({
+      success: true,
+      settings: { coverageTarget: 90 }
+    });
+  });
+
+  test('GET /api/settings/testing returns 500 when loading fails', async () => {
+    const { getTestingSettings } = await import('../database.js');
+    getTestingSettings.mockRejectedValueOnce(new Error('boom'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .get('/api/settings/testing')
+      .expect(500);
+
+    expect(response.body).toEqual({ success: false, error: 'Failed to load testing settings' });
+  });
+
+  test('PUT /api/settings/testing returns 400 for invalid payload', async () => {
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .put('/api/settings/testing')
+      .send({ coverageTarget: 85 })
+      .expect(400);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toContain('coverageTarget must be one of 50, 60, 70, 80, 90, 100');
+  });
+
+  test('PUT /api/settings/testing updates settings when payload is valid', async () => {
+    const { saveTestingSettings } = await import('../database.js');
+    saveTestingSettings.mockResolvedValueOnce({ coverageTarget: 60 });
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .put('/api/settings/testing')
+      .send({ coverageTarget: 60 })
+      .expect(200);
+
+    expect(saveTestingSettings).toHaveBeenCalledWith({ coverageTarget: 60 });
+    expect(response.body).toEqual({
+      success: true,
+      message: 'Testing settings updated',
+      settings: { coverageTarget: 60 }
+    });
+  });
+
+  test('PUT /api/settings/testing uses req.body fallback when body is missing', async () => {
+    const app = await buildTestApp({ withJson: false });
+
+    const response = await request(app)
+      .put('/api/settings/testing')
+      .expect(400);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toContain('coverageTarget must be one of 50, 60, 70, 80, 90, 100');
+  });
+
+  test('PUT /api/settings/testing returns 500 when save fails', async () => {
+    const { saveTestingSettings } = await import('../database.js');
+    saveTestingSettings.mockRejectedValueOnce(new Error('boom'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .put('/api/settings/testing')
+      .send({ coverageTarget: 100 })
+      .expect(500);
+
+    expect(response.body).toEqual({ success: false, error: 'Failed to save testing settings' });
+  });
+
+  test('GET /api/settings/policy includes coverage target from testing settings', async () => {
+    const { getTestingSettings } = await import('../database.js');
+    getTestingSettings.mockResolvedValueOnce({ coverageTarget: 70 });
+
+    const app = await buildTestApp();
+
+    const response = await request(app)
+      .get('/api/settings/policy')
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.policy.testing).toEqual({
+      coverageTarget: 70,
+      minCoverageTarget: 50,
+      maxCoverageTarget: 100,
+      step: 10
+    });
+    expect(response.body.policy.coverage).toMatchObject({
+      globalThresholds: {
+        lines: 70,
+        statements: 70,
+        functions: 70,
+        branches: 70
+      },
+      changedFileThresholds: {
+        lines: 70,
+        statements: 70,
+        functions: 70,
+        branches: 70
+      }
+    });
+    expect(response.body.policy.defaults.coverageThresholds).toEqual({
+      lines: 70,
+      statements: 70,
+      functions: 70,
+      branches: 70
+    });
   });
 
   test('GET /api/settings/done-signals returns defaults', async () => {

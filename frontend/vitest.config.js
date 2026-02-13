@@ -47,6 +47,7 @@ export default defineConfig({
     cacheDir: './.vite-cache', 
     coverage: {
       reporter: ['text', 'json', 'html'],
+      tempDirectory: './coverage-tmp',
       thresholds: {
         lines: 100,
         statements: 100,

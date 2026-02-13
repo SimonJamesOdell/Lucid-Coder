@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Navigation from '../components/Navigation';
 import { useAppState } from '../context/AppStateContext';
@@ -47,6 +47,10 @@ const baseState = () => ({
     backendPortBase: 6500
   },
   updatePortSettings: vi.fn().mockResolvedValue(undefined),
+  testingSettings: {
+    coverageTarget: 100
+  },
+  updateTestingSettings: vi.fn().mockResolvedValue(undefined),
   projectShutdownState: {
     isStopping: false,
     projectId: null,
@@ -162,6 +166,7 @@ describe('Navigation Component', () => {
     expect(screen.getByText('Configure LLM')).toBeInTheDocument();
     expect(screen.getByText('Configure Git')).toBeInTheDocument();
     expect(screen.getByText('Ports')).toBeInTheDocument();
+    expect(screen.getByText('Configure Testing')).toBeInTheDocument();
   });
 
   test('configure LLM option opens configuration modal', async () => {
@@ -411,6 +416,90 @@ describe('Navigation Component', () => {
 
     consoleError.mockRestore();
     alertSpy.mockRestore();
+  });
+
+  test('testing settings modal opens from settings menu', async () => {
+    const { user } = renderNavigation();
+
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(screen.getByText('Configure Testing'));
+
+    const modal = await screen.findByTestId('testing-settings-modal');
+    expect(modal).toBeInTheDocument();
+    expect(screen.getByTestId('testing-coverage-value')).toHaveTextContent('100%');
+  });
+
+  test('testing settings modal saves updates via context action', async () => {
+    const updateTestingSettings = vi.fn().mockResolvedValue(undefined);
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const { user, state } = renderNavigation({ updateTestingSettings });
+
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(screen.getByText('Configure Testing'));
+
+    const slider = await screen.findByTestId('testing-coverage-slider');
+    fireEvent.change(slider, { target: { value: '70' } });
+    await user.click(screen.getByTestId('testing-settings-save'));
+
+    expect(state.updateTestingSettings).toHaveBeenCalledWith({ coverageTarget: 70 });
+
+    alertSpy.mockRestore();
+  });
+
+  test('testing settings modal surfaces save errors to the user', async () => {
+    const updateTestingSettings = vi.fn().mockRejectedValue(new Error('Testing settings locked'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const { user } = renderNavigation({ updateTestingSettings });
+
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(screen.getByText('Configure Testing'));
+
+    const saveButton = await screen.findByTestId('testing-settings-save');
+    await user.click(saveButton);
+
+    await waitFor(() => expect(updateTestingSettings).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Testing settings locked'));
+    expect(consoleError).toHaveBeenCalledWith('Failed to update testing settings', expect.any(Error));
+
+    consoleError.mockRestore();
+    alertSpy.mockRestore();
+  });
+
+  test('testing settings modal shows default error message when error has no detail', async () => {
+    const updateTestingSettings = vi.fn().mockRejectedValue({});
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const { user } = renderNavigation({ updateTestingSettings });
+
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(screen.getByText('Configure Testing'));
+
+    const saveButton = await screen.findByTestId('testing-settings-save');
+    await user.click(saveButton);
+
+    await waitFor(() => expect(updateTestingSettings).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(alertSpy).toHaveBeenCalledWith('Failed to update testing settings. Please try again.')
+    );
+    expect(consoleError).toHaveBeenCalledWith('Failed to update testing settings', expect.any(Object));
+
+    consoleError.mockRestore();
+    alertSpy.mockRestore();
+  });
+
+  test('testing settings modal can be closed with the header button', async () => {
+    const { user } = renderNavigation();
+
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(screen.getByText('Configure Testing'));
+
+    await screen.findByTestId('testing-settings-modal');
+    await user.click(screen.getByTestId('testing-settings-close'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('testing-settings-modal')).not.toBeInTheDocument();
+    });
   });
 
   test('tools dropdown shows correct content when enabled', async () => {

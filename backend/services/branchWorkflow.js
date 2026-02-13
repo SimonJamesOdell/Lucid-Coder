@@ -14,6 +14,7 @@ import {
   interpolateCommitTemplate,
   withStatusCode
 } from './branchWorkflow/formatting.js';
+import { getTestingSettings, getProjectTestingSettings } from '../database.js';
 import {
   all,
   checkoutGitBranch,
@@ -450,6 +451,8 @@ const testsApi = createBranchWorkflowTests({
   listBranchChangedPaths,
   parseStagedFiles,
   resolveCoveragePolicy,
+  getTestingSettings,
+  getProjectTestingSettings,
   runProjectGit,
   run,
   get,

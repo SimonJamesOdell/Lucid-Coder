@@ -73,6 +73,25 @@ export const fetchPortSettingsFromBackend = async ({ trackedFetch, setPortSettin
   }
 };
 
+export const fetchTestingSettingsFromBackend = async ({ trackedFetch, setTestingSettings }) => {
+  try {
+    const response = await trackedFetch('/api/settings/testing');
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (data.success && data.settings) {
+      setTestingSettings((prev) => ({
+        ...prev,
+        ...data.settings
+      }));
+    }
+  } catch (error) {
+    console.warn('Failed to load testing settings from backend:', error);
+  }
+};
+
 export const fetchProjectGitSettings = async ({
   projectId,
   trackedFetch,
@@ -110,6 +129,38 @@ export const fetchProjectGitSettings = async ({
     };
   } catch (error) {
     console.warn('Failed to load project git settings:', error);
+    return null;
+  }
+};
+
+export const fetchProjectTestingSettings = async ({
+  projectId,
+  trackedFetch,
+  setProjectTestingSettings
+}) => {
+  if (!projectId) {
+    return null;
+  }
+
+  try {
+    const response = await trackedFetch(`/api/projects/${projectId}/testing-settings`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.success || !data.settings) {
+      throw new Error(data?.error || 'Failed to load project testing settings');
+    }
+
+    setProjectTestingSettings((prev) => ({
+      ...prev,
+      [projectId]: data.settings
+    }));
+
+    return data.settings;
+  } catch (error) {
+    console.warn('Failed to load project testing settings:', error);
     return null;
   }
 };
@@ -254,6 +305,48 @@ export const updatePortSettings = async ({
       throw new Error(restartMessage);
     }
   }
+
+  return data.settings;
+};
+
+export const updateTestingSettings = async ({
+  trackedFetch,
+  testingSettings,
+  setTestingSettings,
+  updates = {}
+}) => {
+  const payload = {
+    coverageTarget: Number.parseInt(updates.coverageTarget ?? testingSettings.coverageTarget, 10)
+  };
+
+  let response;
+  try {
+    response = await trackedFetch('/api/settings/testing', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    throw new Error(errorMessageOr(error, 'Failed to save testing settings'));
+  }
+
+  const data = await readJsonSafely(response);
+
+  if (!data) {
+    throw new Error('Failed to save testing settings');
+  }
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to save testing settings';
+    throw new Error(message);
+  }
+
+  setTestingSettings((prev) => ({
+    ...prev,
+    ...data.settings
+  }));
 
   return data.settings;
 };
@@ -539,6 +632,41 @@ export const clearProjectGitSettings = async ({ trackedFetch, projectId, setProj
     setGitSettings((prev) => ({
       ...prev,
       ...sanitizeGitSettings(data.globalSettings)
+    }));
+  }
+
+  return data.settings;
+};
+
+export const updateProjectTestingSettings = async ({
+  trackedFetch,
+  projectId,
+  updates = {},
+  setProjectTestingSettings
+}) => {
+  if (!projectId) {
+    throw new Error('projectId is required to update project testing settings');
+  }
+
+  const response = await trackedFetch(`/api/projects/${projectId}/testing-settings`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(updates)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to save project testing settings';
+    throw new Error(message);
+  }
+
+  if (data.settings) {
+    setProjectTestingSettings((prev) => ({
+      ...prev,
+      [projectId]: data.settings
     }));
   }
 

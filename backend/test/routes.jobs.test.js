@@ -3,7 +3,9 @@ import express from 'express';
 import request from 'supertest';
 
 vi.mock('../database.js', () => ({
-  getProject: vi.fn()
+  getProject: vi.fn(),
+  getTestingSettings: vi.fn(),
+  getProjectTestingSettings: vi.fn()
 }));
 
 vi.mock('../services/jobRunner.js', () => ({
@@ -42,6 +44,11 @@ describe('routes/jobs', () => {
     branchWorkflow = await import('../services/branchWorkflow.js');
 
     db.getProject.mockResolvedValue({ id: 123, path: 'C:/tmp/project' });
+    db.getTestingSettings.mockResolvedValue({ coverageTarget: 100 });
+    db.getProjectTestingSettings.mockResolvedValue({
+      frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 },
+      backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+    });
     jobRunner.startJob.mockReturnValue({
       id: 'job-1',
       projectId: 123,

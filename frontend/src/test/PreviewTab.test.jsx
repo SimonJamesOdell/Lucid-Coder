@@ -3953,6 +3953,19 @@ describe('PreviewTab', () => {
     expect(previewRef.current.__testHooks.getIframeKey()).toBe(keyBefore + 1);
   });
 
+  test('hardReloadIframeForTests increments iframe key', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+    act(() => {
+      previewRef.current.__testHooks.hardReloadIframeForTests();
+    });
+
+    expect(previewRef.current.__testHooks.getIframeKey()).toBe(keyBefore + 1);
+  });
+
   test('auto-recovery timeout is cleared after a successful load', async () => {
     vi.useFakeTimers();
     try {

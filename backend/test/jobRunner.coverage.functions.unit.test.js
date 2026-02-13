@@ -257,4 +257,36 @@ describe('jobRunner coverage (functions)', () => {
     expect(runStore.appendRunEvent).toHaveBeenCalled();
     expect(runStore.updateRun).toHaveBeenCalled();
   });
+
+  it('normalizes non-finite coverage thresholds to defaults', async () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.pid = 111;
+
+    spawnMock.mockReturnValue(child);
+
+    const started = jobRunner.startJob({
+      projectId: 6,
+      type: 'frontend:test',
+      command: 'node',
+      args: ['-v'],
+      cwd: 'C:\\tmp',
+      env: {},
+      coverageThresholds: {
+        lines: 'NaN',
+        statements: undefined,
+        functions: null,
+        branches: Infinity
+      }
+    });
+
+    const rawJob = jobRunner.__testing.getRawJob(started.id);
+    expect(rawJob.coverageThresholds).toEqual({
+      lines: 100,
+      statements: 100,
+      functions: 0,
+      branches: 100
+    });
+  });
 });

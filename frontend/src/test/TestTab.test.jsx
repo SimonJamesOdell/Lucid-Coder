@@ -22,6 +22,9 @@ const buildContext = (overrides = {}) => ({
   markTestRunIntent: vi.fn(),
   testRunIntent: { source: 'user', updatedAt: '2024-01-01T00:00:00.000Z' },
   projectProcesses: null,
+  testingSettings: { coverageTarget: 100 },
+  projectTestingSettings: {},
+  updateProjectTestingSettings: vi.fn().mockResolvedValue({}),
   ...overrides
 });
 
@@ -46,6 +49,163 @@ describe('TestTab', () => {
     render(<TestTab project={baseProject} />);
     expect(screen.getByTestId('test-card-frontend:test')).toBeInTheDocument();
     expect(screen.getByTestId('test-card-backend:test')).toBeInTheDocument();
+  });
+
+  test('allows switching a scope from global settings to local slider value', async () => {
+    const updateProjectTestingSettings = vi.fn().mockResolvedValue({});
+    const user = userEvent.setup();
+
+    useAppState.mockReturnValue(buildContext({
+      testingSettings: { coverageTarget: 90 },
+      projectTestingSettings: {
+        [baseProject.id]: {
+          frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 90 },
+          backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 90 }
+        }
+      },
+      updateProjectTestingSettings
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    expect(screen.queryByTestId('scope-coverage-slider-frontend')).toBeNull();
+
+    await user.click(screen.getByTestId('scope-use-global-frontend'));
+
+    expect(updateProjectTestingSettings).toHaveBeenCalledWith(baseProject.id, {
+      frontend: {
+        useGlobal: false,
+        coverageTarget: 90
+      }
+    });
+  });
+
+  test('allows switching a scope from local override back to global settings', async () => {
+    const updateProjectTestingSettings = vi.fn().mockResolvedValue({});
+    const user = userEvent.setup();
+
+    useAppState.mockReturnValue(buildContext({
+      testingSettings: { coverageTarget: 100 },
+      projectTestingSettings: {
+        [baseProject.id]: {
+          frontend: { mode: 'custom', coverageTarget: 80, effectiveCoverageTarget: 80 },
+          backend: { mode: 'custom', coverageTarget: 70, effectiveCoverageTarget: 70 }
+        }
+      },
+      updateProjectTestingSettings
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    expect(screen.getByTestId('scope-coverage-slider-frontend')).toBeInTheDocument();
+    expect(screen.getByTestId('scope-coverage-slider-backend')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('scope-use-global-frontend'));
+
+    expect(updateProjectTestingSettings).toHaveBeenCalledWith(baseProject.id, {
+      frontend: {
+        useGlobal: true
+      }
+    });
+  });
+
+  test('scope slider falls back to global target and surfaces save failures', async () => {
+    const updateProjectTestingSettings = vi.fn().mockRejectedValue(new Error('save failed'));
+
+    useAppState.mockReturnValue(buildContext({
+      testingSettings: { coverageTarget: 90 },
+      projectTestingSettings: {
+        [baseProject.id]: {
+          frontend: { mode: 'custom', coverageTarget: null, effectiveCoverageTarget: 90 },
+          backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 90 }
+        }
+      },
+      updateProjectTestingSettings
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    const slider = screen.getByTestId('scope-coverage-slider-frontend');
+    expect(slider).toHaveValue('90');
+
+    fireEvent.change(slider, { target: { value: '100' } });
+
+    await waitFor(() => {
+      expect(updateProjectTestingSettings).toHaveBeenCalledWith(baseProject.id, {
+        frontend: {
+          useGlobal: false,
+          coverageTarget: 100
+        }
+      });
+    });
+
+    expect(await screen.findByTestId('test-error-banner')).toHaveTextContent('save failed');
+  });
+
+  test('scope setting save fallback error message is shown when rejection has no message', async () => {
+    const updateProjectTestingSettings = vi.fn().mockRejectedValue({});
+    const user = userEvent.setup();
+
+    useAppState.mockReturnValue(buildContext({
+      testingSettings: { coverageTarget: 90 },
+      projectTestingSettings: {
+        [baseProject.id]: {
+          frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 90 },
+          backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 90 }
+        }
+      },
+      updateProjectTestingSettings
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    await user.click(screen.getByTestId('scope-use-global-frontend'));
+
+    expect(await screen.findByTestId('test-error-banner')).toHaveTextContent('Failed to save project testing settings');
+  });
+
+  test('scope setting updates are skipped when project id is missing', async () => {
+    const updateProjectTestingSettings = vi.fn().mockResolvedValue({});
+    const user = userEvent.setup();
+
+    useAppState.mockReturnValue(buildContext({
+      projectTestingSettings: {
+        none: {
+          frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 },
+          backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+        }
+      },
+      updateProjectTestingSettings
+    }));
+
+    render(<TestTab project={{ ...baseProject, id: null }} />);
+
+    await user.click(screen.getByTestId('scope-use-global-frontend'));
+
+    expect(updateProjectTestingSettings).not.toHaveBeenCalled();
+  });
+
+  test('scope coverage handler ignores non-finite values', async () => {
+    const updateProjectTestingSettings = vi.fn().mockResolvedValue({});
+
+    useAppState.mockReturnValue(buildContext({
+      updateProjectTestingSettings,
+      projectTestingSettings: {
+        [baseProject.id]: {
+          frontend: { mode: 'custom', coverageTarget: 90, effectiveCoverageTarget: 90 },
+          backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+        }
+      }
+    }));
+
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    act(() => {
+      hooks.handleScopeCoverageTargetChange('frontend', Number.NaN);
+    });
+
+    expect(updateProjectTestingSettings).not.toHaveBeenCalled();
   });
 
   test('log font size controls adjust the output size', async () => {

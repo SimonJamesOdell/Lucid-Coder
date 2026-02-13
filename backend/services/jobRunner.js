@@ -8,7 +8,7 @@ import { appendRunEvent, createRun, updateRun } from './runStore.js';
 const MAX_LOG_ENTRIES = 500;
 const jobs = new Map();
 
-const COVERAGE_THRESHOLDS = Object.freeze({
+const DEFAULT_COVERAGE_THRESHOLDS = Object.freeze({
   lines: 100,
   statements: 100,
   functions: 100,
@@ -22,6 +22,21 @@ const ANSI_REGEX = /\x1b\[[0-9;]*m/g;
 const COVERAGE_ALL_FILES_REGEX = /^\s*All files\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)\s*\|/i;
 
 const isTestJobType = (type) => typeof type === 'string' && type.endsWith(':test');
+
+const normalizeCoverageThresholds = (thresholds = null) => {
+  const source = thresholds && typeof thresholds === 'object' ? thresholds : DEFAULT_COVERAGE_THRESHOLDS;
+  const normalize = (value, fallback) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  };
+
+  return {
+    lines: normalize(source.lines, DEFAULT_COVERAGE_THRESHOLDS.lines),
+    statements: normalize(source.statements, DEFAULT_COVERAGE_THRESHOLDS.statements),
+    functions: normalize(source.functions, DEFAULT_COVERAGE_THRESHOLDS.functions),
+    branches: normalize(source.branches, DEFAULT_COVERAGE_THRESHOLDS.branches)
+  };
+};
 
 const stripAnsi = (value) => String(value || '').replace(ANSI_REGEX, '');
 
@@ -150,6 +165,8 @@ const evaluateCoverageGate = async (job, { assumeSucceeded = false } = {}) => {
     return;
   }
 
+  const coverageThresholds = normalizeCoverageThresholds(job.coverageThresholds);
+
   let totals = null;
   try {
     totals = await readCoverageTotals(job.cwd);
@@ -169,7 +186,7 @@ const evaluateCoverageGate = async (job, { assumeSucceeded = false } = {}) => {
       coverage: {
         passed: false,
         totals: null,
-        thresholds: { ...COVERAGE_THRESHOLDS },
+        thresholds: coverageThresholds,
         message
       },
       error: message
@@ -179,10 +196,10 @@ const evaluateCoverageGate = async (job, { assumeSucceeded = false } = {}) => {
   }
 
   const passed =
-    totals.lines >= COVERAGE_THRESHOLDS.lines &&
-    totals.statements >= COVERAGE_THRESHOLDS.statements &&
-    totals.functions >= COVERAGE_THRESHOLDS.functions &&
-    totals.branches >= COVERAGE_THRESHOLDS.branches;
+    totals.lines >= coverageThresholds.lines &&
+    totals.statements >= coverageThresholds.statements &&
+    totals.functions >= coverageThresholds.functions &&
+    totals.branches >= coverageThresholds.branches;
 
   const message = passed
     ? 'Coverage gate passed.'
@@ -194,7 +211,7 @@ const evaluateCoverageGate = async (job, { assumeSucceeded = false } = {}) => {
     coverage: {
       passed,
       totals,
-      thresholds: { ...COVERAGE_THRESHOLDS },
+      thresholds: coverageThresholds,
       message
     },
     error: passed ? null : message
@@ -456,7 +473,8 @@ export const startJob = (config) => {
     command,
     args = [],
     cwd,
-    env = {}
+    env = {},
+    coverageThresholds
   } = config;
 
   if (!projectId || !type || !command || !cwd) {
@@ -473,6 +491,7 @@ export const startJob = (config) => {
     args,
     cwd,
     env,
+    coverageThresholds: normalizeCoverageThresholds(coverageThresholds),
     status: JOB_STATUS.PENDING,
     createdAt: now(),
     startedAt: null,

@@ -3,12 +3,14 @@ import express from 'express';
 import request from 'supertest';
 import path from 'path';
 import jobsRoutes, { __testables } from '../routes/jobs.js';
-import { getProject } from '../database.js';
+import { getProject, getTestingSettings, getProjectTestingSettings } from '../database.js';
 import { startJob, listJobsForProject, getJob, cancelJob } from '../services/jobRunner.js';
 import { describeBranchCssOnlyStatus } from '../services/branchWorkflow.js';
 
 vi.mock('../database.js', () => ({
-  getProject: vi.fn()
+  getProject: vi.fn(),
+  getTestingSettings: vi.fn(),
+  getProjectTestingSettings: vi.fn()
 }));
 
 vi.mock('../services/jobRunner.js', () => ({
@@ -89,6 +91,11 @@ describe('Jobs Routes', () => {
     jobCounter = 0;
     configureFsState();
     getProject.mockResolvedValue({ id: 42, path: PROJECT_ROOT });
+    getTestingSettings.mockResolvedValue({ coverageTarget: 100 });
+    getProjectTestingSettings.mockResolvedValue({
+      frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 },
+      backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+    });
     listJobsForProject.mockReturnValue([]);
     getJob.mockReturnValue(null);
     cancelJob.mockImplementation(() => null);
@@ -273,6 +280,83 @@ describe('Jobs Routes', () => {
       displayName: 'Frontend tests',
       args: ['run', 'test:coverage'],
       cwd: FRONTEND_DIR
+    }));
+  });
+
+  it('falls back to default coverage threshold when global setting is non-integer and project settings are missing', async () => {
+    configureFsState({ projectRoot: true, frontendDir: true, frontendPackage: true });
+    getTestingSettings.mockResolvedValueOnce({ coverageTarget: 'not-a-number' });
+    getProjectTestingSettings.mockResolvedValueOnce(null);
+
+    await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'frontend:test' })
+      .expect(202);
+
+    expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
+      coverageThresholds: { lines: 100, statements: 100, functions: 100, branches: 100 }
+    }));
+  });
+
+  it('falls back to default coverage threshold when global setting is out of range', async () => {
+    configureFsState({ projectRoot: true, frontendDir: true, frontendPackage: true });
+    getTestingSettings.mockResolvedValueOnce({ coverageTarget: 120 });
+    getProjectTestingSettings.mockResolvedValueOnce(null);
+
+    await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'frontend:test' })
+      .expect(202);
+
+    expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
+      coverageThresholds: { lines: 100, statements: 100, functions: 100, branches: 100 }
+    }));
+  });
+
+  it('falls back to default coverage threshold when global testing settings lookup fails', async () => {
+    configureFsState({ projectRoot: true, frontendDir: true, frontendPackage: true });
+    getTestingSettings.mockRejectedValueOnce(new Error('settings unavailable'));
+
+    await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'frontend:test' })
+      .expect(202);
+
+    expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
+      coverageThresholds: { lines: 100, statements: 100, functions: 100, branches: 100 }
+    }));
+  });
+
+  it('falls back to global coverage threshold when project testing settings lookup fails', async () => {
+    configureFsState({ projectRoot: true, frontendDir: true, frontendPackage: true });
+    getTestingSettings.mockResolvedValueOnce({ coverageTarget: 80 });
+    getProjectTestingSettings.mockRejectedValueOnce(new Error('project settings unavailable'));
+
+    await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'frontend:test' })
+      .expect(202);
+
+    expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
+      coverageThresholds: { lines: 80, statements: 80, functions: 80, branches: 80 }
+    }));
+  });
+
+  it('falls back to global threshold when custom project thresholds are invalid', async () => {
+    configureFsState({ projectRoot: true, frontendDir: true, frontendPackage: true });
+    getTestingSettings.mockResolvedValueOnce({ coverageTarget: 90 });
+    getProjectTestingSettings.mockResolvedValueOnce({
+      frontend: { mode: 'custom', coverageTarget: 95, effectiveCoverageTarget: 45 },
+      backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 90 }
+    });
+
+    await request(app)
+      .post('/api/projects/42/jobs')
+      .send({ type: 'frontend:test' })
+      .expect(202);
+
+    expect(startJob).toHaveBeenCalledWith(expect.objectContaining({
+      coverageThresholds: { lines: 90, statements: 90, functions: 90, branches: 90 }
     }));
   });
 

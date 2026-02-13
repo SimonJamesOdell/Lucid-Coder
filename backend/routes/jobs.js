@@ -1,12 +1,13 @@
 import express from 'express';
 import path from 'path';
-import { getProject } from '../database.js';
+import { getProject, getTestingSettings, getProjectTestingSettings } from '../database.js';
 import { startJob, listJobsForProject, getJob, cancelJob } from '../services/jobRunner.js';
 import { describeBranchCssOnlyStatus } from '../services/branchWorkflow.js';
 
 const router = express.Router({ mergeParams: true });
 
 const TEST_JOB_TYPES = new Set(['frontend:test', 'backend:test']);
+const DEFAULT_COVERAGE_TARGET = 100;
 
 const pathExists = async (targetPath) => {
   if (!targetPath) {
@@ -41,6 +42,47 @@ const ensureWorkingDir = async (description, cwd) => {
 };
 
 const coercePayloadObject = (payload) => (payload && typeof payload === 'object' ? payload : {});
+
+const normalizeCoverageTarget = (value) => {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric)) {
+    return null;
+  }
+  if (numeric < 50 || numeric > 100) {
+    return null;
+  }
+  if (numeric % 10 !== 0) {
+    return null;
+  }
+  return numeric;
+};
+
+const buildCoverageThresholds = (target) => ({
+  lines: target,
+  statements: target,
+  functions: target,
+  branches: target
+});
+
+const resolveTestingCoverageTarget = async (projectId, workspace) => {
+  const globalSettings = await getTestingSettings().catch(() => null);
+  const globalCoverageTarget = normalizeCoverageTarget(globalSettings?.coverageTarget) || DEFAULT_COVERAGE_TARGET;
+  const projectSettings = await getProjectTestingSettings(projectId).catch(() => null);
+
+  if (!projectSettings) {
+    return globalCoverageTarget;
+  }
+
+  const scope = workspace === 'backend'
+    ? projectSettings.backend
+    : projectSettings.frontend;
+  if (scope?.mode === 'custom') {
+    return normalizeCoverageTarget(scope.coverageTarget)
+      || normalizeCoverageTarget(scope.effectiveCoverageTarget)
+      || globalCoverageTarget;
+  }
+  return globalCoverageTarget;
+};
 
 const requirePackageName = (payload = {}) => {
   const value = typeof payload.packageName === 'string' ? payload.packageName.trim() : '';
@@ -111,12 +153,16 @@ const buildJobDefinition = async (project, type, payload = {}) => {
       if (!hasFrontendPackage) {
         throw Object.assign(new Error('Frontend package.json not found'), { statusCode: 400 });
       }
+      {
+        const coverageTarget = await resolveTestingCoverageTarget(project.id, 'frontend');
       return {
         displayName: 'Frontend tests',
         command: 'npm',
         args: ['run', 'test:coverage'],
-        cwd: await ensureWorkingDir('Frontend workspace', frontendPath)
+        cwd: await ensureWorkingDir('Frontend workspace', frontendPath),
+        coverageThresholds: buildCoverageThresholds(coverageTarget)
       };
+      }
     case 'backend:install':
       if (hasBackendPackage) {
         return {
@@ -152,19 +198,23 @@ const buildJobDefinition = async (project, type, payload = {}) => {
       };
     case 'backend:test':
       if (hasBackendPackage) {
+        const coverageTarget = await resolveTestingCoverageTarget(project.id, 'backend');
         return {
           displayName: 'Backend tests',
           command: 'npm',
           args: ['run', 'test:coverage'],
-          cwd: await ensureWorkingDir('Backend workspace', backendPath)
+          cwd: await ensureWorkingDir('Backend workspace', backendPath),
+          coverageThresholds: buildCoverageThresholds(coverageTarget)
         };
       }
       if (hasBackendRequirements) {
+        const coverageTarget = await resolveTestingCoverageTarget(project.id, 'backend');
         return {
           displayName: 'Backend tests',
           command: 'python',
           args: ['-m', 'pytest'],
-          cwd: await ensureWorkingDir('Backend workspace', backendPath)
+          cwd: await ensureWorkingDir('Backend workspace', backendPath),
+          coverageThresholds: buildCoverageThresholds(coverageTarget)
         };
       }
       throw Object.assign(new Error('Backend test runner not configured'), { statusCode: 400 });

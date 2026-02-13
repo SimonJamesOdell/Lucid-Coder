@@ -2,6 +2,15 @@ import { describe, test, expect, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
+vi.mock('../database.js', () => ({
+  getGitSettings: vi.fn(),
+  saveGitSettings: vi.fn(),
+  getPortSettings: vi.fn(),
+  savePortSettings: vi.fn(),
+  getTestingSettings: vi.fn().mockResolvedValue({ coverageTarget: 100 }),
+  saveTestingSettings: vi.fn()
+}));
+
 const buildTestApp = async () => {
   const { default: settingsRouter } = await import('../routes/settings.js');
   const app = express();

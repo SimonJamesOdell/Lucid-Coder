@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from 'vitest';
 import {
+  fetchGitSettingsFromBackend,
   fetchProjectGitStatus,
   fetchProjectGitRemote,
   pullProjectGitRemote,
@@ -9,7 +10,11 @@ import {
   checkoutProjectBranch,
   updateGitSettings,
   testGitConnection,
-  updateProjectGitSettings
+  updateProjectGitSettings,
+  fetchProjectTestingSettings,
+  updateProjectTestingSettings,
+  fetchTestingSettingsFromBackend,
+  updateTestingSettings
 } from '../context/appState/settings.js';
 
 const buildResponse = (ok, payload) => ({
@@ -18,6 +23,64 @@ const buildResponse = (ok, payload) => ({
 });
 
 describe('settings git helpers', () => {
+  test('fetchGitSettingsFromBackend merges sanitized backend settings into state', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      settings: {
+        workflow: 'cloud',
+        provider: 'gitlab',
+        remoteUrl: 'https://gitlab.com/acme/repo.git',
+        username: 'alice',
+        defaultBranch: 'main',
+        autoPush: true,
+        useCommitTemplate: true,
+        commitTemplate: 'feat: {summary}'
+      }
+    }));
+    const setGitSettings = vi.fn();
+
+    await fetchGitSettingsFromBackend({ trackedFetch, setGitSettings });
+
+    expect(setGitSettings).toHaveBeenCalledTimes(1);
+    const updater = setGitSettings.mock.calls[0][0];
+    const next = updater({ workflow: 'local', provider: 'github', remoteUrl: 'https://old' });
+    expect(next).toMatchObject({
+      workflow: 'cloud',
+      provider: 'gitlab',
+      username: 'alice',
+      defaultBranch: 'main'
+    });
+    expect(Object.prototype.hasOwnProperty.call(next, 'remoteUrl')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(next, 'autoPush')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(next, 'useCommitTemplate')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(next, 'commitTemplate')).toBe(false);
+  });
+
+  test('fetchGitSettingsFromBackend skips state updates when payload has no settings', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, { success: true }));
+    const setGitSettings = vi.fn();
+
+    await fetchGitSettingsFromBackend({ trackedFetch, setGitSettings });
+
+    expect(setGitSettings).not.toHaveBeenCalled();
+  });
+
+  test('fetchGitSettingsFromBackend handles non-ok responses without updating state', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+    const setGitSettings = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await fetchGitSettingsFromBackend({ trackedFetch, setGitSettings });
+
+    expect(setGitSettings).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Failed to load git settings from backend:',
+      expect.any(Error)
+    );
+
+    warnSpy.mockRestore();
+  });
+
   test('fetchProjectGitRemote throws when projectId is missing', async () => {
     await expect(fetchProjectGitRemote({ trackedFetch: () => null })).rejects.toThrow(
       'projectId is required to fetch git remote status'
@@ -363,5 +426,195 @@ describe('settings git helpers', () => {
     });
 
     expect(capturedBody.token).toBe('secret');
+  });
+
+  test('fetchTestingSettingsFromBackend merges backend settings into state', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(true, {
+      success: true,
+      settings: { coverageTarget: 80 }
+    }));
+    const setTestingSettings = vi.fn();
+
+    await fetchTestingSettingsFromBackend({ trackedFetch, setTestingSettings });
+
+    expect(setTestingSettings).toHaveBeenCalledTimes(1);
+    const updater = setTestingSettings.mock.calls[0][0];
+    expect(updater({ coverageTarget: 100 })).toEqual({ coverageTarget: 80 });
+  });
+
+  test('updateTestingSettings sends payload and updates state', async () => {
+    let capturedBody;
+    const trackedFetch = (url, options) => {
+      capturedBody = JSON.parse(options.body);
+      return Promise.resolve(buildResponse(true, {
+        success: true,
+        settings: { coverageTarget: 60 }
+      }));
+    };
+    const setTestingSettings = vi.fn();
+
+    const result = await updateTestingSettings({
+      trackedFetch,
+      testingSettings: { coverageTarget: 100 },
+      setTestingSettings,
+      updates: { coverageTarget: 60 }
+    });
+
+    expect(capturedBody).toEqual({ coverageTarget: 60 });
+    expect(result).toEqual({ coverageTarget: 60 });
+    expect(setTestingSettings).toHaveBeenCalledTimes(1);
+  });
+
+  test('updateTestingSettings falls back to current coverage target when updates omit coverageTarget', async () => {
+    let capturedBody;
+    const trackedFetch = (url, options) => {
+      capturedBody = JSON.parse(options.body);
+      return Promise.resolve(buildResponse(true, {
+        success: true,
+        settings: { coverageTarget: 90 }
+      }));
+    };
+
+    await updateTestingSettings({
+      trackedFetch,
+      testingSettings: { coverageTarget: 90 },
+      setTestingSettings: vi.fn(),
+      updates: {}
+    });
+
+    expect(capturedBody).toEqual({ coverageTarget: 90 });
+  });
+
+  test('updateTestingSettings surfaces fetch errors from request failures', async () => {
+    const trackedFetch = () => Promise.reject(new Error('Network offline'));
+
+    await expect(updateTestingSettings({
+      trackedFetch,
+      testingSettings: { coverageTarget: 100 },
+      setTestingSettings: vi.fn(),
+      updates: { coverageTarget: 80 }
+    })).rejects.toThrow('Network offline');
+  });
+
+  test('updateTestingSettings throws default error when response body is not valid JSON', async () => {
+    const trackedFetch = () => Promise.resolve({
+      ok: true,
+      json: () => Promise.reject(new Error('invalid json'))
+    });
+
+    await expect(updateTestingSettings({
+      trackedFetch,
+      testingSettings: { coverageTarget: 100 },
+      setTestingSettings: vi.fn(),
+      updates: { coverageTarget: 80 }
+    })).rejects.toThrow('Failed to save testing settings');
+  });
+
+  test('updateTestingSettings falls back to default error when backend omits details', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+
+    await expect(updateTestingSettings({
+      trackedFetch,
+      testingSettings: { coverageTarget: 100 },
+      setTestingSettings: vi.fn(),
+      updates: { coverageTarget: 90 }
+    })).rejects.toThrow('Failed to save testing settings');
+  });
+
+  test('fetchProjectTestingSettings returns null when projectId is missing', async () => {
+    const trackedFetch = vi.fn();
+    const setProjectTestingSettings = vi.fn();
+
+    const result = await fetchProjectTestingSettings({
+      projectId: null,
+      trackedFetch,
+      setProjectTestingSettings
+    });
+
+    expect(result).toBeNull();
+    expect(trackedFetch).not.toHaveBeenCalled();
+    expect(setProjectTestingSettings).not.toHaveBeenCalled();
+  });
+
+  test('fetchProjectTestingSettings returns null when backend responds non-ok', async () => {
+    const trackedFetch = () => Promise.resolve(buildResponse(false, { success: false }));
+    const setProjectTestingSettings = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await fetchProjectTestingSettings({
+      projectId: 'proj-test',
+      trackedFetch,
+      setProjectTestingSettings
+    });
+
+    expect(result).toBeNull();
+    expect(setProjectTestingSettings).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Failed to load project testing settings:',
+      expect.any(Error)
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  test('updateProjectTestingSettings validates projectId', async () => {
+    await expect(updateProjectTestingSettings({
+      trackedFetch: vi.fn(),
+      projectId: '',
+      updates: {},
+      setProjectTestingSettings: vi.fn()
+    })).rejects.toThrow('projectId is required to update project testing settings');
+  });
+
+  test('updateProjectTestingSettings throws backend error and uses fallback when omitted', async () => {
+    const withMessage = () => Promise.resolve(buildResponse(false, { success: false, error: 'cannot save test overrides' }));
+    await expect(updateProjectTestingSettings({
+      trackedFetch: withMessage,
+      projectId: 'proj-a',
+      updates: { frontendMode: 'custom' },
+      setProjectTestingSettings: vi.fn()
+    })).rejects.toThrow('cannot save test overrides');
+
+    const withoutMessage = () => Promise.resolve(buildResponse(false, { success: false }));
+    await expect(updateProjectTestingSettings({
+      trackedFetch: withoutMessage,
+      projectId: 'proj-b',
+      updates: { backendMode: 'global' },
+      setProjectTestingSettings: vi.fn()
+    })).rejects.toThrow('Failed to save project testing settings');
+  });
+
+  test('updateProjectTestingSettings returns settings and updates local state when provided', async () => {
+    const setProjectTestingSettings = vi.fn();
+    const settings = {
+      frontend: { mode: 'custom', coverageTarget: 80, effectiveCoverageTarget: 80 },
+      backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+    };
+
+    const result = await updateProjectTestingSettings({
+      trackedFetch: () => Promise.resolve(buildResponse(true, { success: true, settings })),
+      projectId: 'proj-c',
+      updates: { frontendMode: 'custom', frontendCoverageTarget: 80 },
+      setProjectTestingSettings
+    });
+
+    expect(result).toEqual(settings);
+    expect(setProjectTestingSettings).toHaveBeenCalledTimes(1);
+    const updater = setProjectTestingSettings.mock.calls[0][0];
+    expect(updater({})).toEqual({ 'proj-c': settings });
+  });
+
+  test('updateProjectTestingSettings returns undefined and skips local state update when settings omitted', async () => {
+    const setProjectTestingSettings = vi.fn();
+
+    const result = await updateProjectTestingSettings({
+      trackedFetch: () => Promise.resolve(buildResponse(true, { success: true })),
+      projectId: 'proj-d',
+      updates: {},
+      setProjectTestingSettings
+    });
+
+    expect(result).toBeUndefined();
+    expect(setProjectTestingSettings).not.toHaveBeenCalled();
   });
 });

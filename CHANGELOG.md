@@ -1,5 +1,11 @@
+## 0.6.3 (2026-02-13)
+- Add persisted testing coverage settings end-to-end (database table + settings routes + frontend app-state wiring), including global and per-project threshold derivation for frontend/backend test jobs.
+- Add a new Settings → Configure Testing modal and navigation entry, including slider-based threshold controls, save/cancel behavior, and local persistence hydration.
+- Harden branch-workflow threshold handling and tests API behavior for workspace-specific coverage targets, custom/global mode fallbacks, and defensive error paths.
+- Expand jobs and project route coverage for testing-settings edge cases (missing/invalid payloads, fallback reads, and rejected settings lookups) to keep policy-driven test thresholds deterministic.
+- Refine PreviewTab/TestTab and related app-state flows with additional guard-path handling and comprehensive coverage tests across navigation, persistence, and settings reducers.
+
 ## 0.6.2 (2026-02-13)
-- Bump version metadata and lockfiles for the 0.6.2 release across root, frontend, backend, shared version helpers, and docs.
 - Refine PreviewTab error/empty-state behavior and environment guards to keep runtime behavior consistent while preserving strict coverage expectations.
 - Expand PreviewTab tests for URL/origin resolution, modal lifecycle cleanup, reload fallbacks, and not-running/error-path handling.
 - Add focused process manager coverage for reserved-port cleanup behavior.

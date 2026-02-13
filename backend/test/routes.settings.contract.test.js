@@ -6,7 +6,8 @@ const dbMocks = vi.hoisted(() => ({
   getGitSettings: vi.fn(),
   saveGitSettings: vi.fn(),
   getPortSettings: vi.fn(),
-  savePortSettings: vi.fn()
+  savePortSettings: vi.fn(),
+  getTestingSettings: vi.fn().mockResolvedValue({ coverageTarget: 100 })
 }));
 
 vi.mock('../database.js', () => ({

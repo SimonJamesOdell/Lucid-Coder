@@ -5,6 +5,7 @@ import sunIcon from '../assets/icon-theme-sun.svg';
 import moonIcon from '../assets/icon-theme-moon.svg';
 import GitSettingsModal from './GitSettingsModal';
 import PortSettingsModal from './PortSettingsModal';
+import TestingSettingsModal from './TestingSettingsModal';
 import LLMConfigModal from './LLMConfigModal';
 import CleanUpToolModal from './CleanUpToolModal';
 import RefactorToolModal from './RefactorToolModal';
@@ -34,10 +35,13 @@ const Navigation = ({ versionLabel = null }) => {
     registerGitConnectionStatus,
     portSettings,
     updatePortSettings,
+    testingSettings,
+    updateTestingSettings,
     projectShutdownState
   } = useAppState();
   const [isGitSettingsOpen, setGitSettingsOpen] = useState(false);
   const [isPortSettingsOpen, setPortSettingsOpen] = useState(false);
+  const [isTestingSettingsOpen, setTestingSettingsOpen] = useState(false);
   const [isLLMConfigOpen, setLLMConfigOpen] = useState(false);
   const [isCleanUpToolOpen, setCleanUpToolOpen] = useState(false);
   const [isRefactorToolOpen, setRefactorToolOpen] = useState(false);
@@ -75,6 +79,10 @@ const Navigation = ({ versionLabel = null }) => {
     setGitSettingsOpen(true);
   };
 
+  const handleOpenTestingSettings = () => {
+    setTestingSettingsOpen(true);
+  };
+
   useEffect(() => {
     const handleOpenGitSettingsEvent = () => setGitSettingsOpen(true);
     window.addEventListener('lucidcoder:open-git-settings', handleOpenGitSettingsEvent);
@@ -93,6 +101,10 @@ const Navigation = ({ versionLabel = null }) => {
 
   const handleClosePortSettings = () => {
     setPortSettingsOpen(false);
+  };
+
+  const handleCloseTestingSettings = () => {
+    setTestingSettingsOpen(false);
   };
 
   const handleSaveGitSettings = async (nextSettings, options) => {
@@ -126,6 +138,16 @@ const Navigation = ({ versionLabel = null }) => {
     } catch (error) {
       console.error('Failed to update port settings', error);
       alert(error?.message || 'Failed to update port settings. Please try again.');
+    }
+  };
+
+  const handleSaveTestingSettings = async (nextSettings) => {
+    try {
+      await updateTestingSettings(nextSettings);
+      setTestingSettingsOpen(false);
+    } catch (error) {
+      console.error('Failed to update testing settings', error);
+      alert(error?.message || 'Failed to update testing settings. Please try again.');
     }
   };
 
@@ -205,6 +227,10 @@ const Navigation = ({ versionLabel = null }) => {
           
           <DropdownItem onClick={handleOpenPortSettings}>
             Ports
+          </DropdownItem>
+
+          <DropdownItem onClick={handleOpenTestingSettings}>
+            Configure Testing
           </DropdownItem>
         </Dropdown>
 
@@ -306,6 +332,13 @@ const Navigation = ({ versionLabel = null }) => {
         onClose={handleClosePortSettings}
         onSave={handleSavePortSettings}
         settings={portSettings}
+      />
+
+      <TestingSettingsModal
+        isOpen={isTestingSettingsOpen}
+        onClose={handleCloseTestingSettings}
+        onSave={handleSaveTestingSettings}
+        settings={testingSettings}
       />
 
       <LLMConfigModal isOpen={isLLMConfigOpen} onClose={handleCloseLLMConfig} />

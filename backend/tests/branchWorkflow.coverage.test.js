@@ -103,7 +103,13 @@ const runScenario = async ({ fsMock, jobRunnerMock, gitMock, testBody }) => {
 
   const branchWorkflow = await import('../services/branchWorkflow.js');
   const databaseModule = await import('../database.js');
-  const { default: dbInstance, initializeDatabase, createProject } = databaseModule;
+  const {
+    default: dbInstance,
+    initializeDatabase,
+    createProject,
+    saveTestingSettings,
+    saveProjectTestingSettings
+  } = databaseModule;
 
   const exec = (sql, params = []) => new Promise((resolve, reject) => {
     dbInstance.run(sql, params, (err) => {
@@ -121,7 +127,7 @@ const runScenario = async ({ fsMock, jobRunnerMock, gitMock, testBody }) => {
     await exec('DELETE FROM branches');
     await exec('DELETE FROM projects');
 
-    await testBody({ branchWorkflow, createProject });
+    await testBody({ branchWorkflow, createProject, saveTestingSettings, saveProjectTestingSettings });
   } finally {
     vi.resetModules();
   }
@@ -1096,6 +1102,64 @@ describe('branchWorkflow.js coverage (runTestsForBranch workspace collection)', 
           functions: 80,
           branches: 85
         });
+
+        branchWorkflow.__testing.setGitContextOverride(project.id, null);
+      }
+    });
+  });
+
+  it('uses project testing overrides per workspace when evaluating branch coverage gates', async () => {
+    const projectRoot = `C:/tmp/branchworkflow-workspace-threshold-overrides-${Date.now()}`;
+    const frontendPkg = `${projectRoot}/frontend/package.json`;
+    const backendPkg = `${projectRoot}/backend/package.json`;
+    const frontendSummary = `${projectRoot}/frontend/coverage/coverage-summary.json`;
+    const backendSummary = `${projectRoot}/backend/coverage/coverage-summary.json`;
+
+    const fsMock = makeFsMock({
+      accessible: [frontendPkg, backendPkg],
+      files: {
+        [frontendPkg]: JSON.stringify({ scripts: { 'test:coverage': 'echo ok' } }),
+        [backendPkg]: JSON.stringify({ scripts: { 'test:coverage': 'echo ok' } }),
+        [frontendSummary]: coverageSummaryJson(95),
+        [backendSummary]: coverageSummaryJson(85)
+      }
+    });
+
+    const jobRunnerMock = makeJobRunnerMock();
+
+    await runScenario({
+      fsMock,
+      jobRunnerMock,
+      testBody: async ({ branchWorkflow, createProject, saveTestingSettings, saveProjectTestingSettings }) => {
+        const project = await createProject({
+          name: `BranchWorkflow Workspace Threshold Overrides ${Date.now()}`,
+          description: 'Uses per-workspace coverage targets from project testing settings',
+          language: 'javascript',
+          framework: 'react',
+          path: projectRoot
+        });
+
+        await saveTestingSettings({ coverageTarget: 100 });
+        await saveProjectTestingSettings(project.id, {
+          frontendMode: 'custom',
+          frontendCoverageTarget: 90,
+          backendMode: 'custom',
+          backendCoverageTarget: 80
+        });
+
+        branchWorkflow.__testing.setGitContextOverride(project.id, projectRoot);
+
+        const result = await branchWorkflow.runTestsForBranch(project.id, null, { real: true });
+
+        expect(result.status).toBe('passed');
+        expect(result.summary?.coverage?.workspaceThresholds).toMatchObject({
+          frontend: { lines: 90, statements: 90, functions: 90, branches: 90 },
+          backend: { lines: 80, statements: 80, functions: 80, branches: 80 }
+        });
+
+        const workspaceRuns = result.summary?.coverage?.workspaceRuns || [];
+        expect(workspaceRuns.find((entry) => entry.workspace === 'frontend')?.passed).toBe(true);
+        expect(workspaceRuns.find((entry) => entry.workspace === 'backend')?.passed).toBe(true);
 
         branchWorkflow.__testing.setGitContextOverride(project.id, null);
       }

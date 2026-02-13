@@ -3,8 +3,12 @@ import {
   loadGitSettingsFromStorage,
   loadProjectGitSettingsFromStorage,
   loadGitConnectionStatusFromStorage,
+  loadTestingSettingsFromStorage,
+  loadProjectTestingSettingsFromStorage,
   defaultGitSettings,
-  defaultGitConnectionStatus
+  defaultGitConnectionStatus,
+  defaultTestingSettings,
+  defaultProjectTestingSettings
 } from '../context/appState/persistence.js';
 
 describe('persistence helpers', () => {
@@ -112,5 +116,83 @@ describe('persistence helpers', () => {
     localStorage.setItem('projectGitSettings', JSON.stringify('nope'));
     const loaded = loadProjectGitSettingsFromStorage();
     expect(loaded).toEqual({});
+  });
+
+  test('loadTestingSettingsFromStorage returns defaults when missing or invalid', () => {
+    expect(loadTestingSettingsFromStorage()).toEqual(defaultTestingSettings);
+
+    localStorage.setItem('testingSettings', '{not-json');
+    expect(loadTestingSettingsFromStorage()).toEqual(defaultTestingSettings);
+  });
+
+  test('loadTestingSettingsFromStorage merges stored values', () => {
+    localStorage.setItem('testingSettings', JSON.stringify({ coverageTarget: 70 }));
+
+    expect(loadTestingSettingsFromStorage()).toEqual({ coverageTarget: 70 });
+  });
+
+  test('loadTestingSettingsFromStorage returns defaults when window is undefined', () => {
+    const originalWindow = global.window;
+    global.window = undefined;
+
+    expect(loadTestingSettingsFromStorage()).toEqual(defaultTestingSettings);
+
+    global.window = originalWindow;
+  });
+
+  test('loadProjectTestingSettingsFromStorage returns defaults when window is undefined', () => {
+    const originalWindow = global.window;
+    global.window = undefined;
+
+    expect(loadProjectTestingSettingsFromStorage()).toEqual(defaultProjectTestingSettings);
+
+    global.window = originalWindow;
+  });
+
+  test('loadProjectTestingSettingsFromStorage returns defaults for missing, invalid, and non-object payloads', () => {
+    expect(loadProjectTestingSettingsFromStorage()).toEqual(defaultProjectTestingSettings);
+
+    localStorage.setItem('projectTestingSettings', '{not-json');
+    expect(loadProjectTestingSettingsFromStorage()).toEqual(defaultProjectTestingSettings);
+
+    localStorage.setItem('projectTestingSettings', JSON.stringify('nope'));
+    expect(loadProjectTestingSettingsFromStorage()).toEqual(defaultProjectTestingSettings);
+  });
+
+  test('loadProjectTestingSettingsFromStorage sanitizes project scope entries', () => {
+    localStorage.setItem('projectTestingSettings', JSON.stringify({
+      'proj-1': {
+        frontend: {
+          mode: 'custom',
+          coverageTarget: 90,
+          effectiveCoverageTarget: 90
+        },
+        backend: {
+          mode: 'global',
+          coverageTarget: 70,
+          effectiveCoverageTarget: 80
+        }
+      },
+      'proj-2': {
+        frontend: {
+          mode: 'other-mode',
+          coverageTarget: 75,
+          effectiveCoverageTarget: 'not-a-number'
+        },
+        backend: null
+      },
+      'proj-3': null
+    }));
+
+    expect(loadProjectTestingSettingsFromStorage()).toEqual({
+      'proj-1': {
+        frontend: { mode: 'custom', coverageTarget: 90, effectiveCoverageTarget: 90 },
+        backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 80 }
+      },
+      'proj-2': {
+        frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 },
+        backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+      }
+    });
   });
 });

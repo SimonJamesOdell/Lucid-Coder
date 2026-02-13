@@ -21,6 +21,10 @@ import {
   getGitSettings,
   savePortSettings,
   getPortSettings,
+  saveTestingSettings,
+  getTestingSettings,
+  saveProjectTestingSettings,
+  getProjectTestingSettings,
   saveProjectGitSettings,
   getProjectGitSettings,
   deleteProjectGitSettings,
@@ -76,6 +80,8 @@ describe('Database Tests', () => {
     'project_git_settings',
     'git_settings',
     'port_settings',
+    'testing_settings',
+    'project_testing_settings',
     'test_runs',
     'branches',
     'api_logs',
@@ -1029,6 +1035,176 @@ describe('Database Tests', () => {
       expect(settings.frontendPortBase).toBe(5100);
       expect(settings.backendPortBase).toBe(5500);
       expect(settings.isCustomized).toBe(true);
+    });
+  });
+
+  describe('Testing Settings', () => {
+    test('should return defaults when no testing settings exist', async () => {
+      const settings = await getTestingSettings();
+
+      expect(settings.coverageTarget).toBe(100);
+    });
+
+    test('should clamp and persist testing coverage target', async () => {
+      const saved = await saveTestingSettings({ coverageTarget: 70 });
+      expect(saved.coverageTarget).toBe(70);
+
+      const stored = await getTestingSettings();
+      expect(stored.coverageTarget).toBe(70);
+    });
+
+    test('should normalize invalid testing coverage target to default', async () => {
+      const saved = await saveTestingSettings({ coverageTarget: 5 });
+      expect(saved.coverageTarget).toBe(50);
+    });
+
+    test('should use default testing coverage target when input is not an integer', async () => {
+      const saved = await saveTestingSettings({ coverageTarget: 'not-a-number' });
+      expect(saved.coverageTarget).toBe(100);
+    });
+
+    test('should fall back to default when persisted testing coverage target is not an integer', async () => {
+      await runSql('DELETE FROM testing_settings');
+      await runSql(`
+        INSERT INTO testing_settings (id, coverage_target, created_at, updated_at)
+        VALUES (1, 'invalid', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `);
+
+      const settings = await getTestingSettings();
+      expect(settings.coverageTarget).toBe(100);
+    });
+  });
+
+  describe('Project Testing Settings', () => {
+    test('getProjectTestingSettings returns null when project id is missing', async () => {
+      const settings = await getProjectTestingSettings();
+      expect(settings).toBeNull();
+    });
+
+    test('saveProjectTestingSettings requires a project id', async () => {
+      await expect(saveProjectTestingSettings(undefined, {})).rejects.toThrow(/projectid is required/i);
+    });
+
+    test('saveProjectTestingSettings falls back to default global target when global settings are unavailable', async () => {
+      const project = await createProject(makeProject('project-testing-missing-global-settings-save'));
+      const settingsSpy = vi.spyOn(db_operations, 'getTestingSettings').mockResolvedValueOnce(null);
+
+      const saved = await saveProjectTestingSettings(project.id, {
+        frontendMode: 'custom',
+        frontendCoverageTarget: null
+      });
+
+      expect(saved.frontend.mode).toBe('custom');
+      expect(saved.frontend.coverageTarget).toBe(100);
+      expect(saved.frontend.effectiveCoverageTarget).toBe(100);
+      settingsSpy.mockRestore();
+    });
+
+    test('saveProjectTestingSettings normalizes invalid coverage targets to global fallback', async () => {
+      const project = await createProject(makeProject('project-testing-invalid-targets'));
+
+      const savedNonInteger = await saveProjectTestingSettings(project.id, {
+        frontendMode: 'custom',
+        frontendCoverageTarget: 'not-a-number'
+      });
+      expect(savedNonInteger.frontend.coverageTarget).toBe(100);
+
+      const savedOutOfRange = await saveProjectTestingSettings(project.id, {
+        frontendMode: 'custom',
+        frontendCoverageTarget: 120
+      });
+      expect(savedOutOfRange.frontend.coverageTarget).toBe(100);
+
+      const savedWrongStep = await saveProjectTestingSettings(project.id, {
+        frontendMode: 'custom',
+        frontendCoverageTarget: 95
+      });
+      expect(savedWrongStep.frontend.coverageTarget).toBe(100);
+    });
+
+    test('saveProjectTestingSettings reuses existing values for omitted fields', async () => {
+      const project = await createProject(makeProject('project-testing-omitted-fields'));
+
+      await saveProjectTestingSettings(project.id, {
+        frontendMode: 'custom',
+        frontendCoverageTarget: 80,
+        backendMode: 'custom',
+        backendCoverageTarget: 70
+      });
+
+      const saved = await saveProjectTestingSettings(project.id, {
+        frontendMode: 'global'
+      });
+
+      expect(saved.frontend.mode).toBe('global');
+      expect(saved.frontend.coverageTarget).toBeNull();
+      expect(saved.backend.mode).toBe('custom');
+      expect(saved.backend.coverageTarget).toBe(70);
+      expect(saved.backend.effectiveCoverageTarget).toBe(70);
+    });
+
+    test('saveProjectTestingSettings falls back to default global target and tolerates missing row after save', async () => {
+      const project = await createProject(makeProject('project-testing-row-missing-after-save'));
+
+      await runSql('DELETE FROM testing_settings');
+      await runSql(`
+        INSERT INTO testing_settings (id, coverage_target, created_at, updated_at)
+        VALUES (1, 'invalid', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `);
+
+      await execSql(`
+        CREATE TRIGGER IF NOT EXISTS project_testing_settings_delete_after_insert
+        AFTER INSERT ON project_testing_settings
+        BEGIN
+          DELETE FROM project_testing_settings WHERE project_id = NEW.project_id;
+        END;
+      `);
+
+      const saved = await saveProjectTestingSettings(project.id, {
+        backendMode: 'custom',
+        backendCoverageTarget: 'invalid-target'
+      });
+
+      expect(saved.frontend.mode).toBe('global');
+      expect(saved.frontend.coverageTarget).toBeNull();
+      expect(saved.frontend.effectiveCoverageTarget).toBe(100);
+      expect(saved.backend.mode).toBe('global');
+      expect(saved.backend.coverageTarget).toBeNull();
+      expect(saved.backend.effectiveCoverageTarget).toBe(100);
+
+      await execSql('DROP TRIGGER IF EXISTS project_testing_settings_delete_after_insert');
+    });
+
+    test('getProjectTestingSettings falls back to default global target when global setting is invalid', async () => {
+      const project = await createProject(makeProject('project-testing-invalid-global-target'));
+
+      await runSql('DELETE FROM testing_settings');
+      await runSql(`
+        INSERT INTO testing_settings (id, coverage_target, created_at, updated_at)
+        VALUES (1, 'invalid', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `);
+
+      const settings = await getProjectTestingSettings(project.id);
+      expect(settings.frontend.mode).toBe('global');
+      expect(settings.frontend.coverageTarget).toBeNull();
+      expect(settings.frontend.effectiveCoverageTarget).toBe(100);
+      expect(settings.backend.mode).toBe('global');
+      expect(settings.backend.coverageTarget).toBeNull();
+      expect(settings.backend.effectiveCoverageTarget).toBe(100);
+    });
+
+    test('getProjectTestingSettings falls back to default global target when global settings are unavailable', async () => {
+      const project = await createProject(makeProject('project-testing-missing-global-settings-get'));
+      const settingsSpy = vi.spyOn(db_operations, 'getTestingSettings').mockResolvedValueOnce(null);
+
+      const settings = await getProjectTestingSettings(project.id);
+      expect(settings.frontend.mode).toBe('global');
+      expect(settings.frontend.coverageTarget).toBeNull();
+      expect(settings.frontend.effectiveCoverageTarget).toBe(100);
+      expect(settings.backend.mode).toBe('global');
+      expect(settings.backend.coverageTarget).toBeNull();
+      expect(settings.backend.effectiveCoverageTarget).toBe(100);
+      settingsSpy.mockRestore();
     });
   });
 
