@@ -20,6 +20,8 @@ export const createBranchWorkflowTests = (core) => {
     listBranchChangedPaths,
     parseStagedFiles,
     resolveCoveragePolicy,
+    getTestingSettings,
+    getProjectTestingSettings,
     runProjectGit,
     run,
     get,
@@ -33,6 +35,88 @@ export const createBranchWorkflowTests = (core) => {
     fs,
     path
   } = core;
+
+  const normalizeCoverageTarget = (value) => {
+    const numeric = Number(value);
+    if (!Number.isInteger(numeric)) {
+      return null;
+    }
+    if (numeric < 50 || numeric > 100) {
+      return null;
+    }
+    if (numeric % 10 !== 0) {
+      return null;
+    }
+    return numeric;
+  };
+
+  const buildCoverageThresholds = (target) => ({
+    lines: target,
+    statements: target,
+    functions: target,
+    branches: target
+  });
+
+  const resolveWorkspaceThresholdConfig = async (projectId, options = {}) => {
+    const globalSettings = typeof getTestingSettings === 'function'
+      ? await getTestingSettings().catch(() => null)
+      : null;
+    const globalTarget = normalizeCoverageTarget(globalSettings?.coverageTarget) || 100;
+    const globalThresholds = buildCoverageThresholds(globalTarget);
+
+    const requestedCoverageThresholds = options?.coverageThresholds;
+    const requestedChangedFileThresholds = options?.changedFileCoverageThresholds;
+    const policy = resolveCoveragePolicy({
+      ...options,
+      enforceFullCoverage: false,
+      coverageThresholds: requestedCoverageThresholds || globalThresholds,
+      changedFileCoverageThresholds: requestedChangedFileThresholds || globalThresholds
+    });
+
+    const projectSettings = typeof getProjectTestingSettings === 'function'
+      ? await getProjectTestingSettings(projectId).catch(() => null)
+      : null;
+
+    const resolveScopeTarget = (scope) => {
+      const normalizedMode = scope?.mode === 'custom' ? 'custom' : 'global';
+      if (normalizedMode !== 'custom') {
+        return globalTarget;
+      }
+      return normalizeCoverageTarget(scope?.coverageTarget)
+        || normalizeCoverageTarget(scope?.effectiveCoverageTarget)
+        || globalTarget;
+    };
+
+    const frontendTarget = resolveScopeTarget(projectSettings?.frontend);
+    const backendTarget = resolveScopeTarget(projectSettings?.backend);
+
+    const resolveWorkspaceThresholds = (workspaceName) => {
+      if (requestedCoverageThresholds) {
+        return policy.globalThresholds;
+      }
+      if (workspaceName === 'frontend') {
+        return buildCoverageThresholds(frontendTarget);
+      }
+      if (workspaceName === 'backend') {
+        return buildCoverageThresholds(backendTarget);
+      }
+      return policy.globalThresholds;
+    };
+
+    const resolveChangedFileThresholds = (workspaceName) => {
+      if (requestedChangedFileThresholds) {
+        return policy.changedFileThresholds;
+      }
+      return resolveWorkspaceThresholds(workspaceName);
+    };
+
+    return {
+      defaultThresholds: policy.globalThresholds,
+      enforceChangedFileCoverage: policy.enforceChangedFileCoverage,
+      resolveWorkspaceThresholds,
+      resolveChangedFileThresholds
+    };
+  };
 
   const cancelScheduledAutoTests = (projectId, branchName) => {
     const key = autoTestKey(projectId, branchName);
@@ -231,7 +315,12 @@ export const createBranchWorkflowTests = (core) => {
         throw withStatusCode(new Error('Test runner not configured (no package.json or requirements.txt found)'), 400);
       }
 
-      const { globalThresholds: thresholds, changedFileThresholds, enforceChangedFileCoverage } = resolveCoveragePolicy(options);
+      const {
+        defaultThresholds: thresholds,
+        enforceChangedFileCoverage,
+        resolveWorkspaceThresholds,
+        resolveChangedFileThresholds
+      } = await resolveWorkspaceThresholdConfig(projectId, options);
       const includeCoverageLineRefs = options.includeCoverageLineRefs === true;
       const changedPaths = await resolveChangedPaths({
         options,
@@ -253,6 +342,8 @@ export const createBranchWorkflowTests = (core) => {
       const uncoveredLines = [];
 
       for (const workspace of selectedWorkspaces) {
+        const workspaceThresholds = resolveWorkspaceThresholds(workspace.name);
+        const workspaceChangedFileThresholds = resolveChangedFileThresholds(workspace.name);
         const startedAt = Date.now();
         let coverageJob;
         let coverageSummary = null;
@@ -308,7 +399,7 @@ export const createBranchWorkflowTests = (core) => {
               workspaceName: workspace.name,
               workspaceCoverageSummary: coverageSummaryJson,
               changedPaths,
-              changedFileThresholds,
+              changedFileThresholds: workspaceChangedFileThresholds,
               enforceChangedFileCoverage,
               nodeWorkspaceNames
             })
@@ -332,7 +423,8 @@ export const createBranchWorkflowTests = (core) => {
           exitCode: coverageJob?.exitCode ?? null,
           durationMs,
           logs: combinedLogs,
-          coverage: coverageSummary
+          coverage: coverageSummary,
+          coverageThresholds: workspaceThresholds
         });
 
         if (coverageSummary && coverageSummary.lines != null) {
@@ -349,11 +441,35 @@ export const createBranchWorkflowTests = (core) => {
         missing: [],
         totals: null,
         changedFiles: null,
+        workspaceThresholds: {},
         uncoveredLines: uncoveredLines.length ? uncoveredLines : null
       };
 
       const scoredRuns = workspaceRuns.filter((run) => run.coverage && run.coverage.lines != null);
       if (scoredRuns.length) {
+        const perWorkspaceEvaluations = scoredRuns.map((run) => {
+          /* v8 ignore next -- defensive fallback: coverageThresholds is always populated when workspaceRuns are built */
+          const runThresholds = run.coverageThresholds || thresholds;
+          const totals = {
+            lines: Number(run.coverage.lines),
+            statements: Number(run.coverage.statements),
+            functions: Number(run.coverage.functions),
+            branches: Number(run.coverage.branches)
+          };
+          const passed =
+            totals.lines >= runThresholds.lines &&
+            totals.statements >= runThresholds.statements &&
+            totals.functions >= runThresholds.functions &&
+            totals.branches >= runThresholds.branches;
+
+          return {
+            workspace: run.workspace,
+            passed,
+            totals,
+            thresholds: runThresholds
+          };
+        });
+
         const totals = {
           lines: Math.min(...scoredRuns.map((run) => Number(run.coverage.lines))),
           statements: Math.min(...scoredRuns.map((run) => Number(run.coverage.statements))),
@@ -361,11 +477,14 @@ export const createBranchWorkflowTests = (core) => {
           branches: Math.min(...scoredRuns.map((run) => Number(run.coverage.branches)))
         };
         coverageGate.totals = totals;
-        coverageGate.passed =
-          totals.lines >= thresholds.lines &&
-          totals.statements >= thresholds.statements &&
-          totals.functions >= thresholds.functions &&
-          totals.branches >= thresholds.branches;
+        coverageGate.workspaceThresholds = Object.fromEntries(
+          scoredRuns.map((run) => {
+            /* v8 ignore next -- defensive fallback: coverageThresholds is always populated when workspaceRuns are built */
+            return [run.workspace, run.coverageThresholds || thresholds];
+          })
+        );
+        coverageGate.workspaceRuns = perWorkspaceEvaluations;
+        coverageGate.passed = perWorkspaceEvaluations.every((run) => run.passed);
 
         const anyApplicable = changedFilesGates.some((gate) => gate && gate.skipped !== true);
         const totalsForChanged = changedFilesGates
@@ -373,7 +492,7 @@ export const createBranchWorkflowTests = (core) => {
           .filter(Boolean);
 
         coverageGate.changedFiles = {
-          thresholds: changedFileThresholds,
+          thresholds: null,
           passed: !anyApplicable || changedFilesGates.every((gate) => gate?.passed !== false),
           missing: changedFilesGates.flatMap((gate) => gate.missing),
           totals: totalsForChanged.length

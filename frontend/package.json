@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:run": "vitest run",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --reporter=verbose --coverage",
+    "test:coverage:html": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

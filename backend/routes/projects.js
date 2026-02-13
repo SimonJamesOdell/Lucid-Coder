@@ -56,6 +56,7 @@ import { getFsModule, attachTestErrorDetails, buildProjectUpdatePayload, require
 import { registerProjectFileRoutes } from './projects/routes.files.js';
 import { registerProjectGitRoutes } from './projects/routes.git.js';
 import { registerProjectProcessRoutes } from './projects/routes.processes.js';
+import { registerProjectTestingRoutes } from './projects/routes.testing.js';
 
 const router = express.Router();
 
@@ -384,6 +385,7 @@ const cleanupExistingImportTarget = async (targetPath) => {
 registerProjectProcessRoutes(router);
 registerProjectFileRoutes(router);
 registerProjectGitRoutes(router);
+registerProjectTestingRoutes(router);
 
 // POST /api/projects/validate-local-path - Validate local import path
 router.post('/validate-local-path', async (req, res) => {

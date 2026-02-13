@@ -18,6 +18,8 @@ const defaultTestingSettings = {
   coverageTarget: 100
 };
 
+const defaultProjectTestingSettings = {};
+
 const MIN_ASSISTANT_PANEL_WIDTH = 240;
 const DEFAULT_ASSISTANT_PANEL_WIDTH = 320;
 
@@ -238,10 +240,71 @@ const loadTestingSettingsFromStorage = () => {
   }
 };
 
+const sanitizeProjectTestingSettingsEntry = (entry) => {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const normalizeScope = (scope) => {
+    if (!scope || typeof scope !== 'object') {
+      return {
+        mode: 'global',
+        coverageTarget: null,
+        effectiveCoverageTarget: defaultTestingSettings.coverageTarget
+      };
+    }
+    const mode = scope.mode === 'custom' ? 'custom' : 'global';
+    const coverageTarget = Number(scope.coverageTarget);
+    const effectiveCoverageTarget = Number(scope.effectiveCoverageTarget);
+    return {
+      mode,
+      coverageTarget: mode === 'custom' && Number.isFinite(coverageTarget) ? coverageTarget : null,
+      effectiveCoverageTarget: Number.isFinite(effectiveCoverageTarget)
+        ? effectiveCoverageTarget
+        : defaultTestingSettings.coverageTarget
+    };
+  };
+
+  return {
+    frontend: normalizeScope(entry.frontend),
+    backend: normalizeScope(entry.backend)
+  };
+};
+
+const loadProjectTestingSettingsFromStorage = () => {
+  if (typeof window === 'undefined') {
+    return defaultProjectTestingSettings;
+  }
+
+  try {
+    const stored = localStorage.getItem('projectTestingSettings');
+    if (!stored) {
+      return defaultProjectTestingSettings;
+    }
+    const parsed = JSON.parse(stored);
+    if (!parsed || typeof parsed !== 'object') {
+      return defaultProjectTestingSettings;
+    }
+
+    const next = {};
+    Object.entries(parsed).forEach(([projectId, entry]) => {
+      const sanitized = sanitizeProjectTestingSettingsEntry(entry);
+      if (sanitized) {
+        next[projectId] = sanitized;
+      }
+    });
+    return next;
+  } catch (error) {
+    console.warn('Failed to parse projectTestingSettings from storage', error);
+    return defaultProjectTestingSettings;
+  }
+};
+
 export {
   defaultGitSettings,
   defaultPortSettings,
   defaultTestingSettings,
+  defaultProjectTestingSettings,
   getMaxAssistantPanelWidth,
   clampAssistantPanelWidth,
   loadAssistantPanelState,
@@ -253,5 +316,6 @@ export {
   loadProjectGitSettingsFromStorage,
   defaultGitConnectionStatus,
   loadGitConnectionStatusFromStorage,
-  loadTestingSettingsFromStorage
+  loadTestingSettingsFromStorage,
+  loadProjectTestingSettingsFromStorage
 };

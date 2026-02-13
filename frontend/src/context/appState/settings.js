@@ -133,6 +133,38 @@ export const fetchProjectGitSettings = async ({
   }
 };
 
+export const fetchProjectTestingSettings = async ({
+  projectId,
+  trackedFetch,
+  setProjectTestingSettings
+}) => {
+  if (!projectId) {
+    return null;
+  }
+
+  try {
+    const response = await trackedFetch(`/api/projects/${projectId}/testing-settings`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.success || !data.settings) {
+      throw new Error(data?.error || 'Failed to load project testing settings');
+    }
+
+    setProjectTestingSettings((prev) => ({
+      ...prev,
+      [projectId]: data.settings
+    }));
+
+    return data.settings;
+  } catch (error) {
+    console.warn('Failed to load project testing settings:', error);
+    return null;
+  }
+};
+
 export const updateGitSettings = async ({ trackedFetch, gitSettings, setGitSettings, updates = {} }) => {
   const payload = {
     ...stripGlobalGitFields(stripDeprecatedGitFields(gitSettings)),
@@ -600,6 +632,41 @@ export const clearProjectGitSettings = async ({ trackedFetch, projectId, setProj
     setGitSettings((prev) => ({
       ...prev,
       ...sanitizeGitSettings(data.globalSettings)
+    }));
+  }
+
+  return data.settings;
+};
+
+export const updateProjectTestingSettings = async ({
+  trackedFetch,
+  projectId,
+  updates = {},
+  setProjectTestingSettings
+}) => {
+  if (!projectId) {
+    throw new Error('projectId is required to update project testing settings');
+  }
+
+  const response = await trackedFetch(`/api/projects/${projectId}/testing-settings`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(updates)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    const message = data?.error || 'Failed to save project testing settings';
+    throw new Error(message);
+  }
+
+  if (data.settings) {
+    setProjectTestingSettings((prev) => ({
+      ...prev,
+      [projectId]: data.settings
     }));
   }
 

@@ -14,7 +14,8 @@ import {
   loadGitSettingsFromStorage,
   loadProjectGitSettingsFromStorage,
   loadGitConnectionStatusFromStorage,
-  loadTestingSettingsFromStorage
+  loadTestingSettingsFromStorage,
+  loadProjectTestingSettingsFromStorage
 } from './appState/persistence.js';
 import {
   detectFileTokens,
@@ -44,6 +45,7 @@ import {
   fetchPortSettingsFromBackend as fetchPortSettingsFromBackendAction,
   fetchTestingSettingsFromBackend as fetchTestingSettingsFromBackendAction,
   fetchProjectGitSettings as fetchProjectGitSettingsAction,
+  fetchProjectTestingSettings as fetchProjectTestingSettingsAction,
   fetchProjectGitStatus as fetchProjectGitStatusAction,
   fetchProjectGitRemote as fetchProjectGitRemoteAction,
   pullProjectGitRemote as pullProjectGitRemoteAction,
@@ -59,7 +61,8 @@ import {
   getProjectGitSettingsSnapshot as getProjectGitSettingsSnapshotAction,
   createProjectRemoteRepository as createProjectRemoteRepositoryAction,
   updateProjectGitSettings as updateProjectGitSettingsAction,
-  clearProjectGitSettings as clearProjectGitSettingsAction
+  clearProjectGitSettings as clearProjectGitSettingsAction,
+  updateProjectTestingSettings as updateProjectTestingSettingsAction
 } from './appState/settings.js';
 import {
   registerBranchActivity as registerBranchActivityAction,
@@ -146,6 +149,7 @@ export const AppStateProvider = ({ children }) => {
   const [gitConnectionStatus, setGitConnectionStatus] = useState(loadGitConnectionStatusFromStorage);
   const [projectGitSettings, setProjectGitSettings] = useState(loadProjectGitSettingsFromStorage);
   const [projectGitStatus, setProjectGitStatus] = useState({});
+  const [projectTestingSettings, setProjectTestingSettings] = useState(loadProjectTestingSettingsFromStorage);
   const [portSettings, setPortSettings] = useState(defaultPortSettings);
   const [testingSettings, setTestingSettings] = useState(loadTestingSettingsFromStorage);
   const [projectProcesses, setProjectProcesses] = useState(null);
@@ -577,6 +581,12 @@ export const AppStateProvider = ({ children }) => {
     }
   }, [testingSettings]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('projectTestingSettings', JSON.stringify(projectTestingSettings));
+    }
+  }, [projectTestingSettings]);
+
   // Fetch projects from backend
   const fetchProjects = useCallback(
     () => fetchProjectsFromBackend({ trackedFetch, setProjects }),
@@ -600,6 +610,11 @@ export const AppStateProvider = ({ children }) => {
 
   const fetchProjectGitSettings = useCallback(
     (projectId) => fetchProjectGitSettingsAction({ projectId, trackedFetch, setProjectGitSettings }),
+    [trackedFetch]
+  );
+
+  const fetchProjectTestingSettings = useCallback(
+    (projectId) => fetchProjectTestingSettingsAction({ projectId, trackedFetch, setProjectTestingSettings }),
     [trackedFetch]
   );
 
@@ -852,6 +867,7 @@ export const AppStateProvider = ({ children }) => {
       closeProject,
       setCurrentProject,
       fetchProjectGitSettings,
+      fetchProjectTestingSettings,
       trackedFetch,
       applyProcessSnapshot,
       refreshProcessStatus
@@ -925,6 +941,7 @@ export const AppStateProvider = ({ children }) => {
       closeProject,
       setCurrentProject,
       fetchProjectGitSettings,
+      fetchProjectTestingSettings,
       trackedFetch,
       applyProcessSnapshot,
       refreshProcessStatus
@@ -952,6 +969,7 @@ export const AppStateProvider = ({ children }) => {
     closeProject,
     currentProject,
     fetchProjectGitSettings,
+    fetchProjectTestingSettings,
     projectProcesses?.isRunning,
     projectProcesses?.projectId,
     refreshProcessStatus,
@@ -1140,6 +1158,16 @@ export const AppStateProvider = ({ children }) => {
     [trackedFetch]
   );
 
+  const updateProjectTestingSettings = useCallback(
+    (projectId, updates = {}) => updateProjectTestingSettingsAction({
+      trackedFetch,
+      projectId,
+      updates,
+      setProjectTestingSettings
+    }),
+    [trackedFetch]
+  );
+
   const resetGitSettings = () => {
     setGitSettings(defaultGitSettings);
   };
@@ -1153,6 +1181,7 @@ export const AppStateProvider = ({ children }) => {
     setWorkspaceChanges({});
     setWorkingBranches({});
     setProjectGitSettings({});
+    setProjectTestingSettings({});
     setPortSettings(defaultPortSettings);
     resetProjectProcesses();
     resetJobsState();
@@ -1306,6 +1335,7 @@ export const AppStateProvider = ({ children }) => {
     workingBranches,
     gitSettings,
     projectGitSettings,
+    projectTestingSettings,
     portSettings,
     testingSettings,
     projectProcesses,
@@ -1354,6 +1384,7 @@ export const AppStateProvider = ({ children }) => {
     createProjectRemoteRepository,
     updateProjectGitSettings,
     clearProjectGitSettings,
+    updateProjectTestingSettings,
     resetGitSettings,
     getEffectiveGitSettings,
     getProjectGitSettingsSnapshot,

@@ -139,6 +139,11 @@ const defaultTestingSettingsRecord = {
   coverageTarget: 100
 };
 
+const defaultProjectTestingScope = {
+  mode: 'global',
+  coverageTarget: null
+};
+
 const normalizePortValue = (value) => {
   if (value === undefined) {
     return undefined;
@@ -170,6 +175,51 @@ const normalizeGitSettingsRow = (row = {}) => ({
   tokenExpiresAt: row.token_expires_at || defaultGitSettingsRecord.tokenExpiresAt,
   tokenPresent: Boolean(row.token_encrypted),
   token: ''
+});
+
+const normalizeCoverageTargetValue = (value) => {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric)) {
+    return null;
+  }
+  if (numeric < 50 || numeric > 100) {
+    return null;
+  }
+  if (numeric % 10 !== 0) {
+    return null;
+  }
+  return numeric;
+};
+
+const normalizeProjectTestingMode = (value) => (
+  value === 'custom' ? 'custom' : 'global'
+);
+
+const normalizeProjectTestingScope = (mode, coverageTarget, globalCoverageTarget) => {
+  const normalizedMode = normalizeProjectTestingMode(mode);
+  const normalizedCoverageTarget = normalizeCoverageTargetValue(coverageTarget);
+  const effectiveCoverageTarget = normalizedMode === 'custom' && normalizedCoverageTarget
+    ? normalizedCoverageTarget
+    : globalCoverageTarget;
+
+  return {
+    mode: normalizedMode,
+    coverageTarget: normalizedMode === 'custom' ? normalizedCoverageTarget : null,
+    effectiveCoverageTarget
+  };
+};
+
+const normalizeProjectTestingSettingsRow = (row = {}, globalCoverageTarget = defaultTestingSettingsRecord.coverageTarget) => ({
+  frontend: normalizeProjectTestingScope(
+    row.frontend_mode,
+    row.frontend_coverage_target,
+    globalCoverageTarget
+  ),
+  backend: normalizeProjectTestingScope(
+    row.backend_mode,
+    row.backend_coverage_target,
+    globalCoverageTarget
+  )
 });
 
 // Initialize database tables
@@ -357,6 +407,24 @@ export const initializeDatabase = async () => {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS project_testing_settings (
+        project_id INTEGER PRIMARY KEY,
+        frontend_mode TEXT NOT NULL DEFAULT 'global',
+        frontend_coverage_target INTEGER,
+        backend_mode TEXT NOT NULL DEFAULT 'global',
+        backend_coverage_target INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+      )
+    `);
+
+    await ensureTableColumn('project_testing_settings', 'frontend_mode', "TEXT NOT NULL DEFAULT 'global'");
+    await ensureTableColumn('project_testing_settings', 'frontend_coverage_target', 'INTEGER');
+    await ensureTableColumn('project_testing_settings', 'backend_mode', "TEXT NOT NULL DEFAULT 'global'");
+    await ensureTableColumn('project_testing_settings', 'backend_coverage_target', 'INTEGER');
 
     // Branch workflow tables
     await dbRun(`
@@ -771,6 +839,92 @@ export const db_operations = {
     return { coverageTarget };
   },
 
+  async saveProjectTestingSettings(projectId, settings = {}) {
+    if (!projectId) {
+      throw new Error('projectId is required');
+    }
+
+    const globalSettings = await db_operations.getTestingSettings();
+    const globalCoverageTarget = normalizeCoverageTargetValue(globalSettings?.coverageTarget)
+      || defaultTestingSettingsRecord.coverageTarget;
+
+    const existing = await dbGet('SELECT * FROM project_testing_settings WHERE project_id = ?', [projectId]);
+
+    const frontendMode = Object.prototype.hasOwnProperty.call(settings, 'frontendMode')
+      ? normalizeProjectTestingMode(settings.frontendMode)
+      : normalizeProjectTestingMode(existing?.frontend_mode || defaultProjectTestingScope.mode);
+    const backendMode = Object.prototype.hasOwnProperty.call(settings, 'backendMode')
+      ? normalizeProjectTestingMode(settings.backendMode)
+      : normalizeProjectTestingMode(existing?.backend_mode || defaultProjectTestingScope.mode);
+
+    const nextFrontendCoverageTargetRaw = Object.prototype.hasOwnProperty.call(settings, 'frontendCoverageTarget')
+      ? settings.frontendCoverageTarget
+      : existing?.frontend_coverage_target;
+    const nextBackendCoverageTargetRaw = Object.prototype.hasOwnProperty.call(settings, 'backendCoverageTarget')
+      ? settings.backendCoverageTarget
+      : existing?.backend_coverage_target;
+
+    const frontendCoverageTarget = frontendMode === 'custom'
+      ? normalizeCoverageTargetValue(nextFrontendCoverageTargetRaw) || globalCoverageTarget
+      : null;
+    const backendCoverageTarget = backendMode === 'custom'
+      ? normalizeCoverageTargetValue(nextBackendCoverageTargetRaw) || globalCoverageTarget
+      : null;
+
+    await dbRun(`
+      INSERT INTO project_testing_settings (
+        project_id,
+        frontend_mode,
+        frontend_coverage_target,
+        backend_mode,
+        backend_coverage_target,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(project_id) DO UPDATE SET
+        frontend_mode = excluded.frontend_mode,
+        frontend_coverage_target = excluded.frontend_coverage_target,
+        backend_mode = excluded.backend_mode,
+        backend_coverage_target = excluded.backend_coverage_target,
+        updated_at = CURRENT_TIMESTAMP
+    `, [
+      projectId,
+      frontendMode,
+      frontendCoverageTarget,
+      backendMode,
+      backendCoverageTarget
+    ]);
+
+    const row = await dbGet('SELECT * FROM project_testing_settings WHERE project_id = ?', [projectId]);
+    return normalizeProjectTestingSettingsRow(row || {}, globalCoverageTarget);
+  },
+
+  async getProjectTestingSettings(projectId) {
+    if (!projectId) {
+      return null;
+    }
+
+    const globalSettings = await db_operations.getTestingSettings();
+    const globalCoverageTarget = normalizeCoverageTargetValue(globalSettings?.coverageTarget)
+      || defaultTestingSettingsRecord.coverageTarget;
+    const row = await dbGet('SELECT * FROM project_testing_settings WHERE project_id = ?', [projectId]);
+    if (!row) {
+      return {
+        frontend: {
+          ...defaultProjectTestingScope,
+          effectiveCoverageTarget: globalCoverageTarget
+        },
+        backend: {
+          ...defaultProjectTestingScope,
+          effectiveCoverageTarget: globalCoverageTarget
+        }
+      };
+    }
+
+    return normalizeProjectTestingSettingsRow(row, globalCoverageTarget);
+  },
+
   async saveProjectGitSettings(projectId, settings = {}) {
     if (!projectId) {
       throw new Error('projectId is required');
@@ -877,6 +1031,8 @@ export const savePortSettings = db_operations.savePortSettings;
 export const getPortSettings = db_operations.getPortSettings;
 export const saveTestingSettings = db_operations.saveTestingSettings;
 export const getTestingSettings = db_operations.getTestingSettings;
+export const saveProjectTestingSettings = db_operations.saveProjectTestingSettings;
+export const getProjectTestingSettings = db_operations.getProjectTestingSettings;
 export const saveProjectGitSettings = db_operations.saveProjectGitSettings;
 export const getProjectGitSettings = db_operations.getProjectGitSettings;
 export const deleteProjectGitSettings = db_operations.deleteProjectGitSettings;

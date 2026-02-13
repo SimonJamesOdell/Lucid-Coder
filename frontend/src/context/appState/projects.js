@@ -52,6 +52,7 @@ export const selectProjectWithProcesses = async ({
   closeProject,
   setCurrentProject,
   fetchProjectGitSettings,
+  fetchProjectTestingSettings,
   trackedFetch,
   applyProcessSnapshot,
   refreshProcessStatus
@@ -86,6 +87,7 @@ export const selectProjectWithProcesses = async ({
 
   if (project && project.id) {
     await fetchProjectGitSettings(project.id);
+    await fetchProjectTestingSettings?.(project.id);
 
     try {
       const response = await trackedFetch(`/api/projects/${project.id}/start`, {

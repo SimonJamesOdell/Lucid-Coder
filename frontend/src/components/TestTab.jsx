@@ -29,6 +29,10 @@ import {
 import { useSubmitProof } from './test-tab/useSubmitProof';
 import './TestTab.css';
 
+const MIN_COVERAGE_TARGET = 50;
+const MAX_COVERAGE_TARGET = 100;
+const COVERAGE_STEP = 10;
+
 const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   const {
     startAutomationJob,
@@ -40,7 +44,10 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     syncBranchOverview,
     markTestRunIntent,
     testRunIntent,
-    projectProcesses
+    projectProcesses,
+    testingSettings,
+    projectTestingSettings,
+    updateProjectTestingSettings
   } = useAppState();
   const [localError, setLocalError] = useState(null);
   const [logFontSize, setLogFontSize] = useState(0.55);
@@ -845,6 +852,63 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
   }, [activeJobs, cancelAutomationJob, projectId]);
 
+  const globalCoverageTarget = Number(testingSettings?.coverageTarget) || 100;
+  const projectTestingSnapshot = projectId ? projectTestingSettings?.[projectId] : null;
+
+  const resolveScopeSettings = useCallback((scope) => {
+    const entry = projectTestingSnapshot?.[scope] || null;
+    const mode = entry?.mode === 'custom' ? 'custom' : 'global';
+    const rawCoverageTarget = entry?.coverageTarget;
+    const coverageTarget = Number(rawCoverageTarget);
+    const isValidCoverageTarget = Number.isFinite(coverageTarget)
+      && coverageTarget >= MIN_COVERAGE_TARGET
+      && coverageTarget <= MAX_COVERAGE_TARGET;
+    const fallback = isValidCoverageTarget ? coverageTarget : globalCoverageTarget;
+    return {
+      mode,
+      useGlobal: mode !== 'custom',
+      coverageTarget: fallback
+    };
+  }, [globalCoverageTarget, projectTestingSnapshot]);
+
+  const saveProjectScopeSettings = useCallback(async (scope, nextScopePayload) => {
+    if (!projectId || typeof updateProjectTestingSettings !== 'function') {
+      return;
+    }
+
+    setLocalError(null);
+    try {
+      await updateProjectTestingSettings(projectId, {
+        [scope]: nextScopePayload
+      });
+    } catch (error) {
+      setLocalError(error?.message || 'Failed to save project testing settings');
+    }
+  }, [projectId, updateProjectTestingSettings]);
+
+  const handleScopeGlobalToggle = useCallback((scope, checked) => {
+    const current = resolveScopeSettings(scope);
+    if (checked) {
+      void saveProjectScopeSettings(scope, { useGlobal: true });
+      return;
+    }
+    void saveProjectScopeSettings(scope, {
+      useGlobal: false,
+      coverageTarget: current.coverageTarget
+    });
+  }, [resolveScopeSettings, saveProjectScopeSettings]);
+
+  const handleScopeCoverageTargetChange = useCallback((scope, value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return;
+    }
+    void saveProjectScopeSettings(scope, {
+      useGlobal: false,
+      coverageTarget: numeric
+    });
+  }, [saveProjectScopeSettings]);
+
   useEffect(() => {
     if (typeof registerTestActions !== 'function') {
       return;
@@ -878,6 +942,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     hooks.handleRun = handleRun;
     hooks.handleCancel = handleCancel;
     hooks.handleCancelActiveRuns = handleCancelActiveRuns;
+    hooks.handleScopeGlobalToggle = handleScopeGlobalToggle;
+    hooks.handleScopeCoverageTargetChange = handleScopeCoverageTargetChange;
     hooks.setLocalError = setLocalError;
     hooks.getLocalError = () => localError;
     hooks.getActiveJobs = () => activeJobs;
@@ -897,6 +963,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       hooks.handleRun = undefined;
       hooks.handleCancel = undefined;
       hooks.handleCancelActiveRuns = undefined;
+      hooks.handleScopeGlobalToggle = undefined;
+      hooks.handleScopeCoverageTargetChange = undefined;
       hooks.setLocalError = undefined;
       hooks.getLocalError = undefined;
       hooks.getActiveJobs = undefined;
@@ -907,6 +975,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     handleRun,
     handleCancel,
     handleCancelActiveRuns,
+    handleScopeGlobalToggle,
+    handleScopeCoverageTargetChange,
     localError,
     activeJobs,
     submitProofIfNeeded,
@@ -983,6 +1053,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
           const job = jobsByType[config.type];
           const active = isJobActive(job);
           const durationLabel = formatDurationSeconds(job);
+          const scope = config.type.startsWith('backend') ? 'backend' : 'frontend';
+          const scopeSettings = resolveScopeSettings(scope);
 
           return (
             <div className="test-card" key={config.type} data-testid={`test-card-${config.type}`}>
@@ -994,6 +1066,36 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
                 <span className={`job-status ${job?.status || 'idle'}`} data-testid={`job-status-${config.type}`}>
                   {statusLabel(job?.status)}
                 </span>
+              </div>
+
+              <div className="test-scope-settings" data-testid={`test-scope-settings-${scope}`}>
+                <label className="test-scope-toggle" htmlFor={`test-scope-global-${scope}-${projectId || 'none'}`}>
+                  <input
+                    id={`test-scope-global-${scope}-${projectId || 'none'}`}
+                    type="checkbox"
+                    checked={scopeSettings.useGlobal}
+                    onChange={(event) => handleScopeGlobalToggle(scope, event.target.checked)}
+                    data-testid={`scope-use-global-${scope}`}
+                  />
+                  <span>Use global settings</span>
+                </label>
+
+                {!scopeSettings.useGlobal && (
+                  <div className="test-scope-slider-row">
+                    <input
+                      type="range"
+                      min={MIN_COVERAGE_TARGET}
+                      max={MAX_COVERAGE_TARGET}
+                      step={COVERAGE_STEP}
+                      value={scopeSettings.coverageTarget}
+                      onChange={(event) => handleScopeCoverageTargetChange(scope, Number(event.target.value))}
+                      data-testid={`scope-coverage-slider-${scope}`}
+                    />
+                    <span className="test-scope-slider-value" data-testid={`scope-coverage-value-${scope}`}>
+                      {scopeSettings.coverageTarget}%
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="test-card-body">

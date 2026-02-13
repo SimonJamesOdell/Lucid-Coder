@@ -815,6 +815,31 @@ describe('AppStateContext', () => {
     })
   })
 
+  test('updateProjectTestingSettings updates project testing settings state', async () => {
+    const settings = {
+      frontend: { mode: 'custom', coverageTarget: 80, effectiveCoverageTarget: 80 },
+      backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+    }
+
+    fetch.mockImplementation((url = '', options = {}) => {
+      if (typeof url === 'string' && url.includes('/api/projects/proj-testing/testing-settings') && options?.method === 'PUT') {
+        return Promise.resolve(mockApiResponse({ success: true, settings }))
+      }
+      return Promise.resolve(mockApiResponse({ success: true }))
+    })
+
+    const { result } = renderUseAppState()
+
+    await act(async () => {
+      await result.current.updateProjectTestingSettings('proj-testing', {
+        frontendMode: 'custom',
+        frontendCoverageTarget: 80
+      })
+    })
+
+    expect(result.current.projectTestingSettings['proj-testing']).toEqual(settings)
+  })
+
   test('fetchProjectGitStatus updates project git status state', async () => {
     const { result } = renderUseAppState()
 
@@ -1198,10 +1223,24 @@ describe('AppStateContext', () => {
       .mockResolvedValueOnce(testingSettingsResponse())
       .mockResolvedValueOnce(mockApiResponse({ success: true, project: { id: 'a', name: 'First' } }))
       .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
+      .mockResolvedValueOnce(mockApiResponse({
+        success: true,
+        settings: {
+          frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 },
+          backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+        }
+      }))
       .mockResolvedValueOnce(mockApiResponse({ message: 'started a' }))
       .mockResolvedValueOnce(processStatusResponse({ projectId: 'a' }))
       .mockResolvedValueOnce(mockApiResponse({ success: true, project: { id: 'b', name: 'Second' } }))
       .mockResolvedValueOnce(projectGitSettingsResponse({}, true))
+      .mockResolvedValueOnce(mockApiResponse({
+        success: true,
+        settings: {
+          frontend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 },
+          backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: 100 }
+        }
+      }))
       .mockResolvedValueOnce(mockApiResponse({ message: 'started b' }))
       .mockResolvedValueOnce(processStatusResponse({ projectId: 'b' }))
 
