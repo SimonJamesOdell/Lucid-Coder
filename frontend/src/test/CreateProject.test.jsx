@@ -343,6 +343,7 @@ beforeEach(() => {
   socketInstances.length = 0;
   socketConfig = { ...defaultSocketConfig };
   mockGitSettings = { ...defaultGitSettings };
+  mockAxios.post.mockResolvedValue({ data: { success: true } });
   if (typeof window !== 'undefined') {
     window.EventSource = MockEventSource;
   }
@@ -395,6 +396,225 @@ describe('Validation', () => {
       expect(await screen.findByText('clone failed')).toBeInTheDocument();
     });
 
+    test('auto-detects tech stack for git clone details and disables dropdowns', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValueOnce({
+        data: {
+          success: true,
+          frontend: { language: 'typescript', framework: 'react' },
+          backend: { language: 'python', framework: 'fastapi' }
+        }
+      });
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+
+      await screen.findByLabelText('Project Name *');
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith(
+          '/api/fs/detect-git-tech',
+          expect.objectContaining({
+            gitUrl: 'https://github.com/octocat/my-project.git'
+          })
+        );
+      });
+
+      expect(screen.getByLabelText('Frontend Language *')).toHaveValue('typescript');
+      expect(screen.getByLabelText('Frontend Framework *')).toHaveValue('react');
+      expect(screen.getByLabelText('Backend Language *')).toHaveValue('python');
+      expect(screen.getByLabelText('Backend Framework *')).toHaveValue('fastapi');
+
+      expect(screen.getByLabelText('Frontend Language *')).toBeDisabled();
+      expect(screen.getByLabelText('Frontend Framework *')).toBeDisabled();
+      expect(screen.getByLabelText('Backend Language *')).toBeDisabled();
+      expect(screen.getByLabelText('Backend Framework *')).toBeDisabled();
+    });
+
+    test('handles failed git tech detection response', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValueOnce({ data: { success: false, error: 'nope' } });
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+
+      await screen.findByLabelText('Project Name *');
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith(
+          '/api/fs/detect-git-tech',
+          expect.objectContaining({
+            gitUrl: 'https://github.com/octocat/my-project.git'
+          })
+        );
+      });
+    });
+
+    test('falls back to default git tech error when response is missing details', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValueOnce({ data: { success: false } });
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+
+      await screen.findByLabelText('Project Name *');
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith(
+          '/api/fs/detect-git-tech',
+          expect.objectContaining({
+            gitUrl: 'https://github.com/octocat/my-project.git'
+          })
+        );
+      });
+
+      expect(screen.getByLabelText('Frontend Language *')).toHaveValue('javascript');
+      expect(screen.getByLabelText('Backend Language *')).toHaveValue('javascript');
+    });
+
+    test('handles git tech detection request failures with response errors', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockRejectedValueOnce({ response: { data: { error: 'git tech failed' } } });
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+
+      await screen.findByLabelText('Project Name *');
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith(
+          '/api/fs/detect-git-tech',
+          expect.objectContaining({
+            gitUrl: 'https://github.com/octocat/my-project.git'
+          })
+        );
+      });
+
+      expect(screen.getByLabelText('Frontend Language *')).toHaveValue('javascript');
+      expect(screen.getByLabelText('Backend Language *')).toHaveValue('javascript');
+    });
+
+    test('uses fallback error when git tech detection fails without details', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockRejectedValueOnce({});
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+
+      await screen.findByLabelText('Project Name *');
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith(
+          '/api/fs/detect-git-tech',
+          expect.objectContaining({
+            gitUrl: 'https://github.com/octocat/my-project.git'
+          })
+        );
+      });
+
+      expect(screen.getByLabelText('Frontend Language *')).toHaveValue('javascript');
+      expect(screen.getByLabelText('Backend Language *')).toHaveValue('javascript');
+    });
+
+    test('skips duplicate git tech detection requests', async () => {
+      const { user } = renderComponent();
+      const view = render(<CreateProject />);
+
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+      await user.type(screen.getByLabelText('Personal Access Token *'), 'glpat-test');
+      await user.click(getNextButton());
+
+      await screen.findByLabelText('Project Name *');
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledTimes(1);
+      });
+
+      mockGitSettings = { ...mockGitSettings, provider: 'gitlab' };
+      view.rerender(<CreateProject />);
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    test('ignores invalid detected tech payloads', async () => {
+      render(<CreateProject />);
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.applyDetectedTech(null);
+      });
+    });
+
+    test('falls back to default frameworks for unknown detected languages', async () => {
+      render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+      act(() => {
+        hooks.applyDetectedTech({
+          frontend: { language: 'elixir', framework: 'phoenix' },
+          backend: { language: 'kotlin', framework: 'ktor' }
+        });
+      });
+
+      let snapshot = null;
+      await waitFor(() => {
+        act(() => {
+          hooks.setNewProject((prev) => {
+            snapshot = prev;
+            return prev;
+          });
+        });
+        expect(snapshot.frontend.language).toBe('elixir');
+        expect(snapshot.frontend.framework).toBe('react');
+        expect(snapshot.backend.language).toBe('kotlin');
+        expect(snapshot.backend.framework).toBe('express');
+      });
+    });
+
+    test('skips git tech detection when repository url is cleared', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+
+      await screen.findByLabelText('Project Name *');
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledTimes(1);
+      });
+
+      const hooks = await waitForCreateProjectHooks();
+      act(() => {
+        hooks.setGitRemoteUrl('');
+      });
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledTimes(1);
+      });
+    });
+
     test('shows error when git repository url is missing', async () => {
       const { user } = renderComponent();
 
@@ -406,6 +626,65 @@ describe('Validation', () => {
 
       expect(screen.getByText(/git repository url is required/i)).toBeInTheDocument();
       expect(mockImportProject).not.toHaveBeenCalled();
+    });
+
+    test('derives project name from git URL on next step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      fireEvent.change(screen.getByLabelText('Repository URL *'), {
+        target: { value: 'https://github.com/octocat/my-project.git' }
+      });
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+
+      await user.click(getNextButton());
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Project Name *')).toHaveValue('my-project');
+      });
+    });
+
+    test('keeps existing project name when advancing from git step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      fireEvent.change(screen.getByLabelText('Repository URL *'), {
+        target: { value: 'https://github.com/octocat/my-project.git' }
+      });
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+
+      const hooks = await waitForCreateProjectHooks();
+      act(() => {
+        hooks.setNewProject((prev) => ({
+          ...prev,
+          name: 'Custom Name'
+        }));
+      });
+
+      await user.click(getNextButton());
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Project Name *')).toHaveValue('Custom Name');
+      });
+    });
+
+    test('keeps project name empty when git URL lacks a repo name', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      fireEvent.change(screen.getByLabelText('Repository URL *'), {
+        target: { value: 'https://github.com/org:' }
+      });
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+
+      await user.click(getNextButton());
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Project Name *')).toHaveValue('');
+      });
     });
 
     test('shows error when custom cloud workflow omits PAT', async () => {
@@ -637,7 +916,7 @@ describe('Validation', () => {
       await ensureGitStep(user, { source: 'git' });
       await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/octocat/my-project.git');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
-      await user.click(screen.getByText('Create a new repo after cloning'));
+      await user.click(screen.getByText('Create a new repo after cloning (create fork)'));
 
       expect(await screen.findByLabelText('Repository Name')).toBeInTheDocument();
     });
@@ -705,6 +984,17 @@ describe('Validation', () => {
       await user.click(getNextButton());
 
       expect(await screen.findByLabelText('Git Workflow *')).toBeInTheDocument();
+    });
+
+    test('returns to project source when backing out of git step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+
+      await ensureGitStep(user);
+      await user.click(screen.getByRole('button', { name: /back/i }));
+
+      expect(await screen.findByText('Project Source')).toBeInTheDocument();
     });
 
     test('renders git workflow options for local imports', async () => {
@@ -957,7 +1247,7 @@ describe('Validation', () => {
 
       await ensureGitStep(user, { source: 'git' });
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
-      await user.click(screen.getByText('Create a new repo after cloning'));
+      await user.click(screen.getByText('Create a new repo after cloning (create fork)'));
       await user.click(getNextButton());
 
       expect(screen.getByText('Git repository URL is required')).toBeInTheDocument();
@@ -1926,6 +2216,37 @@ describe('Validation', () => {
         global.fetch = originalFetch;
       }
     });
+    
+    test('shows job type when displayName is missing in setup list', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          jobs: [{ id: 'job-2', type: 'install', status: 'pending' }]
+        })
+      });
+
+      try {
+        render(<CreateProject />);
+
+        const hooks = await waitForCreateProjectHooks();
+        await act(async () => {
+          hooks.setSetupState({
+            isWaiting: true,
+            projectId: 'proj-setup-type',
+            jobs: [{ id: 'job-2', type: 'install', status: 'pending' }],
+            error: ''
+          });
+        });
+
+        expect(await screen.findByText('Preparing your project')).toBeInTheDocument();
+        expect(await screen.findByText('install')).toBeInTheDocument();
+        expect(screen.getByText('pending')).toBeInTheDocument();
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
 
     test('clones a repo and creates a new remote repo after import', async () => {
       const { user } = renderComponent();
@@ -1942,7 +2263,7 @@ describe('Validation', () => {
 
       await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/third/party.git');
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
-      await user.click(screen.getByText('Create a new repo after cloning'));
+      await user.click(screen.getByText('Create a new repo after cloning (create fork)'));
       await user.type(screen.getByLabelText('Repository Name'), 'my-fork');
 
       await user.click(getNextButton());
@@ -3367,6 +3688,104 @@ describe('Validation', () => {
       expect(visibilitySelect).toHaveValue('public');
     });
 
+    test('sets setup job poll errors when backend responds with failure', async () => {
+      global.fetch.mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ success: false, error: 'jobs failed' })
+      });
+
+      render(<CreateProject />);
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setSetupState({ isWaiting: true, projectId: 'proj-1', jobs: [], error: '' });
+      });
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/projects/proj-1/jobs');
+      });
+    });
+
+    test('returns to main when setup jobs complete', async () => {
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true, jobs: [{ status: 'succeeded' }] })
+      });
+
+      render(<CreateProject />);
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setSetupState({ isWaiting: true, projectId: 'proj-2', jobs: [], error: '' });
+      });
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/projects/proj-2/jobs');
+        expect(mockShowMain).toHaveBeenCalled();
+      });
+    });
+
+    test('ignores setup job responses after unmount', async () => {
+      let resolveFetch;
+      global.fetch.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFetch = resolve;
+      }));
+
+      const view = render(<CreateProject />);
+      const hooks = await waitForCreateProjectHooks();
+
+      act(() => {
+        hooks.setSetupState({ isWaiting: true, projectId: 'proj-cancel', jobs: [], error: '' });
+      });
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/projects/proj-cancel/jobs');
+      });
+
+      view.unmount();
+
+      resolveFetch({
+        ok: true,
+        json: async () => ({ success: true, jobs: [] })
+      });
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    test('surfaces compatibility scan failures', async () => {
+      global.fetch.mockRejectedValueOnce(new Error('compat failed'));
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await goToCompatibilityStep(user, 'C:/projects/compat-error');
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/api/fs/compatibility'));
+      });
+    });
+
+    test('resets compatibility when project source changes away from local', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await goToCompatibilityStep(user, 'C:/projects/local-app');
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/api/fs/compatibility'));
+      });
+
+      const hooks = await waitForCreateProjectHooks();
+      act(() => {
+        hooks.setProjectSource('git');
+      });
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+
     test('shows compatibility changes and structure updates', async () => {
       global.fetch.mockResolvedValueOnce({
         ok: true,
@@ -3404,6 +3823,98 @@ describe('Validation', () => {
       await goToCompatibilityStep(user, 'C:/projects/no-changes');
 
       expect(await screen.findByText('No compatibility changes required.')).toBeInTheDocument();
+    });
+
+    test('requires compatibility consent when updates are needed', async () => {
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          plan: {
+            needsChanges: true,
+            changes: [{ description: 'Bind to 0.0.0.0' }],
+            structure: { needsMove: false }
+          }
+        })
+      });
+
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await goToCompatibilityStep(user, 'C:/projects/local-app');
+
+      await user.click(screen.getByRole('button', { name: /import project/i }));
+
+      expect(await screen.findByText('Please allow compatibility updates to continue')).toBeInTheDocument();
+    });
+
+    test('requires structure consent when a move is needed', async () => {
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          plan: {
+            needsChanges: false,
+            changes: [],
+            structure: { needsMove: true }
+          }
+        })
+      });
+
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await goToCompatibilityStep(user, 'C:/projects/local-app');
+
+      await user.click(screen.getByRole('button', { name: /import project/i }));
+
+      expect(await screen.findByText('Please allow moving frontend files into a frontend folder')).toBeInTheDocument();
+    });
+
+    test('returns to project details when backing out of compatibility step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await goToCompatibilityStep(user, 'C:/projects/local-app');
+
+      expect(await screen.findByText('Compatibility updates')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /back/i }));
+
+      expect(await screen.findByLabelText('Project Name *')).toBeInTheDocument();
+    });
+
+    test('requires a project name when submitting compatibility step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await goToCompatibilityStep(user, 'C:/projects/local-app');
+
+      const hooks = await waitForCreateProjectHooks();
+      act(() => {
+        hooks.setLocalPath('C:');
+        hooks.setNewProject((prev) => ({ ...prev, name: '' }));
+      });
+
+      await user.click(screen.getByRole('button', { name: /import project/i }));
+
+      expect(await screen.findByText('Project name is required')).toBeInTheDocument();
+    });
+
+    test('requires a project path when submitting compatibility step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await goToCompatibilityStep(user, 'C:/projects/local-app');
+
+      const hooks = await waitForCreateProjectHooks();
+      act(() => {
+        hooks.setLocalPath('');
+      });
+
+      await user.click(screen.getByRole('button', { name: /import project/i }));
+
+      expect(await screen.findByText('Project path is required')).toBeInTheDocument();
     });
 
     test('does not refetch compatibility when path trims to the same value', async () => {
@@ -3725,6 +4236,20 @@ describe('Validation', () => {
       await waitFor(() => {
         expect(screen.queryByRole('dialog', { name: /select folder/i })).not.toBeInTheDocument();
       });
+    });
+
+    test('updates the local path when a folder is picked', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'local' });
+
+      const hooks = await waitForCreateProjectHooks();
+      act(() => {
+        hooks.handleFolderPicked('C:/projects/selected');
+      });
+
+      expect(screen.getByLabelText('Project Folder Path *')).toHaveValue('C:/projects/selected');
     });
 
     test('shows default error when linked path validation fails without details', async () => {
@@ -4051,4 +4576,248 @@ describe('Validation', () => {
         }));
       });
     });
+
+    test('clears cloud repo fields when switching workflow to local', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      // Ensure we're on the 'new' project source so we can test the gitCloudMode clearing
+      await ensureGitStep(user, { source: 'new' });
+      // Set workflow to global which sets gitCloudMode to 'create'
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+
+      expect(await screen.findByLabelText('Repository Name')).toBeInTheDocument();
+
+      // Switch to local which should trigger the else if branch to clear gitCloudMode
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+
+      // Repository Name should disappear when gitCloudMode is cleared
+      await waitFor(() => {
+        expect(screen.queryByLabelText('Repository Name')).not.toBeInTheDocument();
+      });
+    });
+
+    test('requires a custom token for local import cloud connections', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'local' });
+      await user.type(screen.getByLabelText('Project Folder Path *'), 'C:/projects/local-app');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://example.com/org/repo.git');
+      await user.click(getNextButton());
+
+      expect(screen.getByText(/personal access token is required for a custom cloud connection/i)).toBeInTheDocument();
+    });
+
+    test('requires a custom token for git clone connections', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/org/repo.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+
+      await user.click(getNextButton());
+
+      expect(screen.getByText(/personal access token is required for a custom cloud connection/i)).toBeInTheDocument();
+    });
+
+    test('requires a repo name when cloning without a derived name', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'git@github.com:');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.click(screen.getByText('Create a new repo after cloning (create fork)'));
+
+      await user.click(getNextButton());
+
+      expect(screen.getByText('Repository name is required to continue')).toBeInTheDocument();
+    });
+
+    test('requires a project name on the local import details step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'local' });
+      await user.type(screen.getByLabelText('Project Folder Path *'), 'C:/projects/local-app');
+      await user.click(getNextButton());
+
+      const hooks = await waitForCreateProjectHooks();
+      act(() => {
+        hooks.setLocalPath('C:');
+        hooks.setNewProject((prev) => ({ ...prev, name: '' }));
+      });
+      await user.click(getCreateProjectButton());
+
+      expect(await screen.findByText('Project name is required')).toBeInTheDocument();
+    });
+
+    test('requires a project name on the git import details step', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'git@github.com:');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+      await user.click(getNextButton());
+
+      const nameInput = await screen.findByLabelText('Project Name *');
+      await user.clear(nameInput);
+      await user.click(getCreateProjectButton());
+
+      expect(await screen.findByText('Project name is required')).toBeInTheDocument();
+    });
+
+    test('includes the token when creating a remote after a custom clone', async () => {
+      mockImportProject.mockResolvedValue({
+        project: { id: 'proj-clone-custom', name: 'Custom Clone' },
+        jobs: []
+      });
+
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+      await ensureGitStep(user, { source: 'git' });
+      await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/org/repo.git');
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+      await user.selectOptions(screen.getByLabelText('Git Provider *'), 'gitlab');
+      await user.type(screen.getByLabelText('Personal Access Token *'), 'glpat-test');
+      await user.click(screen.getByText('Create a new repo after cloning (create fork)'));
+
+      await user.click(getNextButton());
+      await user.click(getCreateProjectButton());
+
+      await waitFor(() => {
+        expect(mockCreateProjectRemoteRepository).toHaveBeenCalledWith(
+          'proj-clone-custom',
+          expect.objectContaining({ token: 'glpat-test' })
+        );
+      });
+    });
+
+    test('shows setup waiting UI when git import returns jobs', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          jobs: [{ id: 'job-1', status: 'pending', displayName: 'Install dependencies' }]
+        })
+      });
+
+      mockImportProject.mockResolvedValue({
+        project: { id: 'proj-git-jobs', name: 'Git Import' },
+        jobs: [{ id: 'job-1', status: 'pending', displayName: 'Install dependencies' }]
+      });
+
+      const { user } = renderComponent();
+
+      try {
+        render(<CreateProject />);
+        await ensureGitStep(user, { source: 'git' });
+        await user.type(screen.getByLabelText('Repository URL *'), 'https://github.com/org/repo.git');
+        await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');
+        await user.click(getNextButton());
+        await user.type(screen.getByLabelText('Project Name *'), 'Git Import');
+        await user.click(getCreateProjectButton());
+
+        expect(await screen.findByText('Preparing your project')).toBeInTheDocument();
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    test('derives project name from git URL with colon segment', async () => {
+      // Covers guessProjectName colon handling (line 95-96)
+      render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+      await act(async () => {
+        hooks.setProjectSource('git');
+        hooks.setGitRemoteUrl('https://github.com/org:repo.git');
+      });
+
+      let derivedName = '';
+      await waitFor(() => {
+        act(() => {
+          hooks.setNewProject((prev) => {
+            derivedName = prev.name;
+            return prev;
+          });
+        });
+        expect(derivedName).toBe('repo');
+      });
+    });
+
+    test('keeps project name empty when git URL ends with colon', async () => {
+      // Covers the empty afterColon branch in guessProjectName (line 95-96)
+      render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+      await act(async () => {
+        hooks.setProjectSource('git');
+        hooks.setGitRemoteUrl('https://github.com/org:');
+      });
+
+      let currentName = 'unset';
+      await waitFor(() => {
+        act(() => {
+          hooks.setNewProject((prev) => {
+            currentName = prev.name;
+            return prev;
+          });
+        });
+        expect(currentName).toBe('');
+      });
+    });
+
+    test('skips name update when git URL trims to empty', async () => {
+      // Covers the cleaned empty branch in guessProjectName.
+      render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+      await act(async () => {
+        hooks.setProjectSource('git');
+        hooks.setGitRemoteUrl('   ');
+      });
+
+      let currentName = 'unset';
+      await waitFor(() => {
+        act(() => {
+          hooks.setNewProject((prev) => {
+            currentName = prev.name;
+            return prev;
+          });
+        });
+        expect(currentName).toBe('');
+      });
+    });
+
+    test('clears gitCloudMode when workflow is non-cloud', async () => {
+      // Covers the gitCloudMode clearing branch (line 266-267)
+      render(<CreateProject />);
+
+      const hooks = await waitForCreateProjectHooks();
+      await act(async () => {
+        hooks.setProjectSource('new');
+        hooks.setGitCloudMode('create');
+        hooks.setGitWorkflowMode('local');
+      });
+
+      let currentMode = 'create';
+      await waitFor(() => {
+        act(() => {
+          hooks.setGitCloudMode((prev) => {
+            currentMode = prev;
+            return prev;
+          });
+        });
+        expect(currentMode).toBe('');
+      });
+    });
+
   });

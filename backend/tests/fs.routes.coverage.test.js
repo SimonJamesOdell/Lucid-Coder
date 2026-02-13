@@ -6,13 +6,18 @@ import path from 'path';
 import os from 'os';
 
 const scanCompatibilityMock = vi.hoisted(() => vi.fn());
+const runGitCommandMock = vi.hoisted(() => vi.fn());
 vi.mock('../services/importCompatibility.js', () => ({
   scanCompatibility: scanCompatibilityMock
+}));
+vi.mock('../utils/git.js', () => ({
+  runGitCommand: runGitCommandMock
 }));
 
 const buildApp = async () => {
   const router = (await import('../routes/fs.js')).default;
   const app = express();
+  app.use(express.json());
   app.use('/api/fs', router);
   return app;
 };
@@ -23,6 +28,7 @@ describe('fs routes coverage', () => {
 
   beforeEach(async () => {
     scanCompatibilityMock.mockReset();
+    runGitCommandMock.mockReset();
     app = await buildApp();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'fs-routes-'));
   });
@@ -747,6 +753,286 @@ describe('fs routes coverage', () => {
     expect(errorRes.body).toMatchObject({ success: false, error: 'Failed to detect tech stack' });
 
     statSpy.mockRestore();
+  });
+
+  test('POST /api/fs/detect-git-tech validates missing and unsafe URLs', async () => {
+    const missingRes = await request(app).post('/api/fs/detect-git-tech');
+    expect(missingRes.status).toBe(400);
+    expect(missingRes.body).toMatchObject({
+      success: false,
+      error: 'Git repository URL is required'
+    });
+
+    const unsafeRes = await request(app)
+      .post('/api/fs/detect-git-tech')
+      .send({ gitUrl: 'https://example.com/bad"repo.git' });
+    expect(unsafeRes.status).toBe(400);
+    expect(unsafeRes.body).toMatchObject({
+      success: false,
+      error: 'Invalid git repository URL'
+    });
+  });
+
+  test('POST /api/fs/detect-git-tech clones and detects tech stack', async () => {
+    runGitCommandMock.mockImplementation(async (_cwd, args) => {
+      const target = args[args.length - 1];
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(
+        path.join(target, 'package.json'),
+        JSON.stringify({
+          dependencies: { react: '^18.0.0', express: '^4.0.0' }
+        })
+      );
+      return { stdout: '', stderr: '', code: 0 };
+    });
+
+    const res = await request(app)
+      .post('/api/fs/detect-git-tech')
+      .send({ gitUrl: 'https://github.com/octocat/sample.git' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      frontend: { language: 'javascript', framework: 'react' },
+      backend: { language: 'javascript', framework: 'express' }
+    });
+    expect(runGitCommandMock).toHaveBeenCalled();
+  });
+
+  test('POST /api/fs/detect-git-tech handles git clone errors', async () => {
+    runGitCommandMock.mockRejectedValue(new Error('Clone failed'));
+
+    const res = await request(app)
+      .post('/api/fs/detect-git-tech')
+      .send({ gitUrl: 'https://github.com/octocat/sample.git' });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({
+      success: false,
+      error: 'Failed to detect git tech stack'
+    });
+  });
+
+  test('POST /api/fs/detect-git-tech handles temp cleanup errors gracefully', async () => {
+    // Set up the mock to create temp files so cleanup is attempted
+    runGitCommandMock.mockImplementation(async (_cwd, args) => {
+      const target = args[args.length - 1];
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(
+        path.join(target, 'package.json'),
+        JSON.stringify({
+          dependencies: { react: '^18.0.0', express: '^4.0.0' }
+        })
+      );
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    
+    // Mock fs.rm to fail during cleanup
+    const originalRm = fs.rm;
+    const rmSpy = vi.spyOn(fs, 'rm').mockRejectedValue(new Error('Cleanup failed'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const res = await request(app)
+        .post('/api/fs/detect-git-tech')
+        .send({ gitUrl: 'https://github.com/octocat/sample.git' });
+
+      // Should still return success since the actual operation succeeded
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        success: true,
+        frontend: { language: 'javascript', framework: 'react' },
+        backend: { language: 'javascript', framework: 'express' }
+      });
+      
+      // Verify cleanup error was logged
+      expect(warnSpy).toHaveBeenCalled();
+      // The warning is called with message and error/details
+      const [warnMessage] = warnSpy.mock.calls[0];
+      expect(warnMessage).toContain('Failed to clean up git tech detection temp folder');
+    } finally {
+      rmSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('POST /api/fs/detect-git-tech handles non-string auth parameters', async () => {
+    // Test with non-string authMethod (number, boolean, object) to cover type-check branches (lines 385-388)
+    runGitCommandMock.mockImplementation(async (_cwd, args) => {
+      const target = args[args.length - 1];
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(
+        path.join(target, 'package.json'),
+        JSON.stringify({
+          dependencies: { react: '^18.0.0', express: '^4.0.0' }
+        })
+      );
+      return { stdout: '', stderr: '', code: 0 };
+    });
+
+    // Test multiple non-string type scenarios - each test hits different branches
+    const testCases = [
+      // All non-strings to hit false branches of all typeof checks
+      {
+        gitUrl: 'https://github.com/octocat/sample1.git',
+        authMethod: 123,
+        token: { key: 'value' },
+        username: true,
+        provider: false
+      },
+      // Mix of string and non-string to ensure both branches of each typeof are hit
+      {
+        gitUrl: 'https://github.com/octocat/sample2.git',
+        authMethod: 'token',  // string - hits true branch of line 385
+        token: null,  // null - hits false branch of line 386
+        username: ['array'],  // array - hits false branch of line 387
+        provider: 789  // number - hits false branch of line 388
+      },
+      // Different mix
+      {
+        gitUrl: 'https://github.com/octocat/sample3.git',
+        authMethod: {},  // object - hits false branch of line 385
+        token: 'mytoken',  // string - hits true branch of line  386
+        username: undefined,  // undefined - hits false branch of line 387
+        provider: 'github'  // string - hits true branch of line 388
+      },
+      // Another mix
+      {
+        gitUrl: 'https://github.com/octocat/sample4.git',
+        authMethod: null,  // null - false branch 385
+        token: 42,  // number - false branch 386
+        username: 'user',  // string - true branch 387
+        provider: []  // array - false branch 388
+      }
+    ];
+
+    for (const testPayload of testCases) {
+      const res = await request(app)
+        .post('/api/fs/detect-git-tech')
+        .send(testPayload);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    }
+  });
+
+  test('POST /api/fs/detect-git-tech with minimal request body', async () => {
+    // Test that covers line 375: const payload = req.body || {}
+    // and lines 385-388: typeof checks for auth fields when not provided
+    runGitCommandMock.mockImplementation(async (_cwd, args) => {
+      const target = args[args.length - 1];
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(
+        path.join(target, 'package.json'),
+        JSON.stringify({
+          dependencies: { react: '^18.0.0', express: '^4.0.0' }
+        })
+      );
+      return { stdout: '', stderr: '', code: 0 };
+    });
+
+    // Send POST with only gitUrl, no auth parameters or undefined auth values
+    const res = await request(app)
+      .post('/api/fs/detect-git-tech')
+      .send({ 
+        gitUrl: 'https://github.com/octocat/sample.git',
+        authMethod: undefined,
+        token: undefined,
+        username: undefined,
+        provider: undefined
+      });
+
+    // Should succeed with defaults (empty auth strings from typeof checks)
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      frontend: { language: 'javascript', framework: 'react' },
+      backend: { language: 'javascript', framework: 'express' }
+    });
+  });
+
+  test('POST /api/fs/detect-git-tech with undefined req.body uses fallback', async () => {
+    // Test line 375: req.body || {}
+    // Create app without express.json() to leave req.body undefined
+    const customApp = express();
+    const router = (await import('../routes/fs.js')).default;
+    customApp.use('/api/fs', router);
+
+    runGitCommandMock.mockImplementation(async () => {
+      throw new Error('Should not reach git command');
+    });
+
+    // Without express.json(), req.body is undefined, triggering the || {} fallback
+    const res = await request(customApp).post('/api/fs/detect-git-tech');
+    
+    // Should fail with 'Git repository URL is required' because payload becomes {}
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Git repository URL is required');
+  });
+
+  test('POST /api/fs/detect-git-tech confirms cleanup error logging', async () => {
+    // Explicitly test line 413: console.warn in cleanup error handler
+    runGitCommandMock.mockImplementation(async (_cwd, args) => {
+      const target = args[args.length - 1];
+      // Create actual temp files so fs.rm is called
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, 'package.json'), JSON.stringify({
+        dependencies: { react: '^18.0.0' }
+      }));
+      return { stdout: '', stderr: '', code: 0 };
+    });
+
+    // Mock cleanup error with no message property to test the || fallback
+    const errorWithoutMessage = Object.create(Error.prototype);
+    errorWithoutMessage.code = 'EPERM';
+    errorWithoutMessage.toString = function() { return 'EPERM error'; };
+    
+    const rmSpy = vi.spyOn(fs, 'rm').mockRejectedValueOnce(errorWithoutMessage);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const res = await request(app)
+        .post('/api/fs/detect-git-tech')
+        .send({ gitUrl: 'https://github.com/octocat/sample.git' });
+
+      // Operation succeeds, cleanup fails silently with warning
+      expect(res.status).toBe(200);
+      expect(warnSpy).toHaveBeenCalled();
+      // Verify the cleanup error was logged (covers line 413)
+      const [warnMessage, errorMsg] = warnSpy.mock.calls[0];
+      expect(warnMessage).toContain('Failed to clean up');
+      expect(errorMsg).toBeDefined();
+    } finally {
+      rmSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('POST /api/fs/detect-git-tech with malformed body types', async () => {
+    // Test lines 385-388: typeof checks for non-string auth parameters
+    runGitCommandMock.mockImplementation(async (_cwd, args) => {
+      const target = args[args.length - 1];
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(
+        path.join(target, 'package.json'),
+        JSON.stringify({ dependencies: { react: '^18.0.0' } })
+      );
+      return { stdout: '', stderr: '', code: 0 };
+    });
+
+    // Send non-string types for auth fields to trigger the ':  ''` branches
+    const res = await request(app)
+      .post('/api/fs/detect-git-tech')
+      .send({
+        gitUrl: 'https://github.com/octocat/sample.git',
+        authMethod: 12345,        // number - triggers line 385 false branch
+        token: ['not', 'string'],  // array - triggers line 386 false branch  
+        username: { obj: true },   // object - triggers line 387 false branch
+        provider: null             // null - triggers line 388 false branch
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
   });
 
   test('GET /api/fs/compatibility validates missing and unsafe paths', async () => {

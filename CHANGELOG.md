@@ -1,3 +1,8 @@
+## 0.6.1 (2026-02-12)
+- Auto-detect tech stack for git clone imports and lock the tech selectors on the details step.
+- Add git tech detection endpoint and coverage for clone-based imports.
+- Refine clone setup layout spacing, grid alignment, and clone options copy.
+
 ## 0.6.0 (2026-02-12)
 - Merge the create and import project flows into a single optimized flow.
 - Update the Projects navigation menu to link to the new flow.

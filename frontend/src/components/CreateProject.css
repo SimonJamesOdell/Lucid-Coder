@@ -86,6 +86,15 @@
   gap: 1.5rem;
 }
 
+.form-row--inline {
+  grid-template-columns: 30% 70%;
+  gap: 20px;
+  align-items: center;
+  padding: 20px;
+  margin-left: 0;
+  transform: translateX(-50px);
+}
+
 .form-section--full .form-row {
   grid-template-columns: 1fr;
 }
@@ -96,10 +105,42 @@
   gap: 0.5rem;
 }
 
+.form-group--inline {
+  display: grid;
+  grid-template-columns: 50% 50%;
+  gap: 20px;
+  align-items: center;
+  justify-items: stretch;
+  width: 100%;
+}
+
+.form-group--inline label {
+  margin: 0;
+  text-align: left;
+}
+
+.form-group--inline .form-input,
+.form-group--inline .form-select {
+  width: 100%;
+}
+
 .form-group label {
   font-size: 0.95rem;
   font-weight: 500;
   color: var(--text-primary, #ffffff);
+}
+
+.form-row--inline .form-label {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-primary, #ffffff);
+  margin: 0;
+  text-align: right;
+}
+
+.form-row--inline .form-input,
+.form-row--inline .form-select {
+  width: 100%;
 }
 
 .form-input,
@@ -164,6 +205,17 @@
 .radio-group {
   display: grid;
   gap: 0.75rem;
+}
+
+.radio-group--spaced {
+  margin-top: 0.75rem;
+}
+
+.radio-group--clone {
+  width: calc(100% - 80px);
+  margin-left: auto;
+  margin-right: auto;
+  transform: translateX(-7px);
 }
 
 .radio-card {
