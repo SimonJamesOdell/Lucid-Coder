@@ -4,7 +4,6 @@
 - Harden branch-workflow threshold handling and tests API behavior for workspace-specific coverage targets, custom/global mode fallbacks, and defensive error paths.
 - Expand jobs and project route coverage for testing-settings edge cases (missing/invalid payloads, fallback reads, and rejected settings lookups) to keep policy-driven test thresholds deterministic.
 - Refine PreviewTab/TestTab and related app-state flows with additional guard-path handling and comprehensive coverage tests across navigation, persistence, and settings reducers.
-- Restore full frontend coverage report granularity (`text` + `json` + `html`) while preserving strict 100% coverage gates.
 
 ## 0.6.2 (2026-02-13)
 - Refine PreviewTab error/empty-state behavior and environment guards to keep runtime behavior consistent while preserving strict coverage expectations.
