@@ -438,3 +438,20 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.preview-logs-modal-panel {
+  width: min(760px, 92vw);
+}
+
+.preview-logs-modal-body {
+  max-height: min(60vh, 520px);
+  overflow: auto;
+}
+
+.preview-logs-modal-content {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  color: var(--text-secondary, #b3b3b3);
+}

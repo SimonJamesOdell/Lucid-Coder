@@ -268,7 +268,7 @@ describe('PreviewTab', () => {
   test('attempts to load the preview when process status is unavailable', () => {
     renderPreviewTab({ processInfo: null });
 
-    expect(screen.queryByTestId('preview-not-running')).toBeNull();
+    expect(screen.queryByText('Project not running')).toBeNull();
     expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
   });
 
@@ -282,8 +282,9 @@ describe('PreviewTab', () => {
 
     renderPreviewTab({ processInfo, onRestartProject, isProjectStopped: true });
 
-    expect(screen.getByTestId('preview-not-running')).toBeInTheDocument();
-    expect(screen.queryByTestId('preview-iframe')).toBeNull();
+    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    expect(screen.getByText('Project not running')).toBeInTheDocument();
+    expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start project' }));
@@ -366,7 +367,6 @@ describe('PreviewTab', () => {
     fireEvent.click(startButton);
 
     await waitFor(() => {
-      expect(screen.queryByTestId('preview-not-running')).not.toBeInTheDocument();
       expect(screen.getByTestId('preview-loading')).toBeInTheDocument();
     });
 
@@ -385,7 +385,7 @@ describe('PreviewTab', () => {
 
     renderPreviewTab({ processInfo });
 
-    expect(screen.queryByTestId('preview-not-running')).toBeNull();
+    expect(screen.queryByText('Project not running')).toBeNull();
     expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
   });
 
@@ -398,8 +398,9 @@ describe('PreviewTab', () => {
 
     renderPreviewTab({ processInfo, isProjectStopped: true });
 
-    expect(screen.getByTestId('preview-not-running')).toBeInTheDocument();
-    expect(screen.queryByTestId('preview-iframe')).toBeNull();
+    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
+    expect(screen.getByText('Project not running')).toBeInTheDocument();
+    expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
   });
 
   test('start handler shows default error message when API rejects without text', async () => {
@@ -417,6 +418,7 @@ describe('PreviewTab', () => {
     });
 
     await waitFor(() => {
+      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
       expect(screen.getByText('Project not running')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Start project' })).toBeInTheDocument();
     });
@@ -636,6 +638,35 @@ describe('PreviewTab', () => {
     }
   });
 
+  test('falls back to about:blank preview URL when window.location is unavailable', async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+    const originalLocation = window.location;
+
+    try {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: undefined
+      });
+
+      const { previewRef } = renderPreviewTab({ processInfo: buildProcessInfo() });
+      expect(previewRef.current.getPreviewUrl()).toBe('about:blank');
+
+      const iframe = screen.getByTestId('preview-iframe');
+      await waitFor(() => {
+        expect(iframe.getAttribute('src')).toBe('about:blank');
+      });
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      } else {
+        Object.defineProperty(window, 'location', {
+          configurable: true,
+          value: originalLocation
+        });
+      }
+    }
+  });
+
   test('uses VITE_API_TARGET origin for the preview proxy URL when valid', async () => {
     const restoreTarget = setViteApiTarget('http://127.0.0.1:5100/api');
     try {
@@ -727,6 +758,74 @@ describe('PreviewTab', () => {
     } finally {
       if (originalDescriptor) {
         Object.defineProperty(window, 'location', originalDescriptor);
+      }
+    }
+  });
+
+  test('uses hostname override with current origin port when not on default dev frontend ports', async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+    const originalLocation = window.location;
+
+    try {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: {
+          origin: 'http://devbox:8080',
+          hostname: 'devbox',
+          protocol: 'http:',
+          port: '8080'
+        }
+      });
+
+      const { previewRef } = renderPreviewTab({ processInfo: buildProcessInfo() });
+
+      act(() => {
+        previewRef.current.__testHooks.applyHostnameOverride('127.0.0.1');
+      });
+
+      await waitFor(() => {
+        expect(previewRef.current.getPreviewUrl()).toBe('http://127.0.0.1:8080/preview/123');
+      });
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      } else {
+        Object.defineProperty(window, 'location', {
+          configurable: true,
+          value: originalLocation
+        });
+      }
+    }
+  });
+
+  test('uses window origin as backend origin when no dev-port remap applies', async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+    const originalLocation = window.location;
+
+    try {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: {
+          origin: 'http://localhost:8080',
+          hostname: 'localhost',
+          protocol: 'http:',
+          port: '8080'
+        }
+      });
+
+      const { previewRef } = renderPreviewTab({ processInfo: buildProcessInfo() });
+
+      await waitFor(() => {
+        expect(previewRef.current.getPreviewUrl()).toBe('http://localhost:8080/preview/123');
+      });
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      } else {
+        Object.defineProperty(window, 'location', {
+          configurable: true,
+          value: originalLocation
+        });
       }
     }
   });
@@ -2509,7 +2608,7 @@ describe('PreviewTab', () => {
     }
   });
 
-  test('renders frontend and backend logs in the error view when available', () => {
+  test('renders frontend logs and opens backend logs modal when available', async () => {
     const processInfo = buildProcessInfo({
       processes: {
         frontend: {
@@ -2527,7 +2626,7 @@ describe('PreviewTab', () => {
 
     const { previewRef } = renderPreviewTab({ processInfo });
 
-    act(() => {
+    await act(async () => {
       previewRef.current.__testHooks.setErrorStateForTests({
         error: true,
         loading: false,
@@ -2537,8 +2636,66 @@ describe('PreviewTab', () => {
 
     expect(screen.getByText('Frontend logs')).toBeInTheDocument();
     expect(screen.getByText('frontend error: ECONNREFUSED')).toBeInTheDocument();
-    expect(screen.getByText('Backend logs')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View backend logs' })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'View backend logs' }));
+    });
+
+    expect(screen.getByTestId('preview-backend-logs-modal')).toBeInTheDocument();
     expect(screen.getByText('backend error: listen EADDRINUSE')).toBeInTheDocument();
+  });
+
+  test('closes backend logs modal when leaving error phase', async () => {
+    const processInfo = buildProcessInfo({
+      processes: {
+        backend: {
+          status: 'running',
+          port: 5656,
+          logs: [{ message: 'backend error: listen EADDRINUSE' }]
+        }
+      }
+    });
+
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    await act(async () => {
+      previewRef.current.__testHooks.setErrorStateForTests({
+        error: true,
+        loading: false,
+        pending: false
+      });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'View backend logs' }));
+    });
+
+    expect(screen.getByTestId('preview-backend-logs-modal')).toBeInTheDocument();
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({
+        error: false,
+        loading: false,
+        pending: false
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('preview-backend-logs-modal')).not.toBeInTheDocument();
+    });
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({
+        error: true,
+        loading: false,
+        pending: false
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('preview-backend-logs-modal')).not.toBeInTheDocument();
+    });
   });
 
   test('setErrorGracePeriod is a no-op in the new state machine', () => {
@@ -2680,6 +2837,25 @@ describe('PreviewTab', () => {
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
+  });
+
+  test('iframe error handler bails when preview attempt is disabled', async () => {
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: { status: 'idle' }
+      }
+    });
+
+    const { previewRef } = renderPreviewTab({ processInfo, isProjectStopped: true });
+
+    expect(screen.getByText('Project not running')).toBeInTheDocument();
+
+    act(() => {
+      previewRef.current.__testHooks.triggerIframeError();
+    });
+
+    expect(screen.getByText('Project not running')).toBeInTheDocument();
+    expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
   });
 
   test('applyHostnameOverride suggests localhost alternatives when hostname is not localhost', async () => {
@@ -2844,9 +3020,8 @@ describe('PreviewTab', () => {
 
     expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
     expect(screen.getByText('Frontend logs')).toBeInTheDocument();
-    expect(screen.getByText('Backend logs')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View backend logs' })).toBeInTheDocument();
     expect(screen.getByText(/frontend ok/i)).toBeInTheDocument();
-    expect(screen.getByText(/backend ok/i)).toBeInTheDocument();
   });
 
   test('error view omits process summary when process info is for another project', () => {
@@ -3759,6 +3934,23 @@ describe('PreviewTab', () => {
     return waitFor(() => {
       expect(previewRef.current.__testHooks.getIframeKey()).toBe(keyBefore + 1);
     });
+  });
+
+  test('softReloadIframe falls back to hard reload in generic error view without iframe', () => {
+    const processInfo = buildProcessInfo();
+    const { previewRef } = renderPreviewTab({ processInfo });
+
+    act(() => {
+      previewRef.current.__testHooks.setErrorStateForTests({ error: true, loading: false, pending: false });
+    });
+
+    const keyBefore = previewRef.current.__testHooks.getIframeKey();
+
+    act(() => {
+      previewRef.current.__testHooks.softReloadIframeForTests();
+    });
+
+    expect(previewRef.current.__testHooks.getIframeKey()).toBe(keyBefore + 1);
   });
 
   test('auto-recovery timeout is cleared after a successful load', async () => {
