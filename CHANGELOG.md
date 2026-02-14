@@ -1,3 +1,10 @@
+## 0.6.7 (2026-02-14)
+- Add an autopilot verification retry circuit breaker that stops auto-fix retries when consecutive runs produce the same failure fingerprint, reducing non-interactive retry loops.
+- Expand autopilot failure extraction with structured Vitest/Pytest log parsing and deduped failure aggregation to improve verification prompts and retry diagnostics.
+- Add stable failure-fingerprint helper coverage and autopilot retry-stop regression tests across service and coverage suites.
+- Stabilize backend Vitest execution defaults by running unit/parallel suites with `forks` and a deterministic non-Windows worker fallback.
+- Refine backend coverage tests for job cancellation error paths by spying on `process.kill` directly in cancellation branches.
+
 ## 0.6.6 (2026-02-14)
 - Fix Linux backend coverage execution by selecting a Node-version-aware Vitest coverage provider (`istanbul` on older runtimes, `v8` on newer runtimes), and add focused resolver coverage tests.
 - Restore missing backend project-route modules (`helpers.js`, `fileOps.js`, `installJobs.js`, `routes.testing.js`) and keep route/test imports aligned so Linux and Windows execute the same route surface.

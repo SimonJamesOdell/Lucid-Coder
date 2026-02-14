@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
-import { summarizeTestRunForPrompt } from '../services/agentAutopilot/runs.js';
-import { autopilotFeatureRequest } from '../services/agentAutopilot.js';
+import { extractFailingTestsFromWorkspaceRuns, summarizeTestRunForPrompt } from '../services/agentAutopilot/runs.js';
+import { autopilotFeatureRequest, __testing as autopilotTesting } from '../services/agentAutopilot.js';
 
 describe('agent autopilot coverage gates', () => {
   test('summarizeTestRunForPrompt includes uncovered line references and guidance', () => {
@@ -88,5 +88,100 @@ describe('agent autopilot coverage gates', () => {
       expect(options.enforceFullCoverage).toBe(true);
       expect(options.includeCoverageLineRefs).toBe(true);
     }
+  });
+
+  test('extractFailingTestsFromWorkspaceRuns parses structured failures from logs', () => {
+    const failures = extractFailingTestsFromWorkspaceRuns([
+      {
+        workspace: 'backend',
+        tests: [],
+        logs: [
+          'stderr: FAIL  tests/jobRunner.test.js > jobRunner > cancels job',
+          'stderr: AssertionError: expected false to be true',
+          'stderr: FAILED tests/test_api.py::test_handles_missing_payload - assert 400 == 200'
+        ]
+      }
+    ]);
+
+    expect(failures.length).toBeGreaterThanOrEqual(2);
+    expect(failures.some((entry) => entry.name.includes('cancels job'))).toBe(true);
+    expect(failures.some((entry) => entry.name.includes('tests/test_api.py::test_handles_missing_payload'))).toBe(true);
+  });
+
+  test('buildFailureFingerprint stays stable for equivalent failing runs', () => {
+    const run = {
+      status: 'failed',
+      summary: {
+        failed: 2,
+        coverage: {
+          totals: { lines: 98, statements: 99, functions: 100, branches: 97 },
+          missing: ['backend/service.js'],
+          uncoveredLines: [
+            { workspace: 'backend', file: 'services/a.js', lines: [10, 11] }
+          ]
+        }
+      },
+      workspaceRuns: [
+        { workspace: 'backend', status: 'failed', exitCode: 1, logs: ['FAIL tests/a.test.js > suite > test'] }
+      ]
+    };
+
+    const first = autopilotTesting.buildFailureFingerprint(run);
+    const second = autopilotTesting.buildFailureFingerprint({ ...run });
+    expect(first).toBe(second);
+  });
+
+  test('autopilot stops verification retries when failure fingerprint is unchanged', async () => {
+    const plan = vi.fn().mockResolvedValue({
+      parent: { branchName: 'feature/fingerprint-stop' },
+      children: [{ prompt: 'Fix failing backend test' }]
+    });
+
+    const edit = vi.fn().mockResolvedValue({ steps: [], summary: 'ok' });
+    const createBranch = vi.fn().mockResolvedValue({});
+    const rollback = vi.fn().mockResolvedValue({ restored: true });
+
+    const repeatedFailureRun = {
+      status: 'failed',
+      summary: {
+        failed: 1,
+        coverage: {
+          totals: { lines: 98, statements: 99, functions: 100, branches: 99 }
+        }
+      },
+      workspaceRuns: [
+        {
+          workspace: 'backend',
+          status: 'failed',
+          exitCode: 1,
+          tests: [],
+          logs: ['FAIL tests/failing.test.js > backend > still fails']
+        }
+      ]
+    };
+
+    const runTests = vi
+      .fn()
+      .mockResolvedValueOnce(repeatedFailureRun)
+      .mockResolvedValueOnce(repeatedFailureRun)
+      .mockResolvedValueOnce(repeatedFailureRun);
+
+    await expect(
+      autopilotFeatureRequest({
+        projectId: 7,
+        prompt: 'Stabilize backend tests',
+        options: { verificationFixRetries: 5 },
+        deps: {
+          plan,
+          edit,
+          createBranch,
+          runTests,
+          rollback
+        }
+      })
+    ).rejects.toThrow('Autopilot implementation did not pass tests/coverage.');
+
+    expect(runTests).toHaveBeenCalledTimes(3);
+    expect(rollback).toHaveBeenCalledTimes(1);
   });
 });

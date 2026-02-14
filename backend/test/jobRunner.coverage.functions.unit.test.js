@@ -161,12 +161,11 @@ describe('jobRunner coverage (functions)', () => {
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       child.pid = 444;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw new Error('kill failed');
+      });
 
-      spawnMock
-        .mockReturnValueOnce(child)
-        .mockImplementationOnce(() => {
-          throw new Error('kill failed');
-        });
+      spawnMock.mockReturnValueOnce(child);
       runStore.createRun.mockResolvedValueOnce({ id: 'run-cancel-error' });
 
       const started = jobRunner.startJob({
@@ -183,6 +182,7 @@ describe('jobRunner coverage (functions)', () => {
       const cancelled = jobRunner.cancelJob(started.id);
       expect(cancelled.status).toBe(jobRunner.JOB_STATUS.CANCELLED);
       expect((cancelled.logs || []).some((l) => l.stream === 'stderr' && l.message.includes('kill failed'))).toBe(true);
+      killSpy.mockRestore();
     }
 
     // Case 2: terminatePid throws a non-Error value (fallback message).
@@ -191,12 +191,11 @@ describe('jobRunner coverage (functions)', () => {
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       child.pid = 555;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw {};
+      });
 
-      spawnMock
-        .mockReturnValueOnce(child)
-        .mockImplementationOnce(() => {
-          throw {};
-        });
+      spawnMock.mockReturnValueOnce(child);
       runStore.createRun.mockResolvedValueOnce({ id: 'run-cancel-non-error' });
 
       const started = jobRunner.startJob({
@@ -213,6 +212,7 @@ describe('jobRunner coverage (functions)', () => {
       const cancelled = jobRunner.cancelJob(started.id);
       expect(cancelled.status).toBe(jobRunner.JOB_STATUS.CANCELLED);
       expect((cancelled.logs || []).some((l) => l.stream === 'stderr' && l.message.includes('Job failed'))).toBe(true);
+      killSpy.mockRestore();
     }
   });
 

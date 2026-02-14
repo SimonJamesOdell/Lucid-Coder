@@ -5,7 +5,7 @@ const isWindows = process.platform === 'win32';
 const envMaxWorkers = Number(process.env.VITEST_MAX_WORKERS);
 const maxWorkers = Number.isInteger(envMaxWorkers) && envMaxWorkers > 0
   ? envMaxWorkers
-  : (isWindows ? 4 : undefined);
+  : (isWindows ? 4 : 1);
 
 export default defineConfig({
   test: {
@@ -16,9 +16,9 @@ export default defineConfig({
     testTimeout: 120000,
 
     // Fast lane: allow Vitest to parallelize test files.
-    pool: isWindows ? 'forks' : 'threads',
+    pool: 'forks',
     maxWorkers,
-    fileParallelism: true,
+    fileParallelism: maxWorkers > 1,
     sequence: {
       concurrent: false
     },

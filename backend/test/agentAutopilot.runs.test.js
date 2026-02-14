@@ -154,7 +154,7 @@ describe('agentAutopilot runs helpers', () => {
       message: 'boom'
     });
     expect(failures[1].workspace).toBe('ws-5');
-    expect(failures[1].name).toBe('log');
+    expect(failures[1].name).toBe('error');
     expect(failures[1].message).toContain('Error:');
   });
 
@@ -266,7 +266,7 @@ describe('agentAutopilot runs helpers', () => {
 
     expect(failures).toHaveLength(15);
     expect(failures[0].workspace).toBe('ws-logs');
-    expect(failures[0].name).toBe('log');
+    expect(failures[0].name).toBe('error');
     expect(failures[14].message).toContain('Error: issue 15');
   });
 
