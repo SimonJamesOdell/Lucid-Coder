@@ -3,7 +3,6 @@
 - Restore missing backend project-route modules (`helpers.js`, `fileOps.js`, `installJobs.js`, `routes.testing.js`) and keep route/test imports aligned so Linux and Windows execute the same route surface.
 - Add `@vitest/coverage-istanbul` to backend dev dependencies to support cross-platform coverage runs where `node:inspector/promises` is unavailable.
 - Update `.gitignore` to allow committed backend route modules under `backend/routes/projects` while keeping user workspace `projects/` ignored.
-- Bump version metadata to `0.6.6` via `npm run release -- 0.6.6` across root/backend/frontend packages, lockfiles, shared version module, and docs.
 
 ## 0.6.5 (2026-02-14)
 - Refactor large frontend components (`CreateProject`, `PreviewTab`, `ImportProject`, `ChatPanel`, `FilesTab`) by extracting focused utility modules and presentational subcomponents to reduce file size while preserving behavior.
