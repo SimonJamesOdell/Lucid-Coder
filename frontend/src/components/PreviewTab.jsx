@@ -1,73 +1,21 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import SettingsModal from './SettingsModal';
+import {
+  normalizeHostname,
+  normalizeBrowserProtocol,
+  getDevServerOriginFromWindow,
+  getBackendOriginFromEnv
+} from './preview-tab/originUtils';
+import PreviewErrorView from './preview-tab/PreviewErrorView';
+import PreviewLoadingOverlay from './preview-tab/PreviewLoadingOverlay';
 import './PreviewTab.css';
+
+export { normalizeHostname, getDevServerOriginFromWindow };
 
 const PORT_MAP = {
   react: 5173,
   vue: 5173,
   nextjs: 3000,
   angular: 4200
-};
-
-export const normalizeHostname = (value) => {
-  if (typeof value !== 'string') {
-    return 'localhost';
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return 'localhost';
-  }
-
-  if (trimmed === '0.0.0.0') {
-    return 'localhost';
-  }
-
-  return trimmed;
-};
-
-const normalizeBrowserProtocol = (value) => {
-  if (typeof value !== 'string') {
-    return 'http:';
-  }
-
-  const trimmed = value.trim();
-  if (trimmed === 'http:' || trimmed === 'https:') {
-    return trimmed;
-  }
-
-  return 'http:';
-};
-
-export const getDevServerOriginFromWindow = ({ port, hostnameOverride } = {}) => {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  if (!Number.isInteger(port) || port <= 0) {
-    return null;
-  }
-
-  const protocol = normalizeBrowserProtocol(window.location?.protocol || 'http:');
-  const hostname = normalizeHostname(hostnameOverride || window.location?.hostname || 'localhost');
-  return `${protocol}//${hostname}:${port}`;
-};
-
-
-const getBackendOriginFromEnv = () => {
-  try {
-    const raw = import.meta?.env?.VITE_API_TARGET;
-    if (typeof raw !== 'string') {
-      return null;
-    }
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      return null;
-    }
-    return new URL(trimmed).origin;
-  } catch {
-    return null;
-  }
 };
 
 const PreviewTab = forwardRef(
@@ -126,9 +74,15 @@ const PreviewTab = forwardRef(
   const suppressNextLoadRef = useRef(false);  // guards against synthetic load from doc.open/close
   const iframeRef = useRef(null);
   const iframeNodeOverrideRef = useRef(null);
+  const hasIframeNodeOverrideRef = useRef(false);
   const canvasRef = useRef(null);
 
-  const getIframeNode = useCallback(() => iframeNodeOverrideRef.current || iframeRef.current, []);
+  const getIframeNode = useCallback(() => {
+    if (hasIframeNodeOverrideRef.current) {
+      return iframeNodeOverrideRef.current;
+    }
+    return iframeRef.current;
+  }, []);
 
   useEffect(() => {
     autoRecoverDisabledRef.current = autoRecoverDisabled;
@@ -1172,6 +1126,12 @@ const PreviewTab = forwardRef(
         setPreviewFailureDetails(value);
       },
       setIframeNodeForTests: (node) => {
+        if (typeof node === 'undefined') {
+          hasIframeNodeOverrideRef.current = false;
+          iframeNodeOverrideRef.current = null;
+          return;
+        }
+        hasIframeNodeOverrideRef.current = true;
         iframeNodeOverrideRef.current = node;
       },
       setCanvasNodeForTests: (node) => {
@@ -1377,113 +1337,32 @@ const PreviewTab = forwardRef(
     })();
 
     return (
-      <div className="preview-tab">
-        <div className="preview-error">
-          <div className="preview-loading-card">
-            <h3>Failed to load preview</h3>
-
-            {showAutoRecoverSwoosh && (
-              <div className="preview-loading-bar" aria-hidden="true">
-                <span className="preview-loading-bar-swoosh" />
-              </div>
-            )}
-
-            {autoRecoverCopy ? (
-              <p className="expected-url">{autoRecoverCopy}</p>
-            ) : null}
-
-            {failureDetails?.message && (
-              <p className="expected-url">
-                {failureDetails.title ? (
-                  <>
-                    <strong>{failureDetails.title}</strong>: {failureDetails.message}
-                  </>
-                ) : (
-                  <>
-                    <strong>Details:</strong> {failureDetails.message}
-                  </>
-                )}
-              </p>
-            )}
-
-            <div className="preview-error-actions">
-              {showNotRunningState ? (
-                <button
-                  type="button"
-                  className="retry-button"
-                  onClick={handleStartProject}
-                  disabled={startInFlight}
-                >
-                  {startLabel}
-                </button>
-              ) : (
-                <>
-                  <button type="button" className="retry-button" onClick={reloadIframe}>
-                    Retry
-                  </button>
-
-                  <button type="button" className="retry-button" onClick={dispatchPreviewFixGoal}>
-                    Fix with AI
-                  </button>
-
-                  {hasBackendLogs ? (
-                    <button
-                      type="button"
-                      className="retry-button"
-                      onClick={() => setShowBackendLogsModal(true)}
-                    >
-                      View backend logs
-                    </button>
-                  ) : null}
-                </>
-              )}
-            </div>
-
-            {(Array.isArray(frontendProcess?.logs) && frontendProcess.logs.length > 0) && (
-              <details className="expected-url" style={{ marginTop: '0.75rem' }}>
-                <summary>Frontend logs</summary>
-                <pre style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem' }}>
-                  {frontendProcess.logs
-                    .slice(-20)
-                    .map((entry) => entry?.message)
-                    .filter(Boolean)
-                    .join('\n')}
-                </pre>
-              </details>
-            )}
-          </div>
-        </div>
-        {showNotRunningState ? (
-          <div className="preview-canvas" ref={canvasRef}>
-            {renderContextMenu()}
-            <iframe
-              ref={iframeRef}
-              data-testid="preview-iframe"
-              className={`full-iframe${resolvedPreviewPhase !== 'ready' && !isSoftReloading ? ' full-iframe--loading' : ''}`}
-              key={iframeKey}
-              src={effectivePreviewUrl}
-              title={`${project?.name || 'Project'} Preview`}
-              onError={handleIframeError}
-              onLoad={handleIframeLoad}
-              sandbox="allow-scripts allow-same-origin allow-forms"
-            />
-          </div>
-        ) : null}
-        <SettingsModal
-          isOpen={showBackendLogsModal}
-          onClose={() => setShowBackendLogsModal(false)}
-          title="Backend logs"
-          subtitle="Latest entries from the backend process"
-          testId="preview-backend-logs-modal"
-          panelClassName="preview-logs-modal-panel"
-          bodyClassName="preview-logs-modal-body"
-          closeLabel="Close backend logs"
-        >
-          <pre className="preview-logs-modal-content">
-            {backendLogsText || 'No backend logs available.'}
-          </pre>
-        </SettingsModal>
-      </div>
+      <PreviewErrorView
+        showAutoRecoverSwoosh={showAutoRecoverSwoosh}
+        autoRecoverCopy={autoRecoverCopy}
+        failureDetails={failureDetails}
+        showNotRunningState={showNotRunningState}
+        handleStartProject={handleStartProject}
+        startInFlight={startInFlight}
+        startLabel={startLabel}
+        reloadIframe={reloadIframe}
+        dispatchPreviewFixGoal={dispatchPreviewFixGoal}
+        hasBackendLogs={hasBackendLogs}
+        setShowBackendLogsModal={setShowBackendLogsModal}
+        frontendProcess={frontendProcess}
+        renderContextMenu={renderContextMenu}
+        canvasRef={canvasRef}
+        iframeRef={iframeRef}
+        resolvedPreviewPhase={resolvedPreviewPhase}
+        isSoftReloading={isSoftReloading}
+        iframeKey={iframeKey}
+        effectivePreviewUrl={effectivePreviewUrl}
+        project={project}
+        handleIframeError={handleIframeError}
+        handleIframeLoad={handleIframeLoad}
+        showBackendLogsModal={showBackendLogsModal}
+        backendLogsText={backendLogsText}
+      />
     );
   }
 
@@ -1504,47 +1383,16 @@ const PreviewTab = forwardRef(
     const subtitle = showRecoveryCopy ? `Attempt ${autoRecoverState.attempt}/3` : null;
 
     return (
-      <div className="preview-loading" data-testid="preview-loading">
-        <div className="preview-loading-card">
-          <h3>{title}</h3>
-          {!isPlaceholderDetected && (
-            <div className="preview-loading-bar" aria-hidden="true">
-              <span className="preview-loading-bar-swoosh" />
-            </div>
-          )}
-          {subtitle ? <p className="expected-url">{subtitle}</p> : null}
-
-          {isPlaceholderDetected && (
-            <>
-              <p>
-                The project preview can't load. The dev server may have crashed
-                or the project code has an error that prevents it from starting.
-              </p>
-              <div className="preview-error-actions" data-testid="preview-stuck-actions">
-                <button type="button" className="retry-button" onClick={reloadIframe}>
-                  Retry
-                </button>
-                <button type="button" className="retry-button" onClick={dispatchPreviewFixGoal}>
-                  Fix with AI
-                </button>
-              </div>
-            </>
-          )}
-
-          {shouldShowUrl && (
-            <p className="expected-url">
-              URL: <code>{normalizedDisplayedUrl}</code>
-            </p>
-          )}
-          {newTabUrl && shouldShowUrl ? (
-            <p className="expected-url">
-              <a href={newTabUrl} target="_blank" rel="noopener noreferrer">
-                Open in a new tab
-              </a>
-            </p>
-          ) : null}
-        </div>
-      </div>
+      <PreviewLoadingOverlay
+        title={title}
+        subtitle={subtitle}
+        isPlaceholderDetected={isPlaceholderDetected}
+        reloadIframe={reloadIframe}
+        dispatchPreviewFixGoal={dispatchPreviewFixGoal}
+        shouldShowUrl={shouldShowUrl}
+        normalizedDisplayedUrl={normalizedDisplayedUrl}
+        newTabUrl={newTabUrl}
+      />
     );
   };
 

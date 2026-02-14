@@ -77,6 +77,11 @@ import {
   computeNextFollowAutomation
 } from './appState/previewPanel.js';
 import { isBackendUnreachableResponse } from './appState/backendConnectivity.js';
+import {
+  buildTestRunIntentState,
+  withStoppedProject,
+  withoutStoppedProject
+} from './appState/uiState.js';
 
 const isTestEnv = typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
 
@@ -187,41 +192,21 @@ export const AppStateProvider = ({ children }) => {
   }
 
   const markTestRunIntent = useCallback((source = 'unknown', options = {}) => {
-    const normalized = typeof source === 'string' ? source.trim() : '';
-    const autoCommit = Boolean(options?.autoCommit);
-    const returnToCommits = Boolean(options?.returnToCommits);
-    setTestRunIntent({
-      source: normalized || 'unknown',
-      updatedAt: new Date().toISOString(),
-      autoCommit,
-      returnToCommits
-    });
+    setTestRunIntent(buildTestRunIntentState(source, options));
   }, []);
 
   const markProjectStopped = useCallback((projectId) => {
     if (!projectId) {
       return;
     }
-    setStoppedProjects((prev) => ({
-      ...prev,
-      [projectId]: true
-    }));
+    setStoppedProjects((prev) => withStoppedProject(prev, projectId));
   }, []);
 
   const clearProjectStopped = useCallback((projectId) => {
     if (!projectId) {
       return;
     }
-    setStoppedProjects((prev) => {
-      /* v8 ignore next */
-      if (!prev[projectId]) {
-        /* v8 ignore next */
-        return prev;
-      }
-      const next = { ...prev };
-      delete next[projectId];
-      return next;
-    });
+    setStoppedProjects((prev) => withoutStoppedProject(prev, projectId));
   }, []);
 
   if (isTestEnv) {

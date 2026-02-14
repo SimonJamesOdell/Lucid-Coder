@@ -57,330 +57,38 @@ import { registerProjectFileRoutes } from './projects/routes.files.js';
 import { registerProjectGitRoutes } from './projects/routes.git.js';
 import { registerProjectProcessRoutes } from './projects/routes.processes.js';
 import { registerProjectTestingRoutes } from './projects/routes.testing.js';
+import { enqueueInstallJobs } from './projects/installJobs.js';
+import {
+  copyDirectoryRecursive,
+  cleanupExistingImportTarget,
+  prepareImportTargetPath,
+  copyProjectFilesWithFallback
+} from './projects/fileOps.js';
+import {
+  normalizeImportMethod,
+  normalizeImportMode,
+  safeTrim,
+  extractRepoName,
+  assertDirectoryExists,
+  assertProjectPathAvailable,
+  pathExists,
+  dirExists,
+  fileExists,
+  isCloneTargetNotEmptyError,
+  resolveImportProjectName,
+  resolveImportPayloadConfig,
+  ensureLocalImportGitRepository,
+  importProjectFromGit,
+  importProjectFromLocal,
+  applyImportPostProcessing,
+  resolveImportGitSettings,
+  normalizeProjectDates,
+  serializeJob
+} from './projects/helpers.js';
 
 const router = express.Router();
 
-const normalizeImportMethod = (value) => (value === 'git' ? 'git' : 'local');
-const normalizeImportMode = (value) => (value === 'link' ? 'link' : 'copy');
-const normalizeGitConnectionMode = (value) => {
-  const normalized = safeTrim(value).toLowerCase();
-  if (normalized === 'global' || normalized === 'custom') {
-    return normalized;
-  }
-  return 'local';
-};
-const safeTrim = (value) => (typeof value === 'string' ? value.trim() : '');
-
-const extractRepoName = (value) => {
-  const raw = safeTrim(value);
-  if (!raw) {
-    return '';
-  }
-
-  const cleaned = raw.replace(/[?#].*$/, '');
-  const parts = cleaned.split('/').filter(Boolean);
-  let candidate = parts[parts.length - 1] || '';
-
-  if (candidate.includes(':')) {
-    candidate = candidate.split(':').pop() || candidate;
-  }
-
-  return candidate.replace(/\.git$/i, '');
-};
-
 // buildCloneUrl and stripGitCredentials imported from ../utils/gitUrl.js
-
-const assertDirectoryExists = async (targetPath) => {
-  const stats = await fs.stat(targetPath);
-  if (!stats.isDirectory()) {
-    const error = new Error('Project path must be a directory');
-    error.statusCode = 400;
-    throw error;
-  }
-};
-
-const assertProjectPathAvailable = async (targetPath) => {
-  try {
-    await fs.stat(targetPath);
-    const error = new Error('Project path already exists');
-    error.statusCode = 409;
-    throw error;
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return;
-    }
-    throw error;
-  }
-};
-
-const pathExists = async (targetPath) => {
-  try {
-    await fs.stat(targetPath);
-    return true;
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return false;
-    }
-    throw error;
-  }
-};
-
-const dirExists = async (targetPath) => {
-  try {
-    const stats = await fs.stat(targetPath);
-    return stats.isDirectory();
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return false;
-    }
-    throw error;
-  }
-};
-
-const fileExists = async (targetPath) => {
-  try {
-    const stats = await fs.stat(targetPath);
-    return stats.isFile();
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return false;
-    }
-    throw error;
-  }
-};
-
-const isCloneTargetNotEmptyError = (error) => {
-  const message = `${error?.stderr || ''} ${error?.message || ''}`.toLowerCase();
-  return message.includes('already exists and is not an empty directory');
-};
-
-const resolveImportGitSettings = ({
-  payload,
-  globalSettings,
-  gitRemoteUrl,
-  gitDefaultBranch,
-  fallbackProvider
-}) => {
-  const connectionMode = normalizeGitConnectionMode(payload?.gitConnectionMode);
-  const requestedRemote = safeTrim(payload?.gitRemoteUrl);
-  const resolvedRemote = requestedRemote || safeTrim(gitRemoteUrl);
-  const requestedProvider = safeTrim(payload?.gitConnectionProvider)
-    || safeTrim(payload?.gitProvider)
-    || fallbackProvider;
-  const requestedBranch = safeTrim(payload?.gitDefaultBranch)
-    || safeTrim(gitDefaultBranch)
-    || safeTrim(globalSettings?.defaultBranch)
-    || 'main';
-
-  if (connectionMode === 'local' || !resolvedRemote) {
-    return {
-      workflow: 'local',
-      provider: requestedProvider,
-      remoteUrl: '',
-      username: '',
-      defaultBranch: requestedBranch
-    };
-  }
-
-  const globalProvider = safeTrim(globalSettings?.provider);
-  const globalUsername = safeTrim(globalSettings?.username);
-  const provider = connectionMode === 'global' && globalProvider
-    ? globalProvider
-    : requestedProvider;
-  const username = connectionMode === 'global' && globalUsername
-    ? globalUsername
-    : safeTrim(payload?.gitUsername);
-
-  return {
-    workflow: 'cloud',
-    provider,
-    remoteUrl: resolvedRemote,
-    username,
-    defaultBranch: requestedBranch
-  };
-};
-
-const normalizeProjectDates = (project = {}) => {
-  const createdAt = project.createdAt ?? project.created_at ?? null;
-  const updatedAt = project.updatedAt ?? project.updated_at ?? createdAt;
-  return {
-    ...project,
-    createdAt,
-    updatedAt
-  };
-};
-
-const serializeJob = (job) => {
-  if (!job) {
-    return null;
-  }
-  return {
-    id: job.id,
-    projectId: job.projectId ?? job.project_id ?? null,
-    type: job.type,
-    displayName: job.displayName,
-    status: job.status,
-    command: job.command,
-    args: job.args,
-    cwd: job.cwd,
-    createdAt: job.createdAt,
-    startedAt: job.startedAt,
-    completedAt: job.completedAt,
-    exitCode: job.exitCode,
-    signal: job.signal,
-    logs: job.logs
-  };
-};
-
-const enqueueInstallJobs = async ({ projectId, projectPath }) => {
-  if (!projectId || !projectPath) {
-    return [];
-  }
-
-  const jobs = [];
-  const frontendPath = path.join(projectPath, 'frontend');
-  const backendPath = path.join(projectPath, 'backend');
-  const hasFrontendDir = await dirExists(frontendPath);
-  const hasBackendDir = await dirExists(backendPath);
-  const backendBase = hasBackendDir ? backendPath : projectPath;
-
-  const frontendPackage = hasFrontendDir && await fileExists(path.join(frontendPath, 'package.json'));
-  if (frontendPackage) {
-    try {
-      jobs.push(startJob({
-        projectId,
-        type: 'frontend:install',
-        displayName: 'Install frontend dependencies',
-        command: 'npm',
-        args: ['install'],
-        cwd: frontendPath
-      }));
-    } catch (error) {
-      console.warn('Failed to start frontend install job:', error?.message || error);
-    }
-  }
-
-  const backendPackage = await fileExists(path.join(backendBase, 'package.json'));
-  const backendRequirements = await fileExists(path.join(backendBase, 'requirements.txt'));
-  const backendPyProject = await fileExists(path.join(backendBase, 'pyproject.toml'));
-  const backendPom = await fileExists(path.join(backendBase, 'pom.xml'));
-  const backendGradle = await fileExists(path.join(backendBase, 'build.gradle')) || await fileExists(path.join(backendBase, 'build.gradle.kts'));
-  const backendGradleWrapper = await fileExists(path.join(backendBase, 'gradlew')) || await fileExists(path.join(backendBase, 'gradlew.bat'));
-  const backendGoMod = await fileExists(path.join(backendBase, 'go.mod'));
-  const backendCargo = await fileExists(path.join(backendBase, 'Cargo.toml'));
-  const backendComposer = await fileExists(path.join(backendBase, 'composer.json'));
-  const backendGemfile = await fileExists(path.join(backendBase, 'Gemfile'));
-  const backendSwift = await fileExists(path.join(backendBase, 'Package.swift'));
-
-  let backendCommand = null;
-  let backendArgs = null;
-
-  if (backendPackage) {
-    backendCommand = 'npm';
-    backendArgs = ['install'];
-  } else if (backendRequirements) {
-    backendCommand = 'python';
-    backendArgs = ['-m', 'pip', 'install', '-r', 'requirements.txt'];
-  } else if (backendPyProject) {
-    backendCommand = 'python';
-    backendArgs = ['-m', 'pip', 'install', '-e', '.'];
-  } else if (backendPom) {
-    backendCommand = 'mvn';
-    backendArgs = ['-q', '-DskipTests', 'package'];
-  } else if (backendGradle) {
-    backendCommand = backendGradleWrapper
-      ? (await fileExists(path.join(backendBase, 'gradlew.bat')) ? path.join(backendBase, 'gradlew.bat') : path.join(backendBase, 'gradlew'))
-      : 'gradle';
-    backendArgs = ['build', '-x', 'test'];
-  } else if (backendGoMod) {
-    backendCommand = 'go';
-    backendArgs = ['mod', 'download'];
-  } else if (backendCargo) {
-    backendCommand = 'cargo';
-    backendArgs = ['fetch'];
-  } else if (backendComposer) {
-    backendCommand = 'composer';
-    backendArgs = ['install'];
-  } else if (backendGemfile) {
-    backendCommand = 'bundle';
-    backendArgs = ['install'];
-  } else if (backendSwift) {
-    backendCommand = 'swift';
-    backendArgs = ['package', 'resolve'];
-  }
-
-  if (backendCommand && backendArgs) {
-    try {
-      jobs.push(startJob({
-        projectId,
-        type: 'backend:install',
-        displayName: 'Install backend dependencies',
-        command: backendCommand,
-        args: backendArgs,
-        cwd: backendBase
-      }));
-    } catch (error) {
-      console.warn('Failed to start backend install job:', error?.message || error);
-    }
-  }
-
-  return jobs;
-};
-
-const DEFAULT_COPY_IGNORE_DIRS = new Set(['node_modules', '.git']);
-
-const copyDirectoryRecursive = async (sourceDir, targetDir, { onFileError, ignoreDirs = DEFAULT_COPY_IGNORE_DIRS } = {}) => {
-  await fs.mkdir(targetDir, { recursive: true });
-
-  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory() && ignoreDirs.has(entry.name)) {
-      continue;
-    }
-    const srcPath = path.join(sourceDir, entry.name);
-    const destPath = path.join(targetDir, entry.name);
-
-    if (entry.isDirectory()) {
-      await copyDirectoryRecursive(srcPath, destPath, { onFileError });
-      continue;
-    }
-
-    if (entry.isSymbolicLink()) {
-      try {
-        const linkTarget = await fs.readlink(srcPath);
-        await fs.symlink(linkTarget, destPath);
-      } catch (error) {
-        if (typeof onFileError === 'function') {
-          onFileError(error, srcPath, destPath);
-        }
-        throw error;
-      }
-      continue;
-    }
-
-    try {
-      await fs.copyFile(srcPath, destPath);
-    } catch (error) {
-      if (typeof onFileError === 'function') {
-        onFileError(error, srcPath, destPath);
-      }
-      throw error;
-    }
-  }
-};
-
-const cleanupExistingImportTarget = async (targetPath) => {
-  if (!targetPath || !isWithinManagedProjectsRoot(targetPath)) {
-    return false;
-  }
-
-  try {
-    await fs.rm(targetPath, { recursive: true, force: true });
-    return true;
-  } catch (error) {
-    return false;
-  }
-};
 
 registerProjectProcessRoutes(router);
 registerProjectFileRoutes(router);
@@ -443,14 +151,7 @@ router.post('/import', async (req, res) => {
     const applyCompatibilityChanges = Boolean(payload.applyCompatibility);
     const applyStructureFix = Boolean(payload.applyStructureFix);
 
-    let projectName = safeTrim(payload.name);
-    if (!projectName) {
-      if (importMethod === 'git') {
-        projectName = extractRepoName(payload.gitUrl);
-      } else {
-        projectName = extractRepoName(payload.localPath || payload.path);
-      }
-    }
+    const projectName = resolveImportProjectName({ payload, importMethod });
 
     if (!projectName) {
       return res.status(400).json({ success: false, error: 'Project name is required' });
@@ -464,24 +165,15 @@ router.post('/import', async (req, res) => {
       });
     }
 
-    const frontend = payload.frontend || {};
-    const backend = payload.backend || {};
-
-    const frontendConfig = {
-      language: safeTrim(frontend.language) || 'javascript',
-      framework: safeTrim(frontend.framework) || 'react'
-    };
-
-    const backendConfig = {
-      language: safeTrim(backend.language) || 'javascript',
-      framework: safeTrim(backend.framework) || 'express'
-    };
-
-    const description = safeTrim(payload.description);
+    const {
+      frontendConfig,
+      backendConfig,
+      description,
+      gitProvider
+    } = resolveImportPayloadConfig(payload);
     let projectPath = null;
     let gitRemoteUrl = null;
     let gitDefaultBranch = null;
-    let gitProvider = safeTrim(payload.gitProvider) || 'github';
     let globalGitSettings = null;
 
     try {
@@ -492,149 +184,69 @@ router.post('/import', async (req, res) => {
     }
 
     if (importMethod === 'local') {
-      const localPath = safeTrim(payload.localPath || payload.path);
-      if (!localPath) {
-        return res.status(400).json({ success: false, error: 'Project path is required' });
-      }
-
-      await assertDirectoryExists(localPath);
-
-      if (importMode === 'link') {
-        if (!isWithinManagedProjectsRoot(localPath)) {
-          return res.status(400).json({
-            success: false,
-            error: 'Linked projects must be inside the managed projects folder. Use copy instead.'
-          });
-        }
-        projectPath = localPath;
-      } else {
-        const targetPath = resolveProjectPath(projectName);
-        await fs.mkdir(path.dirname(targetPath), { recursive: true });
-        if (await pathExists(targetPath)) {
-          const cleaned = await cleanupExistingImportTarget(targetPath);
-          if (!cleaned) {
-            return res.status(409).json({
-              success: false,
-              error: 'Project path already exists'
-            });
-          }
-        }
-        try {
-          await fs.cp(localPath, targetPath, {
-            recursive: true,
-            filter: (src) => {
-              const normalized = src.replace(/\\/g, '/');
-              return !normalized.includes('/node_modules/') && !normalized.endsWith('/node_modules');
-            }
-          });
-        } catch (copyError) {
-          let failedPath = null;
-          let failure = copyError;
-
-          try {
-            await copyDirectoryRecursive(localPath, targetPath, {
-              onFileError: (error, srcPath) => {
-                failedPath = srcPath;
-                failure = error;
-              }
-            });
-          } catch (recursiveError) {
-            failure = recursiveError;
-          }
-
-          const code = failure?.code || copyError?.code || 'UNKNOWN';
-          const suffix = failedPath ? ` at ${failedPath}` : '';
-          const message = `Failed to copy project files (${code})${suffix}. Try linking instead.`;
-          const error = new Error(message);
-          error.statusCode = 400;
-          error.code = code;
-          error.failedPath = failedPath;
-          throw error;
-        }
-        createdProjectPath = targetPath;
-        projectPath = targetPath;
-      }
-    } else {
-      const gitUrl = safeTrim(payload.gitUrl);
-      if (!gitUrl) {
-        return res.status(400).json({ success: false, error: 'Git repository URL is required' });
-      }
-
-      const targetPath = resolveProjectPath(projectName);
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      if (await pathExists(targetPath)) {
-        const cleaned = await cleanupExistingImportTarget(targetPath);
-        if (!cleaned) {
-          return res.status(409).json({
-            success: false,
-            error: 'Project path already exists'
-          });
-        }
-      }
-
-      const authMethod = safeTrim(payload.gitAuthMethod).toLowerCase() === 'ssh' ? 'ssh' : 'pat';
-      const { cloneUrl, safeUrl } = buildCloneUrl({
-        url: gitUrl,
-        authMethod,
-        token: payload.gitToken,
-        username: payload.gitUsername,
-        provider: gitProvider
+      const localImport = await importProjectFromLocal({
+        payload,
+        importMode,
+        projectName,
+        assertDirectoryExistsFn: assertDirectoryExists,
+        isWithinManagedProjectsRootFn: isWithinManagedProjectsRoot,
+        resolveProjectPathFn: resolveProjectPath,
+        prepareTargetPathFn: async (targetPath) => prepareImportTargetPath(targetPath, {
+          pathExistsFn: pathExists,
+          cleanupExistingImportTargetFn: cleanupExistingImportTarget
+        }),
+        copyProjectFilesWithFallbackFn: (localPath, targetPath) => copyProjectFilesWithFallback(localPath, targetPath, {
+          cpFn: fs.cp,
+          copyDirectoryRecursiveFn: copyDirectoryRecursive
+        })
       });
 
-      const cloneBaseDir = getProjectsDir();
-      await fs.mkdir(cloneBaseDir, { recursive: true });
-      await runGitCommand(cloneBaseDir, ['clone', cloneUrl, targetPath]);
-      createdProjectPath = targetPath;
+      createdProjectPath = localImport.createdProjectPath;
+      projectPath = localImport.projectPath;
+    } else {
+      const gitImport = await importProjectFromGit({
+        payload,
+        projectName,
+        gitProvider,
+        resolveProjectPathFn: resolveProjectPath,
+        prepareTargetPathFn: async (targetPath) => prepareImportTargetPath(targetPath, {
+          pathExistsFn: pathExists,
+          cleanupExistingImportTargetFn: cleanupExistingImportTarget
+        }),
+        buildCloneUrlFn: buildCloneUrl,
+        getProjectsDirFn: getProjectsDir,
+        mkdirFn: fs.mkdir,
+        runGitCommandFn: runGitCommand,
+        getCurrentBranchFn: getCurrentBranch
+      });
 
-      const sanitizedRemoteUrl = safeUrl;
-      await runGitCommand(targetPath, ['remote', 'set-url', 'origin', sanitizedRemoteUrl], { allowFailure: true });
-      gitRemoteUrl = sanitizedRemoteUrl;
-
-      try {
-        gitDefaultBranch = await getCurrentBranch(targetPath);
-      } catch {
-        gitDefaultBranch = null;
-      }
-
-      projectPath = targetPath;
+      createdProjectPath = gitImport.createdProjectPath;
+      gitRemoteUrl = gitImport.gitRemoteUrl;
+      gitDefaultBranch = gitImport.gitDefaultBranch;
+      projectPath = gitImport.projectPath;
     }
 
-    if (importMethod === 'local' && projectPath) {
-      const defaultBranch = safeTrim(payload.gitDefaultBranch)
-        || safeTrim(globalGitSettings?.defaultBranch)
-        || 'main';
-      const gitDirPath = path.join(projectPath, '.git');
-      const hasGitDir = await dirExists(gitDirPath);
-      if (!hasGitDir) {
-        await ensureGitRepository(projectPath, { defaultBranch });
-        await configureGitUser(projectPath, {
-          name: globalGitSettings?.username,
-          email: globalGitSettings?.email
-        });
-        await ensureInitialCommit(projectPath, 'Initial commit');
-      }
-    }
+    await ensureLocalImportGitRepository({
+      importMethod,
+      projectPath,
+      payload,
+      globalGitSettings,
+      dirExistsFn: dirExists,
+      ensureGitRepositoryFn: ensureGitRepository,
+      configureGitUserFn: configureGitUser,
+      ensureInitialCommitFn: ensureInitialCommit
+    });
 
-    let structureResult = null;
-    let compatibilityResult = null;
-    if (applyStructureFix) {
-      try {
-        structureResult = await applyProjectStructure(projectPath);
-      } catch (error) {
-        const structureError = new Error(error?.message || 'Failed to apply project structure updates');
-        structureError.statusCode = 400;
-        throw structureError;
-      }
-    }
-    if (applyCompatibilityChanges) {
-      try {
-        compatibilityResult = await applyCompatibility(projectPath);
-      } catch (error) {
-        const compatError = new Error(error?.message || 'Failed to apply compatibility changes');
-        compatError.statusCode = 400;
-        throw compatError;
-      }
-    }
+    const {
+      structureResult,
+      compatibilityResult
+    } = await applyImportPostProcessing({
+      projectPath,
+      applyStructureFix,
+      applyCompatibilityChanges,
+      applyProjectStructureFn: applyProjectStructure,
+      applyCompatibilityFn: applyCompatibility
+    });
 
     const dbProjectData = {
       name: projectName,
@@ -1432,6 +1044,7 @@ export {
   enqueueInstallJobs,
   stripGitCredentials,
   extractRepoName,
+  resolveImportProjectName,
   assertProjectPathAvailable,
   pathExists,
   dirExists,
