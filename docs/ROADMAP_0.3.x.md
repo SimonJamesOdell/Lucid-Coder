@@ -1,4 +1,6 @@
-# LucidCoder 0.3.x Roadmap (0.3.5–0.3.7)
+# LucidCoder 0.3.x Roadmap (Archived)
+
+Status: historical planning document for completed 0.3.x milestones. It is retained for reference only, and current releases have progressed beyond this plan (see [../CHANGELOG.md](../CHANGELOG.md)).
 
 Date created: 2026-01-27
 Owner: Simon

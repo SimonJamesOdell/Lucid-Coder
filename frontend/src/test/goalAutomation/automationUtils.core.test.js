@@ -577,6 +577,10 @@ describe('tryParseLooseJson', () => {
     expect(tryParseLooseJson(withLineComment)).toEqual({ foo: 'bar' });
     expect(tryParseLooseJson(withBlockComment)).toEqual({ foo: 'bar' });
   });
+
+  it('parses unquoted keys with trailing commas', () => {
+    expect(tryParseLooseJson('{edits:[{path:"src/a.js",}],}')).toEqual({ edits: [{ path: 'src/a.js' }] });
+  });
 });
 
 describe('parseEditsFromLLM', () => {

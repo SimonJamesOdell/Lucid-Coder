@@ -3,105 +3,43 @@ import { useAppState } from '../context/AppStateContext';
 import axios from 'axios';
 import { io } from 'socket.io-client';
 import FolderPickerModal from './FolderPickerModal';
+import {
+  guessProjectName,
+  buildProgressSteps,
+  normalizeServerProgress,
+  isEmptyProgressSnapshot,
+  generateProgressKey,
+  POLL_SUPPRESSION_WINDOW_MS
+} from './create-project/progressUtils';
+import {
+  FRONTEND_LANGUAGES,
+  BACKEND_LANGUAGES,
+  deriveRepoName,
+  resolveFrontendFrameworkOptions,
+  resolveBackendFrameworkOptions,
+  applyDetectedTechToProject,
+  buildGitSummaryItems
+} from './create-project/formUtils';
+import {
+  buildBaseProjectData,
+  resolveNormalizedGitConfig,
+  attachGitConnectionDetails,
+  buildConnectExistingProjectGitDetails
+} from './create-project/payloadUtils';
+import GitSetupSection from './create-project/GitSetupSection';
+import ProjectSourceSection from './create-project/ProjectSourceSection';
+import CompatibilitySection from './create-project/CompatibilitySection';
+import CreateProjectFormActions from './create-project/CreateProjectFormActions';
+import { createProgressController } from './create-project/progressController';
+import { createPostCloneSetupHandlers } from './create-project/postCloneSetup';
+import ProjectDetailsSection from './create-project/ProjectDetailsSection';
+import { useGitTechDetection } from './create-project/useGitTechDetection';
+import { useSetupJobsPolling } from './create-project/useSetupJobsPolling';
+import CreateProjectProgressPanel from './create-project/CreateProjectProgressPanel';
+import CreateProjectHeader from './create-project/CreateProjectHeader';
 import './CreateProject.css';
 
-const PROGRESS_STEP_NAMES = [
-  'Creating directories',
-  'Generating files',
-  'Initializing git repository',
-  'Installing dependencies',
-  'Starting development servers'
-];
-
-const buildProgressSteps = (completed = false) =>
-  PROGRESS_STEP_NAMES.map((name) => ({ name, completed }));
-
-const clampCompletion = (value) => Math.min(100, Math.max(0, value));
-
-const isEmptyProgressSnapshot = (candidate) => {
-  if (!candidate || typeof candidate !== 'object') {
-    return true;
-  }
-
-  const stepsEmpty = Array.isArray(candidate.steps) && candidate.steps.length === 0;
-  const noMetrics = candidate.status == null && candidate.completion == null;
-  const noMessage = !candidate.statusMessage;
-  const noError = !candidate.error;
-
-  return stepsEmpty && noMetrics && noMessage && noError;
-};
-
-const normalizeServerProgress = (serverProgress) => {
-  if (!serverProgress || typeof serverProgress !== 'object') {
-    return {
-      steps: buildProgressSteps(false),
-      completion: 0,
-      status: 'pending',
-      statusMessage: 'Working...'
-    };
-  }
-
-  const declaredStatus = typeof serverProgress.status === 'string' ? serverProgress.status : null;
-
-  const stepsProvided = Array.isArray(serverProgress.steps) && serverProgress.steps.length > 0;
-  const rawSteps = stepsProvided
-    ? serverProgress.steps
-    : buildProgressSteps(declaredStatus === 'completed');
-
-  const normalizedSteps = rawSteps.map((step, index) => ({
-    name: step?.name || PROGRESS_STEP_NAMES[index] || `Step ${index + 1}`,
-    completed: Boolean(step?.completed)
-  }));
-
-  const completionFromServer = typeof serverProgress.completion === 'number'
-    ? clampCompletion(serverProgress.completion)
-    : Math.round(
-        (normalizedSteps.filter((step) => step.completed).length / normalizedSteps.length) * 100
-      ) || 0;
-
-  const completion = declaredStatus === 'completed'
-    ? 100
-    : (normalizedSteps.every((step) => step.completed) ? 100 : completionFromServer);
-
-  const status = declaredStatus
-    || (completion === 100 ? 'completed' : (completion === 0 ? 'pending' : 'in-progress'));
-
-  return {
-    steps: normalizedSteps,
-    completion,
-    status,
-    statusMessage: serverProgress.statusMessage || 'Project created successfully',
-    error: serverProgress.error
-  };
-};
-
 export const BACKEND_UNAVAILABLE_MESSAGE = 'Unable to reach the backend server. Please make sure it is running and try again.';
-
-const generateProgressKey = () => {
-  if (typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
-  return `progress-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
-
-const POLL_SUPPRESSION_WINDOW_MS = 1500;
-
-const guessProjectName = (value) => {
-  if (!value || typeof value !== 'string') {
-    return '';
-  }
-  const cleaned = value.trim().replace(/[?#].*$/, '');
-  if (!cleaned) {
-    return '';
-  }
-  const segments = cleaned.split(/[\\/]/).filter(Boolean);
-  let candidate = segments.length > 0 ? segments[segments.length - 1] : '';
-  if (candidate.includes(':')) {
-    const afterColon = candidate.split(':').pop();
-    candidate = afterColon || '';
-  }
-  return candidate.replace(/\.git$/i, '');
-};
 
 const CreateProject = () => {
   const {
@@ -176,26 +114,8 @@ const CreateProject = () => {
   const [gitRepoOwner, setGitRepoOwner] = useState('');
   const [gitRepoVisibility, setGitRepoVisibility] = useState('private');
 
-  const frontendLanguages = ['javascript', 'typescript'];
-  const backendLanguages = ['javascript', 'typescript', 'python', 'java', 'csharp', 'go', 'rust', 'php', 'ruby', 'swift'];
-
-  const frontendFrameworks = {
-    javascript: ['react', 'vue', 'angular', 'svelte', 'nextjs', 'nuxtjs', 'vanilla'],
-    typescript: ['react', 'vue', 'angular', 'svelte', 'nextjs', 'nuxtjs', 'vanilla']
-  };
-
-  const backendFrameworks = {
-    javascript: ['express', 'fastify', 'koa', 'nestjs', 'nextjs-api'],
-    typescript: ['express', 'fastify', 'koa', 'nestjs', 'nextjs-api'],
-    python: ['django', 'flask', 'fastapi', 'pyramid', 'tornado'],
-    java: ['spring', 'springboot', 'quarkus', 'micronaut'],
-    csharp: ['aspnetcore', 'webapi', 'minimal-api'],
-    go: ['gin', 'echo', 'fiber', 'gorilla', 'chi'],
-    rust: ['actix', 'warp', 'rocket', 'axum', 'tide'],
-    php: ['laravel', 'symfony', 'codeigniter', 'slim'],
-    ruby: ['rails', 'sinatra', 'grape'],
-    swift: ['vapor', 'perfect', 'kitura']
-  };
+  const frontendLanguages = FRONTEND_LANGUAGES;
+  const backendLanguages = BACKEND_LANGUAGES;
 
   useEffect(() => () => {
     if (progressStreamRef.current) {
@@ -267,235 +187,28 @@ const CreateProject = () => {
     }
   }, [gitCloudMode, gitWorkflowMode, projectSource]);
 
-  const clearInitialPollTimeout = () => {
-    if (progressPollTimeoutRef.current) {
-      clearTimeout(progressPollTimeoutRef.current);
-      progressPollTimeoutRef.current = null;
-    }
-  };
-
-  const clearPollSuppression = () => {
-    if (pollSuppressionTimeoutRef.current) {
-      clearTimeout(pollSuppressionTimeoutRef.current);
-      pollSuppressionTimeoutRef.current = null;
-    }
-    pollSuppressedRef.current = false;
-  };
-
-  const closeProgressStream = () => {
-    if (progressStreamRef.current) {
-      progressStreamRef.current.close();
-      progressStreamRef.current = null;
-    }
-
-    if (progressSocketRef.current) {
-      try {
-        progressSocketRef.current.disconnect();
-      } catch {
-        // Ignore cleanup errors.
-      }
-      progressSocketRef.current = null;
-    }
-
-    if (progressPollRef.current) {
-      clearInterval(progressPollRef.current);
-      progressPollRef.current = null;
-    }
-
-    clearInitialPollTimeout();
-    clearPollSuppression();
-    lastProgressUpdateAtRef.current = 0;
-  };
-
-  const suppressPollingAfterUpdate = () => {
-    pollSuppressedRef.current = true;
-    if (pollSuppressionTimeoutRef.current) {
-      clearTimeout(pollSuppressionTimeoutRef.current);
-    }
-    pollSuppressionTimeoutRef.current = setTimeout(() => {
-      pollSuppressedRef.current = false;
-      pollSuppressionTimeoutRef.current = null;
-    }, POLL_SUPPRESSION_WINDOW_MS);
-  };
-
-  const applyProgressPayload = (payload) => {
-    const normalized = normalizeServerProgress(payload);
-    const isFailure = normalized?.status === 'failed';
-    lastProgressUpdateAtRef.current = Date.now();
-    suppressPollingAfterUpdate();
-    setProgress(normalized);
-    if (isFailure && normalized?.error) {
-      setCreateError(normalized.error);
-      setCreateLoading(false);
-      setProcesses(null);
-      setProgressKey(null);
-    }
-    if (normalized?.status === 'completed' || normalized?.status === 'failed' || normalized?.status === 'awaiting-user') {
-      closeProgressStream();
-    }
-  };
-
-  const startProgressPolling = (key) => {
-    /* v8 ignore next */
-    if (!key) { return; }
-
-    const pollOnce = async () => {
-      try {
-        const response = await axios.get(`/api/projects/progress/${encodeURIComponent(key)}`);
-        if (response?.data?.success && response.data.progress) {
-          applyProgressPayload(response.data.progress);
-        }
-      } catch (error) {
-        // 404 is expected early (progress not initialized yet). Ignore transient failures.
-      }
-    };
-
-    // Initial poll soon after starting.
-    clearInitialPollTimeout();
-    progressPollTimeoutRef.current = setTimeout(pollOnce, 250);
-
-    progressPollRef.current = setInterval(() => {
-      if (pollSuppressedRef.current) {
-        return;
-      }
-
-      if (Date.now() - lastProgressUpdateAtRef.current < POLL_SUPPRESSION_WINDOW_MS) {
-        return;
-      }
-
-      pollOnce();
-    }, 1000);
-  };
-
-  const handleProgressEvent = (event) => {
-    try {
-      const payload = JSON.parse(event.data);
-      applyProgressPayload(payload);
-    } catch (parseError) {
-      // Ignore malformed events
-    }
-  };
-
-  const handleProgressSocketPayload = (payload) => {
-    if (!payload || typeof payload !== 'object') {
-      return;
-    }
-
-    const candidate = Object.prototype.hasOwnProperty.call(payload, 'progress') ? payload.progress : payload;
-    if (!candidate || typeof candidate !== 'object') {
-      return;
-    }
-
-    const looksLikeProgress =
-      Object.prototype.hasOwnProperty.call(candidate, 'steps')
-      || Object.prototype.hasOwnProperty.call(candidate, 'completion')
-      || Object.prototype.hasOwnProperty.call(candidate, 'status')
-      || Object.prototype.hasOwnProperty.call(candidate, 'statusMessage')
-      || Object.prototype.hasOwnProperty.call(candidate, 'error');
-
-    if (looksLikeProgress) {
-      applyProgressPayload(candidate);
-    }
-  };
-
-  const startEventSourceProgressStream = (key) => {
-    if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
-      return;
-    }
-
-    try {
-      const stream = new EventSource(`/api/projects/progress/${encodeURIComponent(key)}/stream`);
-      if (typeof stream.addEventListener === 'function') {
-        stream.addEventListener('progress', handleProgressEvent);
-      } else {
-        stream.onmessage = handleProgressEvent;
-      }
-      stream.onerror = () => {
-        stream.close();
-      };
-      progressStreamRef.current = stream;
-    } catch (error) {
-      // Fallback to no stream if EventSource fails
-    }
-  };
-
-  const startProgressStream = (key) => {
-    closeProgressStream();
-    startProgressPolling(key);
-
-    try {
-      const socket = io({
-        autoConnect: true,
-        reconnection: true,
-        transports: ['polling'],
-        upgrade: false
-      });
-
-      progressSocketRef.current = socket;
-      let settled = false;
-
-      const fallbackToEventSource = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (progressSocketRef.current === socket) {
-          progressSocketRef.current = null;
-        }
-        try {
-          socket.off('connect');
-          socket.off('connect_error');
-          socket.off('progress:sync');
-          socket.off('progress:update');
-          socket.disconnect();
-        } catch {
-          // Ignore.
-        }
-
-        startEventSourceProgressStream(key);
-      };
-
-      socket.on('connect', () => {
-        socket.emit('progress:join', { progressKey: key }, (response) => {
-          if (!response || response.error) {
-            fallbackToEventSource();
-            return;
-          }
-          settled = true;
-          handleProgressSocketPayload(response);
-
-          // Some servers ack join without including a snapshot.
-          // Poll once to pick up the initial state.
-          if (!response.progress) {
-            setTimeout(() => {
-              // Polling interval is already running; this just prompts a sooner fetch.
-              lastProgressUpdateAtRef.current = 0;
-            }, 50);
-          }
-        });
-      });
-
-      socket.on('connect_error', () => {
-        fallbackToEventSource();
-      });
-
-      socket.on('progress:sync', handleProgressSocketPayload);
-      socket.on('progress:update', handleProgressSocketPayload);
-    } catch (error) {
-      startEventSourceProgressStream(key);
-    }
-  };
-
-  const deriveRepoName = (value) => {
-    const raw = typeof value === 'string' ? value.trim() : '';
-    if (!raw) {
-      return '';
-    }
-    const cleaned = raw.replace(/\.git$/i, '');
-    const lastSlash = Math.max(cleaned.lastIndexOf('/'), cleaned.lastIndexOf(':'), cleaned.lastIndexOf('\\'));
-    const candidate = lastSlash >= 0 ? cleaned.slice(lastSlash + 1) : cleaned;
-    return candidate.trim();
-  };
+  const {
+    closeProgressStream,
+    applyProgressPayload,
+    startProgressStream
+  } = createProgressController({
+    axios,
+    io,
+    normalizeServerProgress,
+    POLL_SUPPRESSION_WINDOW_MS,
+    progressStreamRef,
+    progressSocketRef,
+    progressPollRef,
+    progressPollTimeoutRef,
+    pollSuppressedRef,
+    pollSuppressionTimeoutRef,
+    lastProgressUpdateAtRef,
+    setProgress,
+    setCreateError,
+    setCreateLoading,
+    setProcesses,
+    setProgressKey
+  });
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
@@ -639,22 +352,19 @@ const CreateProject = () => {
         setCreateError('');
 
         const connectionMode = gitConnectionMode || 'local';
-        const providerFromGlobal = (gitSettings?.provider || 'github').toLowerCase();
-        const normalizedProvider = (connectionMode === 'custom' ? gitProvider : providerFromGlobal) || 'github';
-        const defaultBranch = (gitSettings?.defaultBranch || 'main').trim() || 'main';
-        const username = typeof gitSettings?.username === 'string' ? gitSettings.username.trim() : '';
+        const { normalizedProvider, defaultBranch, username } = resolveNormalizedGitConfig({
+          mode: connectionMode,
+          gitProvider,
+          gitSettings
+        });
 
-        const projectData = {
-          name: effectiveName,
-          description: newProject.description.trim(),
-          frontend: {
-            language: newProject.frontend.language,
-            framework: newProject.frontend.framework
-          },
-          backend: {
-            language: newProject.backend.language,
-            framework: newProject.backend.framework
-          },
+        let projectData = {
+          ...buildBaseProjectData({
+            name: effectiveName,
+            description: newProject.description,
+            frontend: newProject.frontend,
+            backend: newProject.backend
+          }),
           importMethod: 'git',
           gitUrl: gitRemoteUrl.trim(),
           gitProvider: normalizedProvider,
@@ -662,13 +372,12 @@ const CreateProject = () => {
           gitConnectionMode: connectionMode
         };
 
-        if (connectionMode !== 'local') {
-          projectData.gitRemoteUrl = gitRemoteUrl.trim();
-          projectData.gitConnectionProvider = normalizedProvider;
-          if (connectionMode === 'custom') {
-            projectData.gitToken = gitToken.trim();
-          }
-        }
+        projectData = attachGitConnectionDetails(projectData, {
+          mode: connectionMode,
+          normalizedProvider,
+          remoteUrl: gitRemoteUrl,
+          token: gitToken
+        });
 
         const result = await importProject(projectData);
 
@@ -742,32 +451,34 @@ const CreateProject = () => {
         setCreateLoading(true);
         setCreateError('');
 
-        const projectData = {
-          name: effectiveName,
-          description: newProject.description.trim(),
-          frontend: {
-            language: newProject.frontend.language,
-            framework: newProject.frontend.framework
-          },
-          backend: {
-            language: newProject.backend.language,
-            framework: newProject.backend.framework
-          },
+        const connectionMode = gitConnectionMode || 'local';
+        const { normalizedProvider } = resolveNormalizedGitConfig({
+          mode: connectionMode,
+          gitProvider,
+          gitSettings
+        });
+
+        let projectData = {
+          ...buildBaseProjectData({
+            name: effectiveName,
+            description: newProject.description,
+            frontend: newProject.frontend,
+            backend: newProject.backend
+          }),
           importMethod: 'local',
           importMode: localImportMode,
           localPath: localPath.trim(),
           applyCompatibility: compatibilityRequired && compatibilityConsent,
           applyStructureFix: structureRequired && structureConsent,
-          gitConnectionMode: gitConnectionMode || 'local'
+          gitConnectionMode: connectionMode
         };
 
-        if (gitConnectionMode !== 'local') {
-          projectData.gitRemoteUrl = gitConnectionRemoteUrl.trim();
-          projectData.gitConnectionProvider = (gitConnectionMode === 'custom' ? gitProvider : (gitSettings?.provider || 'github')).toLowerCase();
-          if (gitConnectionMode === 'custom') {
-            projectData.gitToken = gitToken.trim();
-          }
-        }
+        projectData = attachGitConnectionDetails(projectData, {
+          mode: connectionMode,
+          normalizedProvider,
+          remoteUrl: gitConnectionRemoteUrl,
+          token: gitToken
+        });
 
         const result = await importProject(projectData);
         const importJobs = Array.isArray(result?.jobs) ? result.jobs : [];
@@ -818,43 +529,37 @@ const CreateProject = () => {
       const isCloudWorkflow = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
       const isConnectExisting = isCloudWorkflow && gitCloudMode === 'connect';
 
-      const providerFromGlobal = (gitSettings?.provider || 'github').toLowerCase();
-      const normalizedProvider = (gitWorkflowMode === 'custom' ? gitProvider : providerFromGlobal) || 'github';
-      const defaultBranch = (gitSettings?.defaultBranch || 'main').trim() || 'main';
-      const username = typeof gitSettings?.username === 'string' ? gitSettings.username.trim() : '';
+      const { normalizedProvider, defaultBranch, username } = resolveNormalizedGitConfig({
+        mode: gitWorkflowMode,
+        gitProvider,
+        gitSettings
+      });
       const derivedName = isCloudWorkflow
         ? (gitCloudMode === 'create' ? gitRepoName.trim() : deriveRepoName(gitRemoteUrl))
         : '';
       const nameForProject = derivedName || newProject.name.trim();
-      const descriptionForProject = newProject.description.trim();
 
       const postBody = {
-        name: nameForProject,
-        description: descriptionForProject,
-        frontend: {
-          language: newProject.frontend.language,
-          framework: newProject.frontend.framework
-        },
-        backend: {
-          language: newProject.backend.language,
-          framework: newProject.backend.framework
-        },
+        ...buildBaseProjectData({
+          name: nameForProject,
+          description: newProject.description,
+          frontend: newProject.frontend,
+          backend: newProject.backend
+        }),
         progressKey: newProgressKey
       };
 
       // When connecting to an existing repo, include git params so the backend
       // clones instead of scaffolding a new project from scratch.
       if (isConnectExisting) {
-        postBody.gitCloudMode = 'connect';
-        postBody.gitRemoteUrl = gitRemoteUrl.trim();
-        postBody.gitProvider = normalizedProvider;
-        postBody.gitDefaultBranch = defaultBranch;
-        if (username) {
-          postBody.gitUsername = username;
-        }
-        if (gitWorkflowMode === 'custom') {
-          postBody.gitToken = gitToken.trim();
-        }
+        Object.assign(postBody, buildConnectExistingProjectGitDetails({
+          normalizedProvider,
+          defaultBranch,
+          username,
+          remoteUrl: gitRemoteUrl,
+          mode: gitWorkflowMode,
+          token: gitToken
+        }));
       }
 
       const response = await axios.post('/api/projects', postBody);
@@ -898,7 +603,7 @@ const CreateProject = () => {
             name: gitRepoName.trim() || nameForProject,
             owner: gitRepoOwner.trim(),
             visibility: gitRepoVisibility,
-            description: descriptionForProject
+            description: postBody.description
           };
 
           if (username) {
@@ -1035,230 +740,46 @@ const CreateProject = () => {
   };
 
   const applyDetectedTech = (detected) => {
-    if (!detected || typeof detected !== 'object') {
-      return;
-    }
-
-    setNewProject((prev) => {
-      const nextFrontendLang = detected?.frontend?.language || prev.frontend.language;
-      const nextBackendLang = detected?.backend?.language || prev.backend.language;
-
-      const frontendOptions = frontendFrameworks[nextFrontendLang] || frontendFrameworks.javascript;
-      const backendOptions = backendFrameworks[nextBackendLang] || backendFrameworks.javascript;
-
-      const nextFrontendFramework = frontendOptions.includes(detected?.frontend?.framework)
-        ? detected.frontend.framework
-        : frontendOptions[0];
-
-      const nextBackendFramework = backendOptions.includes(detected?.backend?.framework)
-        ? detected.backend.framework
-        : backendOptions[0];
-
-      return {
-        ...prev,
-        frontend: {
-          language: nextFrontendLang,
-          framework: nextFrontendFramework
-        },
-        backend: {
-          language: nextBackendLang,
-          framework: nextBackendFramework
-        }
-      };
-    });
+    setNewProject((prev) => applyDetectedTechToProject(prev, detected));
   };
 
-  useEffect(() => {
-    if (setupStep !== 'details' || projectSource !== 'git') {
-      return;
-    }
-
-    const url = gitRemoteUrl.trim();
-    if (!url) {
-      return;
-    }
-
-    const connectionMode = gitConnectionMode || 'local';
-    const provider = (connectionMode === 'custom' ? gitProvider : (gitSettings?.provider || 'github')).toLowerCase();
-    const token = connectionMode === 'custom' ? gitToken.trim() : '';
-    const detectKey = `${url}|${connectionMode}|${provider}|${token}`;
-    if (gitTechKeyRef.current === detectKey) {
-      return;
-    }
-    gitTechKeyRef.current = detectKey;
-
-    setGitTechStatus({ isLoading: true, error: '' });
-
-    axios
-      .post('/api/fs/detect-git-tech', {
-        gitUrl: url,
-        provider,
-        token: token || undefined
-      })
-      .then((response) => {
-        const data = response?.data;
-        if (!data?.success) {
-          throw new Error(data?.error || 'Failed to detect tech stack');
-        }
-        applyDetectedTech(data);
-        setGitTechStatus({ isLoading: false, error: '' });
-      })
-      .catch((error) => {
-        const message = error?.response?.data?.error || error?.message || 'Failed to detect tech stack';
-        setGitTechStatus({ isLoading: false, error: message });
-      });
-  }, [
+  useGitTechDetection({
     setupStep,
     projectSource,
     gitRemoteUrl,
     gitConnectionMode,
     gitProvider,
+    gitSettingsProvider: gitSettings?.provider,
     gitToken,
-    gitSettings?.provider
-  ]);
+    gitTechKeyRef,
+    setGitTechStatus,
+    axios,
+    onDetected: applyDetectedTech
+  });
 
-  const runPostCloneSetup = async (projectId) => {
-    if (!projectId) {
-      throw new Error('Missing project id for setup');
-    }
-
-    setGitIgnoreStatus({ state: 'working', error: '' });
-    setProgress((prev) => {
-      const existingSteps = Array.isArray(prev?.steps) && prev.steps.length > 0
-        ? prev.steps
-        : buildProgressSteps(false);
-
-      const updatedSteps = existingSteps.map((step, index) => ({
-        ...step,
-        completed: index < 3
-      }));
-
-      return {
-        ...prev,
-        steps: updatedSteps,
-        status: 'in-progress',
-        statusMessage: 'Installing dependencies...'
-      };
-    });
-
-    const response = await axios.post(`/api/projects/${projectId}/setup`);
-
-    if (!response?.data?.success) {
-      throw new Error(response?.data?.error || 'Failed to complete project setup');
-    }
-
-    if (response.data.processes) {
-      setProcesses(response.data.processes);
-    }
-
-    setProgress((prev) => ({
-      ...prev,
-      steps: buildProgressSteps(true),
-      completion: 100,
-      status: 'completed',
-      statusMessage: response.data.message || 'Project setup completed'
-    }));
-
-    setGitIgnoreStatus({ state: 'done', error: '' });
-    setGitIgnoreSuggestion(null);
-    setTimeout(() => {
-      showMain();
-    }, 2000);
-  };
+  const {
+    runPostCloneSetup,
+    handleApplyGitIgnore: applyGitIgnore,
+    handleSkipGitIgnore: skipGitIgnore,
+    handleContinueAfterGitIgnore
+  } = createPostCloneSetupHandlers({
+    axios,
+    setGitIgnoreStatus,
+    setProgress,
+    setProcesses,
+    setGitIgnoreSuggestion,
+    showMain
+  });
 
   const handleApplyGitIgnore = async () => {
-    if (!gitIgnoreSuggestion?.projectId) {
-      return;
-    }
-
-    try {
-      const response = await axios.post(
-        `/api/projects/${gitIgnoreSuggestion.projectId}/git/ignore-fix`,
-        {
-          entries: gitIgnoreSuggestion.entries,
-          commit: true
-        }
-      );
-
-      if (!response?.data?.success) {
-        throw new Error(response?.data?.error || 'Failed to update .gitignore');
-      }
-
-      await runPostCloneSetup(gitIgnoreSuggestion.projectId);
-    } catch (error) {
-      const message = error?.response?.data?.error || error?.message || 'Failed to update .gitignore';
-      setGitIgnoreStatus({ state: 'error', error: message });
-    }
+    await applyGitIgnore(gitIgnoreSuggestion);
   };
 
   const handleSkipGitIgnore = async () => {
-    if (!gitIgnoreSuggestion?.projectId) {
-      return;
-    }
-
-    try {
-      await runPostCloneSetup(gitIgnoreSuggestion.projectId);
-    } catch (error) {
-      const message = error?.response?.data?.error || error?.message || 'Failed to complete project setup';
-      setGitIgnoreStatus({ state: 'error', error: message });
-      return;
-    }
+    await skipGitIgnore(gitIgnoreSuggestion);
   };
 
-  const handleContinueAfterGitIgnore = () => {
-    setGitIgnoreSuggestion(null);
-    setGitIgnoreStatus({ state: 'idle', error: '' });
-    showMain();
-  };
-
-  useEffect(() => {
-    if (!setupState.isWaiting || !setupState.projectId) {
-      return;
-    }
-
-    let isCancelled = false;
-    const poll = async () => {
-      try {
-        const response = await fetch(`/api/projects/${setupState.projectId}/jobs`);
-        const data = await response.json().catch(() => null);
-        if (!response.ok || !data?.success) {
-          throw new Error(data?.error || 'Failed to load setup jobs');
-        }
-        if (isCancelled) {
-          return;
-        }
-        const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-        const finalStates = new Set(['succeeded', 'failed', 'cancelled']);
-        const isComplete = jobs.length > 0 && jobs.every((job) => finalStates.has(job?.status));
-        setSetupState((prev) => ({
-          ...prev,
-          jobs,
-          error: ''
-        }));
-        if (isComplete) {
-          setSetupState((prev) => ({
-            ...prev,
-            isWaiting: false
-          }));
-          showMain();
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          setSetupState((prev) => ({
-            ...prev,
-            error: error?.message || 'Failed to load setup jobs'
-          }));
-        }
-      }
-    };
-
-    poll();
-    const timer = setInterval(poll, 2000);
-    return () => {
-      isCancelled = true;
-      clearInterval(timer);
-    };
-  }, [setupState.isWaiting, setupState.projectId, showMain]);
+  useSetupJobsPolling({ setupState, setSetupState, showMain });
 
   useEffect(() => {
     if (process.env.NODE_ENV !== 'test') {
@@ -1319,11 +840,45 @@ const CreateProject = () => {
   ]);
 
   const getFrontendFrameworks = () => {
-    return frontendFrameworks[newProject.frontend.language] || ['react'];
+    return resolveFrontendFrameworkOptions(newProject.frontend.language);
   };
 
   const getBackendFrameworks = () => {
-    return backendFrameworks[newProject.backend.language] || ['express'];
+    return resolveBackendFrameworkOptions(newProject.backend.language);
+  };
+
+  const handleFrontendLanguageChange = (e) => {
+    setNewProject((prev) => ({
+      ...prev,
+      frontend: {
+        language: e.target.value,
+        framework: resolveFrontendFrameworkOptions(e.target.value)[0]
+      }
+    }));
+  };
+
+  const handleFrontendFrameworkChange = (e) => {
+    setNewProject((prev) => ({
+      ...prev,
+      frontend: { ...prev.frontend, framework: e.target.value }
+    }));
+  };
+
+  const handleBackendLanguageChange = (e) => {
+    setNewProject((prev) => ({
+      ...prev,
+      backend: {
+        language: e.target.value,
+        framework: resolveBackendFrameworkOptions(e.target.value)[0]
+      }
+    }));
+  };
+
+  const handleBackendFrameworkChange = (e) => {
+    setNewProject((prev) => ({
+      ...prev,
+      backend: { ...prev.backend, framework: e.target.value }
+    }));
   };
 
   const compatibilityRequired = Boolean(compatibilityPlan?.needsChanges);
@@ -1374,20 +929,15 @@ const CreateProject = () => {
 
   const isProgressBlocking = Boolean(progress && progress.status !== 'failed');
   const isCloudWorkflowUi = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
-  const derivedRepoNameForSummary = isCloudWorkflowUi
-    ? (gitCloudMode === 'create' ? gitRepoName.trim() : deriveRepoName(gitRemoteUrl))
-    : '';
-  const shouldShowGitSummary =
-    isCloudWorkflowUi &&
-    gitCloudMode === 'connect' &&
-    Boolean(gitRemoteUrl.trim());
-  const gitSummaryItems = shouldShowGitSummary
-    ? [
-        { label: 'Repo name', value: derivedRepoNameForSummary || '(not set)' },
-        { label: 'Remote', value: gitRemoteUrl.trim() },
-        { label: 'Provider', value: (gitWorkflowMode === 'custom' ? gitProvider : (gitSettings?.provider || 'github')) }
-      ]
-    : [];
+  const gitSummaryItems = buildGitSummaryItems({
+    gitWorkflowMode,
+    gitCloudMode,
+    gitRepoName,
+    gitRemoteUrl,
+    gitProvider,
+    globalProvider: gitSettings?.provider
+  });
+  const shouldShowGitSummary = gitSummaryItems.length > 0;
 
   if (setupState.isWaiting) {
     const setupJobs = setupState.jobs || [];
@@ -1434,714 +984,100 @@ const CreateProject = () => {
   return (
     <div className="create-project-view">
       <div className="create-project-container">
-        {progress && (
-          <div className="progress-container">
-            <h4>Creating your project...</h4>
-            <div className="progress-bar" role="progressbar" aria-valuenow={progress.completion} aria-valuemin="0" aria-valuemax="100">
-              <div 
-                className="progress-fill" 
-                style={{ width: `${progress.completion}%` }}
-              ></div>
-            </div>
-            {progress.statusMessage && (
-              <p className="progress-status">{progress.statusMessage}</p>
-            )}
-            {progress.status === 'failed' && progress.error && (
-              <div className="progress-error">{progress.error}</div>
-            )}
-            <div className="progress-steps">
-              {progress.steps.map((step, index) => (
-                <div key={index} className={`progress-step ${step.completed ? 'completed' : ''}`}>
-                  <span className="step-icon">
-                    {step.completed ? '✓' : '●'}
-                  </span>
-                  <span className="step-name">{step.name}</span>
-                </div>
-              ))}
-            </div>
-            {processes && progress.completion === 100 && (
-              <div className="success-info">
-                <p>✅ Project created successfully!</p>
-                <p>Frontend running on: <a href={`http://localhost:${processes.frontend.port}`} target="_blank" rel="noopener noreferrer">http://localhost:{processes.frontend.port}</a></p>
-                <p>Backend running on: <a href={`http://localhost:${processes.backend.port}`} target="_blank" rel="noopener noreferrer">http://localhost:{processes.backend.port}</a></p>
-              </div>
-            )}
-            {gitIgnoreSuggestion && gitIgnoreStatus.state !== 'working' && (
-              <div className="gitignore-suggestion">
-                <h5>This repo is missing information in it's .gitignore file which will result in issues when used with Lucid Coder.</h5>
-                <p>
-                  If you want to continue, we can fix this issue automatically.
-                </p>
-                {gitIgnoreSuggestion.entries.length > 0 && (
-                  <p>
-                    Suggested entries:
-                  </p>
-                )}
-                <ul>
-                  {gitIgnoreSuggestion.entries.map((entry) => (
-                    <li key={entry}><code>{entry}</code></li>
-                  ))}
-                </ul>
-                {gitIgnoreSuggestion.trackedFiles?.length > 0 && (
-                  <p className="gitignore-warning">
-                    Note: installs will update tracked files ({gitIgnoreSuggestion.trackedFiles.join(', ')}),
-                    so the working tree may still show changes.
-                  </p>
-                )}
-                {gitIgnoreSuggestion.samplePaths?.length > 0 && (
-                  <p className="gitignore-sample">
-                    Detected: {gitIgnoreSuggestion.samplePaths.join(', ')}
-                  </p>
-                )}
-                {gitIgnoreStatus.state === 'error' && (
-                  <div className="gitignore-error">{gitIgnoreStatus.error}</div>
-                )}
-                <div className="gitignore-actions">
-                  {gitIgnoreStatus.state !== 'done' ? (
-                    <>
-                      <button
-                        type="button"
-                        className="git-settings-button primary"
-                        onClick={handleApplyGitIgnore}
-                        disabled={gitIgnoreStatus.state === 'working'}
-                      >
-                        Fix Issue
-                      </button>
-                      <button
-                        type="button"
-                        className="git-settings-button secondary"
-                        onClick={handleSkipGitIgnore}
-                        disabled={gitIgnoreStatus.state === 'working'}
-                      >
-                        Cancel Installation
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className="git-settings-button primary"
-                      onClick={handleContinueAfterGitIgnore}
-                    >
-                      Continue to project
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        <CreateProjectProgressPanel
+          progress={progress}
+          processes={processes}
+          gitIgnoreSuggestion={gitIgnoreSuggestion}
+          gitIgnoreStatus={gitIgnoreStatus}
+          onApplyGitIgnore={handleApplyGitIgnore}
+          onSkipGitIgnore={handleSkipGitIgnore}
+          onContinueAfterGitIgnore={handleContinueAfterGitIgnore}
+        />
         
-        <div className="create-project-header" style={{ display: isProgressBlocking ? 'none' : 'block' }}>
-          <div className="create-project-header-row">
-            <div>
-              <h1>Add Project</h1>
-              <p>Create a new project or bring in an existing one.</p>
-            </div>
-            <button
-              type="button"
-              className="create-project-close"
-              onClick={handleCancel}
-              aria-label="Close add project"
-            >
-              &times;
-            </button>
-          </div>
-        </div>
+        <CreateProjectHeader
+          isProgressBlocking={isProgressBlocking}
+          onCancel={handleCancel}
+        />
 
         <div className="create-project-form" style={{ display: isProgressBlocking ? 'none' : 'block' }}>
           <form onSubmit={handleCreateProject} role="form">
             {setupStep === 'source' && (
-              <div className="form-section">
-                <h3>Project Source</h3>
-                <div className="radio-group">
-                  <label className={`radio-card ${projectSource === 'new' ? 'selected' : ''}`}>
-                    <input
-                      type="radio"
-                      name="projectSource"
-                      value="new"
-                      checked={projectSource === 'new'}
-                      onChange={() => {
-                        setProjectSource('new');
-                        setCreateError('');
-                      }}
-                      disabled={createLoading}
-                    />
-                    <div>
-                      <div className="radio-title">Create a new project</div>
-                      <div className="radio-subtitle">Scaffold a brand-new app with your chosen tech stack.</div>
-                    </div>
-                  </label>
-                  <label className={`radio-card ${projectSource === 'local' ? 'selected' : ''}`}>
-                    <input
-                      type="radio"
-                      name="projectSource"
-                      value="local"
-                      checked={projectSource === 'local'}
-                      onChange={() => {
-                        setProjectSource('local');
-                        setCreateError('');
-                      }}
-                      disabled={createLoading}
-                    />
-                    <div>
-                      <div className="radio-title">Import a local folder</div>
-                      <div className="radio-subtitle">Bring in an existing project from your machine.</div>
-                    </div>
-                  </label>
-                  <label className={`radio-card ${projectSource === 'git' ? 'selected' : ''}`}>
-                    <input
-                      type="radio"
-                      name="projectSource"
-                      value="git"
-                      checked={projectSource === 'git'}
-                      onChange={() => {
-                        setProjectSource('git');
-                        setCreateError('');
-                      }}
-                      disabled={createLoading}
-                    />
-                    <div>
-                      <div className="radio-title">Clone from Git</div>
-                      <div className="radio-subtitle">Connect an existing repository URL.</div>
-                    </div>
-                  </label>
-                </div>
-              </div>
+              <ProjectSourceSection
+                projectSource={projectSource}
+                setProjectSource={setProjectSource}
+                setCreateError={setCreateError}
+                createLoading={createLoading}
+              />
             )}
 
             {setupStep === 'details' && (
-              <>
-                <div className="form-section">
-                  <h3>Project Details</h3>
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label htmlFor="project-name">Project Name *</label>
-                      <input
-                        id="project-name"
-                        type="text"
-                        placeholder="Enter project name"
-                        value={newProject.name}
-                        onChange={(e) => {
-                          setNewProject(prev => ({ ...prev, name: e.target.value }));
-                          // Clear error when name changes
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-input"
-                        disabled={createLoading}
-                        autoFocus
-                      />
-                    </div>
-                    
-                    <div className="form-group">
-                      <label htmlFor="project-description">Description</label>
-                      <input
-                        id="project-description"
-                        type="text"
-                        placeholder="Brief description of your project"
-                        value={newProject.description}
-                        onChange={(e) => setNewProject(prev => ({ ...prev, description: e.target.value }))}
-                        className="form-input"
-                        disabled={createLoading}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="form-section">
-                  <h3>Frontend Technology</h3>
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label htmlFor="frontend-language-select">Frontend Language *</label>
-                      <select
-                        id="frontend-language-select"
-                        value={newProject.frontend.language}
-                        onChange={(e) => setNewProject(prev => ({ 
-                          ...prev, 
-                          frontend: {
-                            language: e.target.value,
-                            framework: frontendFrameworks[e.target.value]?.[0] || 'react'
-                          }
-                        }))}
-                        className="form-select"
-                        disabled={createLoading || projectSource === 'git'}
-                      >
-                        {frontendLanguages.map(lang => (
-                          <option key={lang} value={lang}>
-                            {lang.charAt(0).toUpperCase() + lang.slice(1)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="frontend-framework-select">Frontend Framework *</label>
-                      <select
-                        id="frontend-framework-select"
-                        value={newProject.frontend.framework}
-                        onChange={(e) => setNewProject(prev => ({ 
-                          ...prev, 
-                          frontend: { ...prev.frontend, framework: e.target.value }
-                        }))}
-                        className="form-select"
-                        disabled={createLoading || projectSource === 'git'}
-                      >
-                        {getFrontendFrameworks().map(framework => (
-                          <option key={framework} value={framework}>
-                            {framework.charAt(0).toUpperCase() + framework.slice(1)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="form-section">
-                  <h3>Backend Technology</h3>
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label htmlFor="backend-language-select">Backend Language *</label>
-                      <select
-                        id="backend-language-select"
-                        value={newProject.backend.language}
-                        onChange={(e) => setNewProject(prev => ({ 
-                          ...prev, 
-                          backend: {
-                            language: e.target.value,
-                            framework: backendFrameworks[e.target.value]?.[0] || 'express'
-                          }
-                        }))}
-                        className="form-select"
-                        disabled={createLoading || projectSource === 'git'}
-                      >
-                        {backendLanguages.map(lang => (
-                          <option key={lang} value={lang}>
-                            {lang.charAt(0).toUpperCase() + lang.slice(1)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="backend-framework-select">Backend Framework *</label>
-                      <select
-                        id="backend-framework-select"
-                        value={newProject.backend.framework}
-                        onChange={(e) => setNewProject(prev => ({ 
-                          ...prev, 
-                          backend: { ...prev.backend, framework: e.target.value }
-                        }))}
-                        className="form-select"
-                        disabled={createLoading || projectSource === 'git'}
-                      >
-                        {getBackendFrameworks().map(framework => (
-                          <option key={framework} value={framework}>
-                            {framework.charAt(0).toUpperCase() + framework.slice(1)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              </>
+              <ProjectDetailsSection
+                createLoading={createLoading}
+                projectSource={projectSource}
+                newProject={newProject}
+                setNewProject={setNewProject}
+                createError={createError}
+                setCreateError={setCreateError}
+                frontendLanguages={frontendLanguages}
+                backendLanguages={backendLanguages}
+                getFrontendFrameworks={getFrontendFrameworks}
+                getBackendFrameworks={getBackendFrameworks}
+                onFrontendLanguageChange={handleFrontendLanguageChange}
+                onFrontendFrameworkChange={handleFrontendFrameworkChange}
+                onBackendLanguageChange={handleBackendLanguageChange}
+                onBackendFrameworkChange={handleBackendFrameworkChange}
+              />
             )}
 
             {setupStep === 'git' && (
-              <div className={`form-section${projectSource === 'local' ? ' form-section--full' : ''}`}>
-                <h3>
-                  {projectSource === 'local'
-                    ? 'Import setup'
-                    : (projectSource === 'git' ? 'Clone setup' : 'Git setup')}
-                </h3>
-
-                {projectSource === 'local' && (
-                  <>
-                    <div className="form-row">
-                      <div className="form-group form-group--inline" style={{ width: '100%' }}>
-                        <label htmlFor="project-path">Project Folder Path *</label>
-                        <div className="path-input-group">
-                          <input
-                            id="project-path"
-                            type="text"
-                            placeholder="Enter the path to your project folder"
-                            value={localPath}
-                            onChange={(event) => {
-                              setLocalPath(event.target.value);
-                              if (createError) {
-                                setCreateError('');
-                              }
-                            }}
-                            className="form-input"
-                            disabled={createLoading}
-                          />
-                          <button
-                            type="button"
-                            onClick={handleFolderSelect}
-                            className="browse-btn"
-                            disabled={createLoading}
-                          >
-                            Browse
-                          </button>
-                        </div>
-                        <div className="radio-group">
-                          <label className={`radio-card ${localImportMode === 'copy' ? 'selected' : ''}`}>
-                            <input
-                              type="radio"
-                              name="localImportMode"
-                              value="copy"
-                              checked={localImportMode === 'copy'}
-                              onChange={() => setLocalImportMode('copy')}
-                              disabled={createLoading}
-                            />
-                            <div>
-                              <div className="radio-title">Copy into managed folder</div>
-                              <div className="radio-subtitle">LucidCoder will copy the project into its workspace.</div>
-                            </div>
-                          </label>
-                          <label className={`radio-card ${localImportMode === 'link' ? 'selected' : ''}`}>
-                            <input
-                              type="radio"
-                              name="localImportMode"
-                              value="link"
-                              checked={localImportMode === 'link'}
-                              onChange={() => setLocalImportMode('link')}
-                              disabled={createLoading}
-                            />
-                            <div>
-                              <div className="radio-title">Link to existing folder</div>
-                              <div className="radio-subtitle">Keep the project in place (must be inside the managed folder).</div>
-                            </div>
-                          </label>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="form-row">
-                      <div className="form-group form-group--inline">
-                        <label htmlFor="git-connection-select">Git Workflow *</label>
-                        <select
-                          id="git-connection-select"
-                          value={gitConnectionMode}
-                          onChange={(e) => {
-                            setGitConnectionMode(e.target.value);
-                            if (createError) {
-                              setCreateError('');
-                            }
-                          }}
-                          className="form-select"
-                          disabled={createLoading}
-                        >
-                          <option value="local">Local only</option>
-                          <option value="global">Cloud (use global git settings)</option>
-                          <option value="custom">Cloud (custom connection)</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {gitConnectionMode !== 'local' && (
-                      <div className="form-row">
-                        <div className="form-group" style={{ width: '100%' }}>
-                          <label htmlFor="git-connection-remote-url">Repository URL *</label>
-                          <input
-                            id="git-connection-remote-url"
-                            type="text"
-                            placeholder="https://github.com/org/repo.git"
-                            value={gitConnectionRemoteUrl}
-                            onChange={(e) => {
-                              setGitConnectionRemoteUrl(e.target.value);
-                              if (createError) {
-                                setCreateError('');
-                              }
-                            }}
-                            className="form-input"
-                            disabled={createLoading}
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {projectSource === 'git' && (
-                  <>
-                    <div className="form-row form-row--inline" style={{ gridTemplateColumns: '30% 70%' }}>
-                      <label className="form-label" htmlFor="git-clone-url">Repository URL *</label>
-                      <input
-                        id="git-clone-url"
-                        type="text"
-                        placeholder="https://github.com/org/repo.git"
-                        value={gitRemoteUrl}
-                        onChange={(e) => {
-                          setGitRemoteUrl(e.target.value);
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-input"
-                        disabled={createLoading}
-                      />
-                    </div>
-
-                    <div className="form-row form-row--inline" style={{ gridTemplateColumns: '30% 70%' }}>
-                      <label className="form-label" htmlFor="git-connection-select">Git Workflow *</label>
-                      <select
-                        id="git-connection-select"
-                        value={gitConnectionMode}
-                        onChange={(e) => {
-                          setGitConnectionMode(e.target.value);
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-select"
-                        disabled={createLoading}
-                      >
-                        <option value="local">Local only</option>
-                        <option value="global">Cloud (use global git settings)</option>
-                        <option value="custom">Cloud (custom connection)</option>
-                      </select>
-                    </div>
-
-                    {gitConnectionMode !== 'local' && (
-                      <div className="radio-group radio-group--spaced radio-group--clone">
-                        <label className={`radio-card ${cloneCreateRemote ? 'selected' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={cloneCreateRemote}
-                            onChange={(event) => setCloneCreateRemote(event.target.checked)}
-                            disabled={createLoading}
-                          />
-                          <div>
-                            <div className="radio-title">Create a new repo after cloning (create fork)</div>
-                            <div className="radio-subtitle">Push the cloned project into a new repository you own.</div>
-                          </div>
-                        </label>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {projectSource === 'new' && (
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label htmlFor="git-workflow-select">Git Workflow *</label>
-                      <select
-                        id="git-workflow-select"
-                        value={gitWorkflowMode}
-                        onChange={(e) => {
-                          const next = e.target.value;
-                          setGitWorkflowMode(next);
-                          setGitCloudMode('');
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-select"
-                        disabled={createLoading}
-                        autoFocus
-                      >
-                        <option value="">Select a workflow</option>
-                        <option value="local">Local only</option>
-                        <option value="global">Cloud (use global git settings)</option>
-                        <option value="custom">Cloud (custom connection)</option>
-                      </select>
-                    </div>
-
-                  </div>
-                )}
-
-                {(projectSource === 'new' ? gitWorkflowMode === 'custom' : gitConnectionMode === 'custom') && (
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label htmlFor="git-provider-select">Git Provider *</label>
-                      <select
-                        id="git-provider-select"
-                        value={gitProvider}
-                        onChange={(e) => {
-                          setGitProvider(e.target.value);
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-select"
-                        disabled={createLoading}
-                      >
-                        <option value="github">GitHub</option>
-                        <option value="gitlab">GitLab</option>
-                      </select>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="git-token-input">Personal Access Token *</label>
-                      <input
-                        id="git-token-input"
-                        type="password"
-                        placeholder="Enter PAT"
-                        value={gitToken}
-                        onChange={(e) => {
-                          setGitToken(e.target.value);
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-input"
-                        disabled={createLoading}
-                        autoComplete="off"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {projectSource === 'new' && (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'connect' && (
-                  <div className="form-row">
-                    <div className="form-group" style={{ width: '100%' }}>
-                      <label htmlFor="git-remote-url-input">Repository URL *</label>
-                      <input
-                        id="git-remote-url-input"
-                        type="text"
-                        placeholder="https://github.com/org/repo.git"
-                        value={gitRemoteUrl}
-                        onChange={(e) => {
-                          setGitRemoteUrl(e.target.value);
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-input"
-                        disabled={createLoading}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {(projectSource === 'new' && (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'create')
-                  || (projectSource === 'git' && cloneCreateRemote) ? (
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label htmlFor="git-repo-name">Repository Name</label>
-                      <input
-                        id="git-repo-name"
-                        type="text"
-                        placeholder={newProject.name.trim() ? `Default: ${newProject.name.trim()}` : 'Repository name'}
-                        value={gitRepoName}
-                        onChange={(e) => {
-                          setGitRepoName(e.target.value);
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-input"
-                        disabled={createLoading}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="git-repo-owner">Owner / Org</label>
-                      <input
-                        id="git-repo-owner"
-                        type="text"
-                        placeholder="Optional"
-                        value={gitRepoOwner}
-                        onChange={(e) => {
-                          setGitRepoOwner(e.target.value);
-                          if (createError) {
-                            setCreateError('');
-                          }
-                        }}
-                        className="form-input"
-                        disabled={createLoading}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="git-repo-visibility">Visibility</label>
-                      <select
-                        id="git-repo-visibility"
-                        value={gitRepoVisibility}
-                        onChange={(e) => setGitRepoVisibility(e.target.value)}
-                        className="form-select"
-                        disabled={createLoading}
-                      >
-                        <option value="private">Private</option>
-                        <option value="public">Public</option>
-                      </select>
-                    </div>
-                  </div>
-                ) : null}
-
-                {projectSource === 'new' && shouldShowGitSummary && gitSummaryItems.length > 0 && (
-                  <div className="git-summary-card">
-                    <h4>Derived from repo</h4>
-                    {gitSummaryItems.map((item) => (
-                      <div className="git-summary-row" key={item.label}>
-                        <span className="git-summary-label">{item.label}</span>
-                        <span className="git-summary-value">{item.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <GitSetupSection
+                projectSource={projectSource}
+                createLoading={createLoading}
+                localPath={localPath}
+                setLocalPath={setLocalPath}
+                createError={createError}
+                setCreateError={setCreateError}
+                handleFolderSelect={handleFolderSelect}
+                localImportMode={localImportMode}
+                setLocalImportMode={setLocalImportMode}
+                gitConnectionMode={gitConnectionMode}
+                setGitConnectionMode={setGitConnectionMode}
+                gitConnectionRemoteUrl={gitConnectionRemoteUrl}
+                setGitConnectionRemoteUrl={setGitConnectionRemoteUrl}
+                gitRemoteUrl={gitRemoteUrl}
+                setGitRemoteUrl={setGitRemoteUrl}
+                cloneCreateRemote={cloneCreateRemote}
+                setCloneCreateRemote={setCloneCreateRemote}
+                gitWorkflowMode={gitWorkflowMode}
+                setGitWorkflowMode={setGitWorkflowMode}
+                setGitCloudMode={setGitCloudMode}
+                gitProvider={gitProvider}
+                setGitProvider={setGitProvider}
+                gitToken={gitToken}
+                setGitToken={setGitToken}
+                gitCloudMode={gitCloudMode}
+                gitRepoName={gitRepoName}
+                setGitRepoName={setGitRepoName}
+                newProjectName={newProject.name}
+                gitRepoOwner={gitRepoOwner}
+                setGitRepoOwner={setGitRepoOwner}
+                gitRepoVisibility={gitRepoVisibility}
+                setGitRepoVisibility={setGitRepoVisibility}
+                shouldShowGitSummary={shouldShowGitSummary}
+                gitSummaryItems={gitSummaryItems}
+              />
             )}
 
             {setupStep === 'compatibility' && projectSource === 'local' && (
-              <div className="form-section">
-                <h3>Compatibility updates</h3>
-                <p>
-                  LucidCoder can update the imported project so the dev server binds to 0.0.0.0 and
-                  works over the network.
-                </p>
-                <div className="tech-detect-status">
-                  {compatibilityStatus.isLoading && <span>Scanning for required changes…</span>}
-                  {!compatibilityStatus.isLoading && compatibilityStatus.error && (
-                    <span>{compatibilityStatus.error}</span>
-                  )}
-                  {!compatibilityStatus.isLoading && !compatibilityStatus.error && compatibilityPlan && (
-                    compatibilityChanges.length > 0 ? (
-                      <ul>
-                        {compatibilityChanges.map((change, index) => (
-                          <li key={`${change.key || 'change'}-${index}`}>{change.description}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <span>No compatibility changes required.</span>
-                    )
-                  )}
-                  {!compatibilityStatus.isLoading && !compatibilityStatus.error && compatibilityPlan?.structure?.needsMove && (
-                    <p>Frontend files will be moved into a frontend/ folder.</p>
-                  )}
-                </div>
-                <div className="radio-group">
-                  <label className={`radio-card ${compatibilityConsent ? 'selected' : ''}`}>
-                    <input
-                      type="checkbox"
-                      checked={compatibilityConsent}
-                      onChange={(event) => setCompatibilityConsent(event.target.checked)}
-                      disabled={compatibilityStatus.isLoading}
-                    />
-                    <div>
-                      <div className="radio-title">Allow compatibility updates</div>
-                      <div className="radio-subtitle">
-                        LucidCoder may edit project files to make the dev server accessible on your network.
-                      </div>
-                    </div>
-                  </label>
-                  <label className={`radio-card ${structureConsent ? 'selected' : ''}`}>
-                    <input
-                      type="checkbox"
-                      checked={structureConsent}
-                      onChange={(event) => setStructureConsent(event.target.checked)}
-                      disabled={compatibilityStatus.isLoading}
-                    />
-                    <div>
-                      <div className="radio-title">Move frontend files into a frontend folder</div>
-                      <div className="radio-subtitle">
-                        If the project is frontend-only, LucidCoder can move root files into frontend/.
-                      </div>
-                    </div>
-                  </label>
-                </div>
-              </div>
+              <CompatibilitySection
+                compatibilityStatus={compatibilityStatus}
+                compatibilityPlan={compatibilityPlan}
+                compatibilityChanges={compatibilityChanges}
+                compatibilityConsent={compatibilityConsent}
+                setCompatibilityConsent={setCompatibilityConsent}
+                structureConsent={structureConsent}
+                setStructureConsent={setStructureConsent}
+              />
             )}
 
             {createError && (
@@ -2150,45 +1086,13 @@ const CreateProject = () => {
               </div>
             )}
 
-            <div className="form-actions">
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="git-settings-button secondary"
-                disabled={createLoading}
-              >
-                Cancel
-              </button>
-
-              {setupStep !== 'source' && (
-                <button
-                  type="button"
-                  onClick={handleBackToDetails}
-                  className="git-settings-button secondary"
-                  disabled={createLoading}
-                >
-                  Back
-                </button>
-              )}
-              
-              <button
-                type="submit"
-                className="git-settings-button primary"
-                disabled={createLoading}
-              >
-                {setupStep === 'source'
-                  ? 'Next'
-                  : (setupStep === 'git'
-                    ? (projectSource === 'local'
-                      ? 'Next'
-                      : (projectSource === 'git'
-                        ? 'Next'
-                        : 'Next'))
-                  : (setupStep === 'compatibility' && projectSource === 'local')
-                    ? (createLoading ? 'Importing Project...' : 'Import Project')
-                  : (createLoading ? 'Creating Project...' : 'Create Project'))}
-              </button>
-            </div>
+            <CreateProjectFormActions
+              setupStep={setupStep}
+              projectSource={projectSource}
+              createLoading={createLoading}
+              handleCancel={handleCancel}
+              handleBackToDetails={handleBackToDetails}
+            />
           </form>
         </div>
       </div>

@@ -1,3 +1,10 @@
+## Unreleased
+- Refactor large frontend components (`CreateProject`, `PreviewTab`, `ImportProject`, `ChatPanel`, `FilesTab`) by extracting focused utility modules and presentational subcomponents to reduce file size while preserving behavior.
+- Refactor backend project import/install route internals in `backend/routes/projects.js` into dedicated helper modules (`helpers.js`, `fileOps.js`, `installJobs.js`) and keep route exports/test hooks compatible.
+- Extract goal-automation JSON parsing and scope-reflection logic from `automationUtils.js` into `automationUtils/jsonParsing.js` and `automationUtils/reflection.js`, including compatibility wrappers and focused reflection normalization improvements.
+- Add/expand frontend and backend tests for extracted modules and edge cases (create-project helpers/sections/hooks, preview overlays/origin utils, chat-panel agent utils, files/import/app-state utilities, and backend project route helper/file-op/install-job coverage).
+- Keep the strict coverage gate green after refactors via targeted suite updates and additional regression coverage.
+
 ## 0.6.4 (2026-02-13)
 - Add an automatic dependency-install step in branch workflow test gating for Node workspaces when dependency manifests change, preventing missing-module failures during coverage/test runs.
 - Harden branch workflow dependency-install trigger logic across workspace/root manifest changes and remove unreachable guard paths in the tests API decision flow.

@@ -3,7 +3,7 @@
 LucidCoder uses a same-origin preview proxy (`/preview/:projectId/...`) to load a project's dev server inside an iframe.
 Because the iframe origin differs from the LucidCoder UI origin, coordination is done via `postMessage`.
 
-This document describes the minimal bridge contract shipped in **0.3.8** to make future dev-only preview helpers (0.4.x) reliable.
+This document describes the minimal bridge contract introduced in **0.3.8**, which remains the baseline for preview iframe coordination.
 
 ## Messages (iframe → parent)
 
@@ -30,10 +30,9 @@ Payload:
 - `href` (string)
 - `title` (string, optional)
 
-## Preview helper (0.4.x)
+## Preview helper
 
-0.4.x introduces a preview helper that is injected into the proxied preview HTML.
-It is intended as a mainstream feature.
+The preview helper is injected into the proxied preview HTML and is a mainstream feature.
 
 ### `LUCIDCODER_PREVIEW_HELPER_READY` (iframe → parent)
 
@@ -90,5 +89,5 @@ The parent should validate:
 The UI layer should treat `LUCIDCODER_PREVIEW_NAV` (and READY) as the canonical place to:
 
 - update the displayed preview URL
-- clear dev-only overlays on navigation/reload (future 0.4.x)
-- trigger helper state resets (future 0.4.x)
+- clear dev-only overlays on navigation/reload
+- trigger helper state resets

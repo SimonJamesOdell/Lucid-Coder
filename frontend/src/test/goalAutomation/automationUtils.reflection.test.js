@@ -201,6 +201,22 @@ describe('parseScopeReflectionResponse', () => {
       testsNeeded: true
     });
   });
+
+  it('caps reflection lists to twelve entries after trimming', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          mustChange: Array.from({ length: 14 }, (_, index) => ` item-${index} `)
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection.mustChange).toHaveLength(12);
+    expect(reflection.mustChange[0]).toBe('item-0');
+    expect(reflection.mustChange[11]).toBe('item-11');
+  });
 });
 
 describe('formatScopeReflectionContext', () => {

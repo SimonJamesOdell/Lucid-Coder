@@ -5,11 +5,12 @@ import { useAppState } from '../context/AppStateContext';
 import './FilesTab.css';
 import FileTreeView from './filesTab/FileTreeView';
 import { buildChildPath, buildSiblingPath, suggestDuplicateName } from './filesTab/filesTabUtils';
-
-const DEFAULT_EXPANDED_FOLDERS = ['src', 'public'];
-const DEFAULT_EXPLORER_WIDTH = 260;
-const MIN_EXPLORER_WIDTH = 180;
-const MAX_EXPLORER_WIDTH = 520;
+import {
+  DEFAULT_EXPANDED_FOLDERS,
+  DEFAULT_EXPLORER_WIDTH,
+  clampExplorerWidth,
+  getLanguageFromFile
+} from './filesTab/editorUtils';
 
 const FilesTab = ({
   project,
@@ -246,13 +247,6 @@ const FilesTab = ({
       });
     }
   };
-
-  const clampExplorerWidth = useCallback((value) => {
-    if (!Number.isFinite(value)) {
-      return DEFAULT_EXPLORER_WIDTH;
-    }
-    return Math.min(Math.max(value, MIN_EXPLORER_WIDTH), MAX_EXPLORER_WIDTH);
-  }, []);
 
   const handleDividerMouseDown = useCallback((event) => {
     if (event.button !== 0) {
@@ -1038,41 +1032,6 @@ const FilesTab = ({
 
     return () => unregister?.();
   }, [registerSaveHandler, handleSaveFile, shuttingDown, hasUnsavedChanges]);
-
-  const getLanguageFromFile = (file) => {
-    if (!file) return 'plaintext';
-
-    const ext = file.name.split('.').pop()?.toLowerCase();
-    const languageMap = {
-      js: 'javascript',
-      jsx: 'javascript',
-      ts: 'typescript',
-      tsx: 'typescript',
-      json: 'json',
-      html: 'html',
-      css: 'css',
-      scss: 'scss',
-      sass: 'sass',
-      py: 'python',
-      java: 'java',
-      cpp: 'cpp',
-      c: 'c',
-      cs: 'csharp',
-      php: 'php',
-      rb: 'ruby',
-      go: 'go',
-      rs: 'rust',
-      md: 'markdown',
-      xml: 'xml',
-      yaml: 'yaml',
-      yml: 'yaml',
-      sql: 'sql',
-      sh: 'shell',
-      bash: 'shell'
-    };
-
-    return languageMap[ext] || 'plaintext';
-  };
 
   const editorLanguage = useMemo(() => getLanguageFromFile(activeFileMeta), [activeFileMeta]);
 
