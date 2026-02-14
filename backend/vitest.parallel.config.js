@@ -17,7 +17,7 @@ export default defineConfig({
     testTimeout: 120000,
 
     // Parallelize the main backend unit/route tests that are safe when isolated.
-    pool: isWindows ? 'forks' : 'threads',
+    pool: 'forks',
     maxWorkers: isCoverageRun ? 1 : maxWorkers,
     fileParallelism: isCoverageRun ? false : true,
     sequence: {

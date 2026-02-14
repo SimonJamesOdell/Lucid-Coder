@@ -15,6 +15,7 @@ import {
   buildVerificationFixPrompt
 } from './agentAutopilot/prompts.js';
 import {
+  buildFailureFingerprint,
   splitLogsByStream,
   summarizeTestRunForPrompt
 } from './agentAutopilot/runs.js';
@@ -74,7 +75,8 @@ export const __testing = {
   appendRollbackEvents,
   updateToPrompt,
   formatPlanSummary,
-  buildChangelogEntryFromPrompt
+  buildChangelogEntryFromPrompt,
+  buildFailureFingerprint
 };
 
 export const autopilotFeatureRequest = async ({ projectId, prompt, options = {}, deps = {} }) => {
@@ -564,6 +566,8 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
       if (!isStyleOnlyChange && verifiedRun?.status !== 'passed') {
         let latestRun = verifiedRun;
         let passed = false;
+        let previousFailureFingerprint = buildFailureFingerprint(latestRun);
+        let consecutiveDuplicateFailureFingerprints = 0;
 
         for (let attempt = 1; attempt <= verificationFixRetries; attempt += 1) {
           if (shouldCancel()) {
@@ -630,6 +634,32 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
           if (retryRun?.status === 'passed') {
             verifiedRun = retryRun;
             passed = true;
+            break;
+          }
+
+          const retryFingerprint = buildFailureFingerprint(retryRun);
+          if (retryFingerprint && previousFailureFingerprint && retryFingerprint === previousFailureFingerprint) {
+            consecutiveDuplicateFailureFingerprints += 1;
+          } else {
+            consecutiveDuplicateFailureFingerprints = 0;
+          }
+          previousFailureFingerprint = retryFingerprint;
+
+          if (!hasUserUpdateChannel && consecutiveDuplicateFailureFingerprints >= 1) {
+            reportStatus('Verification failures are repeating unchanged. Stopping auto-fix retries.');
+            safeAppendEvent(appendEvent, {
+              type: 'error',
+              message: 'Verification retries stopped due to repeated identical failures',
+              payload: {
+                projectId,
+                branchName,
+                prompt: childPrompt,
+                attempt,
+                reason: 'repeated_failure_fingerprint'
+              },
+              meta: null
+            });
+            latestRun = retryRun;
             break;
           }
 
