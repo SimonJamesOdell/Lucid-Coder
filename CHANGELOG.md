@@ -1,4 +1,4 @@
-## Unreleased
+## 0.6.5 (2026-02-14)
 - Refactor large frontend components (`CreateProject`, `PreviewTab`, `ImportProject`, `ChatPanel`, `FilesTab`) by extracting focused utility modules and presentational subcomponents to reduce file size while preserving behavior.
 - Refactor backend project import/install route internals in `backend/routes/projects.js` into dedicated helper modules (`helpers.js`, `fileOps.js`, `installJobs.js`) and keep route exports/test hooks compatible.
 - Extract goal-automation JSON parsing and scope-reflection logic from `automationUtils.js` into `automationUtils/jsonParsing.js` and `automationUtils/reflection.js`, including compatibility wrappers and focused reflection normalization improvements.
