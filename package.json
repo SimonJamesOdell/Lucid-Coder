@@ -1,5 +1,6 @@
 {
   "name": "lucidcoder-fullstack",
+  "_versionWarning": "DO NOT EDIT VERSION MANUALLY — use npm run release",
   "version": "0.6.4",
   "description": "A fullstack React + Vite / Node.js + Express application",
   "scripts": {
@@ -21,6 +22,7 @@
     "e2e:ui": "npx playwright test --ui",
     "e2e:headed": "npx playwright test --headed",
     "e2e:debug": "npx playwright test --debug",
+    "release": "node tools/bump-version.mjs",
     "release:check": "node tools/release-check.mjs",
     "release:gate": "npm run release:check && npm test && npm run e2e:clean-run",
     "release:prep": "node tools/release-prep.mjs",

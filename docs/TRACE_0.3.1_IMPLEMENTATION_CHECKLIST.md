@@ -1,5 +1,7 @@
 # 0.3.1 Trace / Run Events – Implementation Checklist
 
+Status: historical implementation checklist for the 0.3.1 release cycle. Kept for archival reference only.
+
 Goal: Add a robust, future-proof run trace system as an append-only event stream. Implement as a `run_events` table (preferred) and adapt existing run persistence & APIs to use it.
 
 Non-goals (for 0.3.1 unless explicitly added):

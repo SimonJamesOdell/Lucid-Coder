@@ -1,6 +1,20 @@
 # LucidCoder
 
-Version: 0.6.4
+## Important notice
+
+This project is 100% code-generated and maintained by AI.
+
+The project owner has not inspected and will not be manually inspecting the code, and cannot answer questions about the implementation details.
+
+This software is released as-is, with no express or implied warranty, including fitness for any particular purpose.
+
+This repository is intended as a proof of concept and proof of principle for fully AI-generated complex application development.
+
+If you want to understand the system and its contents, it is strongly recommended to use an LLM to inspect the codebase.
+
+Human manual processes for understanding the code are not recommended, because any part of the codebase has a non-zero probability of being removed, heavily modified, or replaced in any future release.
+
+Version: see [VERSION](VERSION) (managed by `npm run release -- <semver>`)
 LucidCoder is a fullstack system for orchestrating goal-driven coding workflows. The frontend provides a rich React UI and the backend exposes REST and Socket.IO APIs for projects, goals, agents, and test execution.
 
 This project is a work in progress. Core functionality is in place, but many features and improvements are still planned. If you’re interested, please join in development and share updates, ideas, and contributions so we can evolve it together.
@@ -38,6 +52,7 @@ Default endpoints:
 - npm run test:quick — fast local loop (frontend + backend unit-only)
 - npm run e2e — end-to-end tests (Playwright)
 - npm run e2e:flake-check — repeat clean E2E runs to detect flakes
+- npm run release -- <semver> — update all version artifacts via the release tool
 
 ## Configuration
 
@@ -50,8 +65,8 @@ Tests use backend/test-lucidcoder.db by default (also controllable via `DATABASE
 ## Documentation
 
 - Project overview: [docs/OVERVIEW.md](docs/OVERVIEW.md)
-- 0.3.x roadmap: [docs/ROADMAP_0.3.x.md](docs/ROADMAP_0.3.x.md)
 - Versioning policy: [docs/VERSIONING.md](docs/VERSIONING.md)
+- Release process: [RELEASE.md](RELEASE.md)
 - Backend details: [backend/README.md](backend/README.md)
 - Frontend details: [frontend/README.md](frontend/README.md)
 
