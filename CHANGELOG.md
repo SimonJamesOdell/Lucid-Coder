@@ -1,3 +1,9 @@
+## 0.6.6 (2026-02-14)
+- Fix Linux backend coverage execution by selecting a Node-version-aware Vitest coverage provider (`istanbul` on older runtimes, `v8` on newer runtimes), and add focused resolver coverage tests.
+- Restore missing backend project-route modules (`helpers.js`, `fileOps.js`, `installJobs.js`, `routes.testing.js`) and keep route/test imports aligned so Linux and Windows execute the same route surface.
+- Add `@vitest/coverage-istanbul` to backend dev dependencies to support cross-platform coverage runs where `node:inspector/promises` is unavailable.
+- Update `.gitignore` to allow committed backend route modules under `backend/routes/projects` while keeping user workspace `projects/` ignored.
+
 ## 0.6.5 (2026-02-14)
 - Refactor large frontend components (`CreateProject`, `PreviewTab`, `ImportProject`, `ChatPanel`, `FilesTab`) by extracting focused utility modules and presentational subcomponents to reduce file size while preserving behavior.
 - Refactor backend project import/install route internals in `backend/routes/projects.js` into dedicated helper modules (`helpers.js`, `fileOps.js`, `installJobs.js`) and keep route exports/test hooks compatible.

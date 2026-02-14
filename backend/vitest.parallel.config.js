@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { resolveCoverageProvider } from './vitest.coverageProvider.js';
 
 const isWindows = process.platform === 'win32';
 const isCoverageRun = process.env.VITEST_COVERAGE === '1';
@@ -42,6 +43,9 @@ export default defineConfig({
       'tests/api.processes.integration.test.js'
     ],
 
-    cacheDir: './.vite-cache'
+    cacheDir: './.vite-cache',
+    coverage: {
+      provider: resolveCoverageProvider()
+    }
   }
 });
