@@ -14,7 +14,9 @@ If you want to understand the system and its contents, it is strongly recommende
 
 Human manual processes for understanding the code are not recommended, because any part of the codebase has a non-zero probability of being removed, heavily modified, or replaced in any future release.
 
-Version: see [VERSION](VERSION) (managed by `npm run release -- <semver>`)
+Version: 0.6.6
+
+Version is managed by `npm run release -- <semver>` and mirrored in [VERSION](VERSION).
 LucidCoder is a fullstack system for orchestrating goal-driven coding workflows. The frontend provides a rich React UI and the backend exposes REST and Socket.IO APIs for projects, goals, agents, and test execution.
 
 This project is a work in progress. Core functionality is in place, but many features and improvements are still planned. If you’re interested, please join in development and share updates, ideas, and contributions so we can evolve it together.

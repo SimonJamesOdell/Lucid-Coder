@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { resolveCoverageProvider } from './vitest.coverageProvider.js';
 
 const isWindows = process.platform === 'win32';
 const envMaxWorkers = Number(process.env.VITEST_MAX_WORKERS);
@@ -30,6 +31,9 @@ export default defineConfig({
       'test/integration/**'
     ],
 
-    cacheDir: './.vite-cache'
+    cacheDir: './.vite-cache',
+    coverage: {
+      provider: resolveCoverageProvider()
+    }
   }
 });
