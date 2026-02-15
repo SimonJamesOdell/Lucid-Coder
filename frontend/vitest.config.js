@@ -11,9 +11,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.js'],
     css: true,
-    pool: isWindows ? 'forks' : 'threads',
-    maxWorkers: isCoverageRun ? 1 : undefined,
-    fileParallelism: isCoverageRun ? false : true,
+    pool: isCoverageRun ? 'threads' : (isWindows ? 'forks' : 'threads'),
+    fileParallelism: true,
     onConsoleLog(log, type) {
       if (process.env.VITE_VERBOSE_TEST_LOGS === 'true') {
         return

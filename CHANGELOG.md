@@ -1,3 +1,18 @@
+## 0.7.0 (2026-02-15)
+- Stabilize frontend coverage runs on Windows by using the Vitest `threads` pool when `--coverage` is enabled, avoiding fork-worker coverage temp-file races.
+- Restore normal frontend test throughput by removing forced single-worker coverage settings so Vitest can manage worker concurrency safely.
+- Keep frontend test execution defaults unchanged for non-coverage runs while preserving strict coverage gate behavior.
+
+## 0.6.9 (2026-02-15)
+- No source-code delta from 0.6.8; this release finalized the merge/tag step for the 0.6.8 changeset.
+
+## 0.6.8 (2026-02-15)
+- Finalize backend coverage closure across project import/git helpers and branch/workflow edge cases, including clone conflict handling, fallback defaults, and normalization guards.
+- Harden autopilot failure extraction/fingerprinting by improving failure parsing, dedupe behavior, and default normalization for workspace/test identifiers.
+- Expand backend coverage tests for retry/fingerprint behavior, testing-settings fallback targets, coverage-provider resolution fallbacks, and cancellation error branches.
+- Refine backend build/install command coverage behavior by skipping Gradle test execution in install-job command generation (`gradle build -x test`).
+- Tune frontend Vitest coverage stability by detecting coverage mode and forcing deterministic single-worker execution for coverage runs.
+
 ## 0.6.7 (2026-02-14)
 - Add an autopilot verification retry circuit breaker that stops auto-fix retries when consecutive runs produce the same failure fingerprint, reducing non-interactive retry loops.
 - Expand autopilot failure extraction with structured Vitest/Pytest log parsing and deduped failure aggregation to improve verification prompts and retry diagnostics.
