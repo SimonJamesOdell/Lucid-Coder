@@ -126,6 +126,7 @@ describe('Projects routes coverage (projects.js)', () => {
       expect(extractRepoName('/')).toBe('');
       expect(extractRepoName('git@github.com:acme')).toBe('acme');
       expect(extractRepoName('git@github.com:')).toBe('git@github.com:');
+      expect(extractRepoName('https://github.com/acme/repo.git')).toBe('repo');
     });
 
     test('stripGitCredentials removes inline credentials', () => {
@@ -969,6 +970,125 @@ describe('Projects routes coverage (projects.js)', () => {
       expect(runGitCommand).not.toHaveBeenCalledWith(
         expect.anything(),
         ['remote', 'set-url', 'origin', 'https://github.com/example/repo.git']
+      );
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('adds origin remote when set-url returns a non-zero exit code', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand } = await import('../utils/git.js');
+      runGitCommand.mockClear();
+      runGitCommand
+        .mockResolvedValueOnce({ stdout: 'https://old.example/repo.git\n', code: 0 })
+        .mockResolvedValueOnce({ stdout: '', code: 1 })
+        .mockResolvedValueOnce({ stdout: '', code: 0 });
+
+      const localPath = path.join(projectsRoot, `git-remote-set-fallback-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'remote' }));
+
+      await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-remote-set-fallback-${Date.now()}`,
+          gitConnectionMode: 'custom',
+          gitRemoteUrl: 'https://github.com/example/repo.git',
+          gitConnectionProvider: 'github'
+        })
+        .expect(201);
+
+      expect(runGitCommand).toHaveBeenCalledWith(
+        expect.anything(),
+        ['remote', 'add', 'origin', 'https://github.com/example/repo.git']
+      );
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('adds origin remote when set-url throws', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand } = await import('../utils/git.js');
+      runGitCommand.mockClear();
+      runGitCommand
+        .mockResolvedValueOnce({ stdout: 'https://old.example/repo.git\n', code: 0 })
+        .mockRejectedValueOnce(new Error('set-url failed'))
+        .mockResolvedValueOnce({ stdout: '', code: 0 });
+
+      const localPath = path.join(projectsRoot, `git-remote-set-throw-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'remote' }));
+
+      await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-remote-set-throw-${Date.now()}`,
+          gitConnectionMode: 'custom',
+          gitRemoteUrl: 'https://github.com/example/repo.git',
+          gitConnectionProvider: 'github'
+        })
+        .expect(201);
+
+      expect(runGitCommand).toHaveBeenCalledWith(
+        expect.anything(),
+        ['remote', 'add', 'origin', 'https://github.com/example/repo.git']
+      );
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('adds origin remote when remote lookup result has missing shape', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand } = await import('../utils/git.js');
+      runGitCommand.mockClear();
+      runGitCommand
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({ stdout: '', code: 0 });
+
+      const localPath = path.join(projectsRoot, `git-remote-missing-shape-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'package.json'), JSON.stringify({ name: 'remote' }));
+
+      await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: `git-remote-missing-shape-${Date.now()}`,
+          gitConnectionMode: 'custom',
+          gitRemoteUrl: 'https://github.com/example/repo.git',
+          gitConnectionProvider: 'github'
+        })
+        .expect(201);
+
+      expect(runGitCommand).toHaveBeenCalledWith(
+        expect.anything(),
+        ['remote', 'add', 'origin', 'https://github.com/example/repo.git']
       );
 
       if (originalProjectsDir === undefined) {
@@ -2123,6 +2243,79 @@ describe('Projects routes coverage (projects.js)', () => {
         .expect(400);
 
       expect(response.body).toMatchObject({ success: false, error: 'Git repository URL is required' });
+    });
+
+    test('returns 409 when git clone target is not empty', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const { runGitCommand } = await import('../utils/git.js');
+      runGitCommand.mockClear();
+      runGitCommand.mockRejectedValueOnce(new Error('destination path already exists and is not an empty directory'));
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'git',
+          gitUrl: `https://github.com/acme/not-empty-${Date.now()}.git`,
+          name: `not-empty-${Date.now()}`
+        })
+        .expect(409);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain('already exists and is not an empty directory');
+
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
+    });
+
+    test('returns fallback failedPath when recursive fallback throws with failedPath metadata', async () => {
+      const originalProjectsDir = process.env.PROJECTS_DIR;
+      process.env.PROJECTS_DIR = projectsRoot;
+
+      const localPath = path.join(projectsRoot, `copy-throw-${Date.now()}`);
+      await ensureEmptyDir(localPath);
+      await fs.writeFile(path.join(localPath, 'file.txt'), 'data');
+
+      const projectName = `copy-throw-${Date.now()}`;
+      const targetPath = resolveProjectPath(projectName);
+      const failedPath = path.join(localPath, 'file.txt');
+
+      const cpSpy = vi.spyOn(fs, 'cp').mockRejectedValueOnce(new Error('cp failed'));
+      const originalMkdir = fs.mkdir;
+      const mkdirSpy = vi.spyOn(fs, 'mkdir').mockImplementation(async (candidate, options) => {
+        if (path.resolve(candidate) === path.resolve(targetPath)) {
+          const err = new Error('mkdir failed');
+          err.failedPath = failedPath;
+          throw err;
+        }
+        return originalMkdir(candidate, options);
+      });
+
+      const response = await request(app)
+        .post('/api/projects/import')
+        .send({
+          importMethod: 'local',
+          importMode: 'copy',
+          localPath,
+          name: projectName
+        })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain('Failed to copy project files');
+      expect(response.body.error).toContain(failedPath);
+
+      cpSpy.mockRestore();
+      mkdirSpy.mockRestore();
+      if (originalProjectsDir === undefined) {
+        delete process.env.PROJECTS_DIR;
+      } else {
+        process.env.PROJECTS_DIR = originalProjectsDir;
+      }
     });
 
     test('continues when cleanup fails after import error', async () => {

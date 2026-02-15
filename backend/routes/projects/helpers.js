@@ -21,7 +21,7 @@ export const extractRepoName = (repoUrl = '') => {
     .replace(/\.git$/i, '')
     .replace(/\/$/, '');
 
-  const sshMatch = normalized.match(/:([^/]+\/[^/]+)$/);
+  const sshMatch = normalized.match(/:([^/]+(?:\/[^/]+)?)$/);
   if (sshMatch?.[1]) {
     const parts = sshMatch[1].split('/');
     return safeTrim(parts[parts.length - 1]);
@@ -63,9 +63,12 @@ export const serializeJob = (job) => {
 
 export const pathExists = async (targetPath) => {
   try {
-    await fs.access(targetPath);
+    await fs.stat(targetPath);
     return true;
-  } catch {
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
     return false;
   }
 };
@@ -74,7 +77,10 @@ export const dirExists = async (targetPath) => {
   try {
     const stats = await fs.stat(targetPath);
     return stats.isDirectory();
-  } catch {
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
     return false;
   }
 };
@@ -83,7 +89,10 @@ export const fileExists = async (targetPath) => {
   try {
     const stats = await fs.stat(targetPath);
     return stats.isFile();
-  } catch {
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
     return false;
   }
 };
@@ -200,7 +209,7 @@ export const importProjectFromGit = async ({
   const projectPath = resolveProjectPathFn(projectName);
   const created = await prepareTargetPathFn(projectPath);
   if (!created) {
-    const error = new Error('A project with this name already exists');
+    const error = new Error('Project path already exists');
     error.statusCode = 409;
     throw error;
   }
@@ -209,7 +218,7 @@ export const importProjectFromGit = async ({
   await mkdirFn(projectsDir, { recursive: true });
 
   const cloneResult = buildCloneUrlFn({
-    gitUrl,
+    url: gitUrl,
     provider: safeTrim(gitProvider).toLowerCase() || 'github',
     username: safeTrim(payload.gitUsername),
     token: safeTrim(payload.gitToken),
@@ -228,7 +237,12 @@ export const importProjectFromGit = async ({
     throw error;
   }
 
-  const gitDefaultBranch = await getCurrentBranchFn(projectPath);
+  let gitDefaultBranch = '';
+  try {
+    gitDefaultBranch = await getCurrentBranchFn(projectPath);
+  } catch {
+    gitDefaultBranch = '';
+  }
 
   return {
     projectPath,
@@ -273,7 +287,7 @@ export const importProjectFromLocal = async ({
   const projectPath = resolveProjectPathFn(projectName);
   const prepared = await prepareTargetPathFn(projectPath);
   if (!prepared) {
-    const error = new Error('A project with this name already exists');
+    const error = new Error('Project path already exists');
     error.statusCode = 409;
     throw error;
   }
@@ -300,7 +314,7 @@ export const applyImportPostProcessing = async ({
     try {
       structureResult = await applyProjectStructureFn(projectPath);
     } catch (error) {
-      const wrapped = new Error(error?.message || 'Failed to apply project structure changes');
+      const wrapped = new Error(error?.message || 'Failed to apply project structure updates');
       wrapped.statusCode = 400;
       throw wrapped;
     }
@@ -323,14 +337,33 @@ export const applyImportPostProcessing = async ({
 };
 
 export const resolveImportGitSettings = ({
+  importMethod = '',
   payload = {},
   globalSettings = {},
   gitRemoteUrl = '',
   gitDefaultBranch = '',
   fallbackProvider = 'github'
 } = {}) => {
+  const normalizedGlobalSettings = globalSettings && typeof globalSettings === 'object'
+    ? globalSettings
+    : {};
+  const normalizedImportMethod = normalizeImportMethod(importMethod || payload.importMethod);
   const mode = safeTrim(payload.gitConnectionMode).toLowerCase();
   const providerFallback = safeTrim(fallbackProvider).toLowerCase() || 'github';
+
+  if (!mode && normalizedImportMethod === 'local') {
+    return {
+      workflow: 'local',
+      provider: safeTrim(payload.gitProvider).toLowerCase() || providerFallback,
+      remoteUrl: '',
+      username: '',
+      token: '',
+      defaultBranch: safeTrim(payload.gitDefaultBranch || gitDefaultBranch || normalizedGlobalSettings.defaultBranch || 'main') || 'main',
+      autoPush: false,
+      useCommitTemplate: false,
+      commitTemplate: ''
+    };
+  }
 
   if (mode === 'local') {
     return {
@@ -339,7 +372,7 @@ export const resolveImportGitSettings = ({
       remoteUrl: '',
       username: '',
       token: '',
-      defaultBranch: safeTrim(payload.gitDefaultBranch || gitDefaultBranch || globalSettings.defaultBranch || 'main') || 'main',
+      defaultBranch: safeTrim(payload.gitDefaultBranch || gitDefaultBranch || normalizedGlobalSettings.defaultBranch || 'main') || 'main',
       autoPush: false,
       useCommitTemplate: false,
       commitTemplate: ''
@@ -353,7 +386,7 @@ export const resolveImportGitSettings = ({
       remoteUrl: safeTrim(payload.gitRemoteUrl || gitRemoteUrl),
       username: safeTrim(payload.gitUsername),
       token: safeTrim(payload.gitToken),
-      defaultBranch: safeTrim(payload.gitDefaultBranch || gitDefaultBranch || globalSettings.defaultBranch || 'main') || 'main',
+      defaultBranch: safeTrim(payload.gitDefaultBranch || gitDefaultBranch || normalizedGlobalSettings.defaultBranch || 'main') || 'main',
       autoPush: Boolean(payload.gitAutoPush),
       useCommitTemplate: Boolean(payload.gitUseCommitTemplate),
       commitTemplate: safeTrim(payload.gitCommitTemplate)
@@ -362,13 +395,13 @@ export const resolveImportGitSettings = ({
 
   return {
     workflow: 'cloud',
-    provider: safeTrim(globalSettings.provider).toLowerCase() || providerFallback,
-    remoteUrl: safeTrim(gitRemoteUrl || globalSettings.remoteUrl),
-    username: safeTrim(globalSettings.username),
+    provider: safeTrim(normalizedGlobalSettings.provider).toLowerCase() || providerFallback,
+    remoteUrl: safeTrim(gitRemoteUrl || normalizedGlobalSettings.remoteUrl),
+    username: safeTrim(normalizedGlobalSettings.username),
     token: '',
-    defaultBranch: safeTrim(gitDefaultBranch || globalSettings.defaultBranch || 'main') || 'main',
-    autoPush: Boolean(globalSettings.autoPush),
-    useCommitTemplate: Boolean(globalSettings.useCommitTemplate),
-    commitTemplate: safeTrim(globalSettings.commitTemplate)
+    defaultBranch: safeTrim(gitDefaultBranch || normalizedGlobalSettings.defaultBranch || 'main') || 'main',
+    autoPush: Boolean(normalizedGlobalSettings.autoPush),
+    useCommitTemplate: Boolean(normalizedGlobalSettings.useCommitTemplate),
+    commitTemplate: safeTrim(normalizedGlobalSettings.commitTemplate)
   };
 };
