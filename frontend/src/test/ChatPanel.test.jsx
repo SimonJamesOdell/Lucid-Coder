@@ -2941,7 +2941,7 @@ describe('ChatPanel', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('chat-typing')).toBeInTheDocument();
-        expect(screen.getByText('Assistant is thinking')).toBeInTheDocument();
+        expect(screen.getByTestId('chat-typing-topic')).toHaveTextContent('Thinking about: Test message');
       });
     });
 

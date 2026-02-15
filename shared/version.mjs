@@ -1,3 +1,3 @@
 // DO NOT EDIT VERSION MANUALLY — use npm run release
-export const VERSION = '0.6.7';
+export const VERSION = '0.7.1';
 export default VERSION;

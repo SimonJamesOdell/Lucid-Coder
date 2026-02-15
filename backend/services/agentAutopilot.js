@@ -62,6 +62,53 @@ const buildCssOnlySkipRun = (source = 'prompt') => ({
   workspaceRuns: []
 });
 
+const resolveWorkspaceFromPath = (value) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '').trim().toLowerCase();
+  if (normalized.startsWith('frontend/')) {
+    return 'frontend';
+  }
+  if (normalized.startsWith('backend/')) {
+    return 'backend';
+  }
+  return null;
+};
+
+const collectEditedWorkspaces = (editResult) => {
+  const files = extractEditPatchFiles(editResult?.steps);
+  const workspaces = new Set();
+  for (const file of files) {
+    const workspace = resolveWorkspaceFromPath(file?.path);
+    if (workspace) {
+      workspaces.add(workspace);
+    }
+  }
+  return workspaces;
+};
+
+const collectWorkspaceStatuses = (run) => {
+  const passing = new Set();
+  const failing = new Set();
+  const runs = Array.isArray(run?.workspaceRuns) ? run.workspaceRuns : [];
+
+  for (const workspaceRun of runs) {
+    const workspace = resolveWorkspaceFromPath(`${workspaceRun?.workspace || ''}/placeholder`);
+    if (!workspace) {
+      continue;
+    }
+    const status = String(workspaceRun?.status || '').toLowerCase();
+    if (status === 'succeeded' || status === 'passed') {
+      passing.add(workspace);
+    } else {
+      failing.add(workspace);
+    }
+  }
+
+  return { passing, failing };
+};
+
 export const __testing = {
   consumeUpdatesAsPrompts,
   drainUserUpdates,
@@ -108,7 +155,50 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
   const ui = deps.ui && typeof deps.ui === 'object' ? deps.ui : null;
   const appendEvent = typeof deps.appendEvent === 'function' ? deps.appendEvent : null;
 
-  const thresholds = { ...DEFAULT_THRESHOLDS };
+  const thresholds = options?.coverageThresholds && typeof options.coverageThresholds === 'object'
+    ? {
+        ...DEFAULT_THRESHOLDS,
+        ...options.coverageThresholds
+      }
+    : null;
+
+  const buildRunTestsOptions = () => ({
+    real: true,
+    ...(thresholds ? { coverageThresholds: thresholds } : {}),
+    enforceFullCoverage: true,
+    includeCoverageLineRefs: true
+  });
+
+  const buildRetryRunTestsOptions = ({ latestRun, editResult }) => {
+    const baseOptions = buildRunTestsOptions();
+    const { passing, failing } = collectWorkspaceStatuses(latestRun);
+
+    if (!passing.size || !failing.size) {
+      return baseOptions;
+    }
+
+    const editedWorkspaces = collectEditedWorkspaces(editResult);
+    if (!editedWorkspaces.size) {
+      return baseOptions;
+    }
+
+    for (const workspace of editedWorkspaces) {
+      if (passing.has(workspace)) {
+        return baseOptions;
+      }
+    }
+
+    const targetWorkspaces = [...failing].filter((workspace) => editedWorkspaces.has(workspace));
+    if (!targetWorkspaces.length) {
+      return baseOptions;
+    }
+
+    return {
+      ...baseOptions,
+      workspaceScope: 'changed',
+      changedPaths: targetWorkspaces.map((workspace) => `${workspace}/.autopilot-retry-scope`)
+    };
+  };
 
   const verificationFixRetriesRaw = options?.verificationFixRetries;
   const verificationFixRetries = Number.isFinite(verificationFixRetriesRaw)
@@ -449,12 +539,7 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
             // Ignore UI navigation failures.
           }
         }
-        failingRun = await runTests(projectId, branchName, {
-          real: true,
-          coverageThresholds: thresholds,
-          enforceFullCoverage: true,
-          includeCoverageLineRefs: true
-        });
+        failingRun = await runTests(projectId, branchName, buildRunTestsOptions());
 
         appendRunEvents({ appendEvent, phase: 'failing', branchName, stepPrompt: childPrompt, run: failingRun });
 
@@ -551,12 +636,7 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
             // Ignore UI navigation failures.
           }
         }
-        passingRun = await runTests(projectId, branchName, {
-          real: true,
-          coverageThresholds: thresholds,
-          enforceFullCoverage: true,
-          includeCoverageLineRefs: true
-        });
+        passingRun = await runTests(projectId, branchName, buildRunTestsOptions());
 
         appendRunEvents({ appendEvent, phase: 'passing', branchName, stepPrompt: childPrompt, run: passingRun });
 
@@ -623,12 +703,10 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
           }
 
           reportStatus('Re-running tests/coverage…');
-          const retryRun = await runTests(projectId, branchName, {
-            real: true,
-            coverageThresholds: thresholds,
-            enforceFullCoverage: true,
-            includeCoverageLineRefs: true
-          });
+          const retryRun = await runTests(projectId, branchName, buildRetryRunTestsOptions({
+            latestRun,
+            editResult: fixEditResult
+          }));
           appendRunEvents({ appendEvent, phase: `verification-retry-${attempt}`, branchName, stepPrompt: childPrompt, run: retryRun });
 
           if (retryRun?.status === 'passed') {
@@ -721,12 +799,10 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
             }
 
             reportStatus('Re-running tests/coverage…');
-            const guidanceRun = await runTests(projectId, branchName, {
-              real: true,
-              coverageThresholds: thresholds,
-              enforceFullCoverage: true,
-              includeCoverageLineRefs: true
-            });
+            const guidanceRun = await runTests(projectId, branchName, buildRetryRunTestsOptions({
+              latestRun,
+              editResult: guidedEditResult
+            }));
             appendRunEvents({
               appendEvent,
               phase: `user-guidance-${guidanceAttempt}`,

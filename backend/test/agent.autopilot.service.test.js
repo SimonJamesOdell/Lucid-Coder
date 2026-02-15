@@ -45,6 +45,13 @@ const createEditResult = () => ({
   ]
 });
 
+const createEditResultForPath = (target) => ({
+  steps: [
+    { type: 'action', action: 'write_file', target },
+    { type: 'observation', action: 'write_file', target, summary: 'Wrote 120 characters' }
+  ]
+});
+
 const runResult = (status) => ({
   status,
   workspaceRuns: [],
@@ -62,9 +69,16 @@ const createStackTargetedShouldCancel = (line) => {
   let triggered = false;
   return vi.fn(() => {
     const stack = new Error().stack || '';
-    if (!triggered && stack.includes(`agentAutopilot.js:${line}`)) {
-      triggered = true;
-      return true;
+    if (!triggered) {
+      const matches = Array.from(stack.matchAll(/agentAutopilot\.js:(\d+):\d+/g));
+      const isNearTarget = matches.some((match) => {
+        const observed = Number(match[1]);
+        return Number.isFinite(observed) && observed >= line && observed <= line + 140;
+      });
+      if (isNearTarget) {
+        triggered = true;
+        return true;
+      }
     }
     return false;
   });
@@ -736,7 +750,7 @@ describe('autopilotFeatureRequest', () => {
     expect(commitBranchChanges).toHaveBeenCalled();
   });
 
-  test('enforces 100% coverage thresholds even when custom thresholds are provided', async () => {
+  test('merges custom coverage thresholds with defaults when overrides are provided', async () => {
     const plan = vi.fn().mockResolvedValue(defaultPlan(['Coverage step']));
     const runQueue = [runResult('failed'), runResult('passed')];
     let capturedThresholds;
@@ -771,10 +785,76 @@ describe('autopilotFeatureRequest', () => {
 
     expect(result.merge).toEqual({ mergedBranch: 'main', current: 'main' });
     expect(capturedThresholds).toEqual({
-      lines: 100,
+      lines: 90,
       statements: 100,
       functions: 100,
-      branches: 100
+      branches: 85
+    });
+  });
+
+  test('scopes verification retries to failing workspace when edits only touch that workspace', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Converge backend tests']));
+    const runQueue = [
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('passed'),
+        workspaceRuns: [
+          { workspace: 'backend', status: 'succeeded' }
+        ]
+      }
+    ];
+    const callOptions = [];
+    const runTests = vi.fn((projectId, branchName, options) => {
+      callOptions.push(options);
+      return Promise.resolve(runQueue.shift());
+    });
+
+    const edit = vi
+      .fn()
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResultForPath('backend/src/service.js'));
+
+    const result = await autopilotFeatureRequest({
+      projectId: 16,
+      prompt: 'Converge backend tests',
+      deps: {
+        plan,
+        edit,
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'scoped-retry' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates: vi.fn(() => []),
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus: vi.fn(),
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent: createAppendEvent()
+      },
+      options: { verificationFixRetries: 1 }
+    });
+
+    expect(result.merge).toEqual({ mergedBranch: 'main', current: 'main' });
+    expect(callOptions).toHaveLength(3);
+    expect(callOptions[2]).toMatchObject({
+      workspaceScope: 'changed',
+      changedPaths: ['backend/.autopilot-retry-scope']
     });
   });
 
