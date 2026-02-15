@@ -141,6 +141,46 @@ describe('projects route helpers', () => {
     });
   });
 
+  test('importProjectFromGit falls back clone URL/safe URL and maps non-empty clone target to 409', async () => {
+    const runGitCommandFn = vi.fn(async () => {
+      throw new Error('destination path already exists and is not an empty directory');
+    });
+
+    await expect(importProjectFromGit({
+      payload: { gitUrl: 'https://example.com/repo.git', gitAuthMethod: 'pat', gitUsername: 'u', gitToken: 't' },
+      projectName: 'proj',
+      gitProvider: '',
+      resolveProjectPathFn: vi.fn(() => '/projects/proj'),
+      prepareTargetPathFn: vi.fn(async () => true),
+      buildCloneUrlFn: vi.fn(() => undefined),
+      getProjectsDirFn: vi.fn(() => '/projects'),
+      mkdirFn: vi.fn(async () => {}),
+      runGitCommandFn,
+      getCurrentBranchFn: vi.fn(async () => 'main')
+    })).rejects.toMatchObject({ statusCode: 409 });
+
+    expect(runGitCommandFn).toHaveBeenCalledWith('/projects', ['clone', 'https://example.com/repo.git', '/projects/proj']);
+  });
+
+  test('importProjectFromGit preserves non-clone conflicts in catch branch', async () => {
+    const runGitCommandFn = vi.fn(async () => {
+      throw new Error('permission denied');
+    });
+
+    await expect(importProjectFromGit({
+      payload: { gitUrl: 'https://example.com/repo.git' },
+      projectName: 'proj',
+      gitProvider: 'github',
+      resolveProjectPathFn: vi.fn(() => '/projects/proj'),
+      prepareTargetPathFn: vi.fn(async () => true),
+      buildCloneUrlFn: vi.fn(() => undefined),
+      getProjectsDirFn: vi.fn(() => '/projects'),
+      mkdirFn: vi.fn(async () => {}),
+      runGitCommandFn,
+      getCurrentBranchFn: vi.fn(async () => 'main')
+    })).rejects.toMatchObject({ message: 'permission denied' });
+  });
+
   test('importProjectFromLocal validates path and handles link/copy flows', async () => {
     const common = {
       assertDirectoryExistsFn: vi.fn(async () => {}),
@@ -264,6 +304,215 @@ describe('projects route helpers', () => {
     expect(custom.provider).toBe('github');
     expect(custom.username).toBe('custom-user');
     expect(custom.defaultBranch).toBe('release');
+
+    const localImplicit = resolveImportGitSettings({
+      importMethod: 'local',
+      payload: {},
+      globalSettings: { defaultBranch: 'develop' },
+      gitRemoteUrl: 'https://example.com/ignored.git',
+      gitDefaultBranch: '',
+      fallbackProvider: 'gitlab'
+    });
+    expect(localImplicit).toMatchObject({
+      workflow: 'local',
+      provider: 'gitlab',
+      defaultBranch: 'develop'
+    });
+
+    const customFallback = resolveImportGitSettings({
+      payload: {
+        gitConnectionMode: 'custom',
+        gitProvider: 'bitbucket',
+        gitConnectionProvider: '',
+        gitRemoteUrl: '',
+        gitDefaultBranch: ''
+      },
+      globalSettings: { defaultBranch: 'main' },
+      gitRemoteUrl: 'https://example.com/from-param.git',
+      gitDefaultBranch: 'trunk',
+      fallbackProvider: 'github'
+    });
+    expect(customFallback).toMatchObject({
+      workflow: 'cloud',
+      provider: 'bitbucket',
+      remoteUrl: 'https://example.com/from-param.git',
+      defaultBranch: 'trunk'
+    });
+
+    const globalFallback = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'global' },
+      globalSettings: { provider: '', remoteUrl: 'https://example.com/global.git', defaultBranch: '' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'gitlab'
+    });
+    expect(globalFallback).toMatchObject({
+      workflow: 'cloud',
+      provider: 'gitlab',
+      remoteUrl: 'https://example.com/global.git',
+      defaultBranch: 'main'
+    });
+
+    const customProviderFallback = resolveImportGitSettings({
+      payload: {
+        gitConnectionMode: 'custom',
+        gitConnectionProvider: '',
+        gitProvider: '',
+        gitRemoteUrl: '',
+        gitDefaultBranch: ''
+      },
+      globalSettings: { defaultBranch: 'release' },
+      gitRemoteUrl: 'https://example.com/param-remote.git',
+      gitDefaultBranch: 'trunk',
+      fallbackProvider: 'bitbucket'
+    });
+    expect(customProviderFallback).toMatchObject({
+      provider: 'bitbucket',
+      remoteUrl: 'https://example.com/param-remote.git',
+      defaultBranch: 'trunk'
+    });
+
+    const globalDefaultBranchFallback = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'global' },
+      globalSettings: { provider: 'github', remoteUrl: '', defaultBranch: '' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'github'
+    });
+    expect(globalDefaultBranchFallback.defaultBranch).toBe('main');
+
+    const localWhitespaceFallbacks = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'local', gitProvider: '   ', gitDefaultBranch: '   ' },
+      globalSettings: { defaultBranch: '' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'gitlab'
+    });
+    expect(localWhitespaceFallbacks).toMatchObject({ provider: 'gitlab', defaultBranch: 'main' });
+
+    const customWhitespaceFallbacks = resolveImportGitSettings({
+      payload: {
+        gitConnectionMode: 'custom',
+        gitConnectionProvider: '   ',
+        gitProvider: '   ',
+        gitDefaultBranch: '   '
+      },
+      globalSettings: { defaultBranch: '' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'github'
+    });
+    expect(customWhitespaceFallbacks).toMatchObject({ provider: 'github', defaultBranch: 'main' });
+
+    const globalWhitespaceFallbacks = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'global' },
+      globalSettings: { provider: '   ', remoteUrl: '', defaultBranch: '   ' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'gitlab'
+    });
+    expect(globalWhitespaceFallbacks).toMatchObject({ provider: 'gitlab', defaultBranch: 'main' });
+
+    const implicitLocalUsesParamDefaultBranchAndGithubFallback = resolveImportGitSettings({
+      importMethod: 'local',
+      payload: { gitProvider: '   ' },
+      globalSettings: {},
+      gitRemoteUrl: '',
+      gitDefaultBranch: 'develop',
+      fallbackProvider: '   '
+    });
+    expect(implicitLocalUsesParamDefaultBranchAndGithubFallback).toMatchObject({
+      workflow: 'local',
+      provider: 'github',
+      defaultBranch: 'develop'
+    });
+
+    const explicitLocalUsesParamDefaultBranch = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'local', gitProvider: '' },
+      globalSettings: {},
+      gitRemoteUrl: '',
+      gitDefaultBranch: 'hotfix',
+      fallbackProvider: ''
+    });
+    expect(explicitLocalUsesParamDefaultBranch).toMatchObject({
+      workflow: 'local',
+      provider: 'github',
+      defaultBranch: 'hotfix'
+    });
+
+    const customUsesParamDefaultBranch = resolveImportGitSettings({
+      payload: {
+        gitConnectionMode: 'custom',
+        gitConnectionProvider: '',
+        gitProvider: '',
+        gitDefaultBranch: ''
+      },
+      globalSettings: {},
+      gitRemoteUrl: '',
+      gitDefaultBranch: 'release-candidate',
+      fallbackProvider: ''
+    });
+    expect(customUsesParamDefaultBranch).toMatchObject({
+      workflow: 'cloud',
+      provider: 'github',
+      defaultBranch: 'release-candidate'
+    });
+
+    const implicitLocalFallsBackToMainThroughTrimmedWhitespace = resolveImportGitSettings({
+      importMethod: 'local',
+      payload: { gitDefaultBranch: '   ' },
+      globalSettings: {},
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'github'
+    });
+    expect(implicitLocalFallsBackToMainThroughTrimmedWhitespace.defaultBranch).toBe('main');
+
+    const implicitLocalUsesMainWhenAllFallbacksMissing = resolveImportGitSettings({
+      importMethod: 'local',
+      payload: {},
+      globalSettings: { defaultBranch: '' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'github'
+    });
+    expect(implicitLocalUsesMainWhenAllFallbacksMissing.defaultBranch).toBe('main');
+
+    const explicitLocalUsesGlobalThenMainFallback = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'local' },
+      globalSettings: { defaultBranch: 'stable' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'github'
+    });
+    expect(explicitLocalUsesGlobalThenMainFallback.defaultBranch).toBe('stable');
+
+    const explicitLocalUsesMainWhenAllFallbacksMissing = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'local' },
+      globalSettings: { defaultBranch: '' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'github'
+    });
+    expect(explicitLocalUsesMainWhenAllFallbacksMissing.defaultBranch).toBe('main');
+
+    const customUsesGlobalThenMainFallback = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'custom', gitConnectionProvider: 'github' },
+      globalSettings: { defaultBranch: 'release' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'github'
+    });
+    expect(customUsesGlobalThenMainFallback.defaultBranch).toBe('release');
+
+    const customUsesMainWhenAllFallbacksMissing = resolveImportGitSettings({
+      payload: { gitConnectionMode: 'custom', gitConnectionProvider: 'github' },
+      globalSettings: { defaultBranch: '' },
+      gitRemoteUrl: '',
+      gitDefaultBranch: '',
+      fallbackProvider: 'github'
+    });
+    expect(customUsesMainWhenAllFallbacksMissing.defaultBranch).toBe('main');
   });
 
   test('utility helpers preserve compatibility behavior', () => {
@@ -274,6 +523,7 @@ describe('projects route helpers', () => {
     expect(isCloneTargetNotEmptyError({ message: 'different error' })).toBe(false);
 
     expect(normalizeProjectDates({ created_at: 'a' })).toEqual(expect.objectContaining({ createdAt: 'a', updatedAt: 'a' }));
+    expect(normalizeProjectDates(null)).toBeNull();
 
     expect(serializeJob({ id: 1, project_id: 2, type: 'x', displayName: 'X' })).toEqual(
       expect.objectContaining({ id: 1, projectId: 2, type: 'x', displayName: 'X' })

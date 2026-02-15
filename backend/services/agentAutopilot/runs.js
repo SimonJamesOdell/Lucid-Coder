@@ -17,7 +17,7 @@ const parseFailureFromLogLine = (workspace, text) => {
       return null;
     }
     const segments = raw.split(TEST_PATH_SEGMENT_REGEX).map((segment) => segment.trim()).filter(Boolean);
-    const name = segments.length ? segments[segments.length - 1] : raw;
+    const name = segments[segments.length - 1];
     return {
       workspace,
       name,
@@ -146,19 +146,16 @@ export const extractFailingTestsFromWorkspaceRuns = (workspaceRuns = []) => {
   const failures = [];
   const dedupe = new Set();
 
-  const pushFailure = (entry) => {
-    if (!entry || typeof entry !== 'object') {
-      return;
-    }
-    const workspace = coerceString(entry.workspace) || 'workspace';
-    const name = coerceString(entry.name) || 'unnamed test';
-    const message = entry.message == null ? null : coerceString(entry.message);
-    const key = `${workspace}::${name}::${message || ''}`;
+  const pushFailure = ({ workspace = 'workspace', name = 'unnamed test', message = null } = {}) => {
+    const normalizedWorkspace = coerceString(workspace);
+    const normalizedName = coerceString(name);
+    const normalizedMessage = message == null ? null : coerceString(message);
+    const key = `${normalizedWorkspace}::${normalizedName}::${normalizedMessage || ''}`;
     if (dedupe.has(key)) {
       return;
     }
     dedupe.add(key);
-    failures.push({ workspace, name, message });
+    failures.push({ workspace: normalizedWorkspace, name: normalizedName, message: normalizedMessage });
   };
 
   for (const run of asArray(workspaceRuns)) {
@@ -279,7 +276,7 @@ export const buildFailureFingerprint = (run) => {
   const totals = coverage.totals && typeof coverage.totals === 'object' ? coverage.totals : {};
   const failures = extractFailingTestsFromWorkspaceRuns(run.workspaceRuns || [])
     .slice(0, 8)
-    .map((entry) => `${entry.workspace || 'workspace'}|${entry.name || 'test'}|${entry.message || ''}`);
+    .map((entry) => `${entry.workspace}|${entry.name}|${entry.message || ''}`);
   const workspaceStatuses = Array.isArray(run.workspaceRuns)
     ? run.workspaceRuns
         .map((workspaceRun) => {

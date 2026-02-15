@@ -1,10 +1,16 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { isWithinManagedProjectsRoot } from './cleanup.js';
 
 const normalizeCopyError = (error, failedPath = null) => {
-  const wrapped = new Error(error?.message || 'Failed to copy project files');
+  const code = error?.code || 'UNKNOWN';
+  const message = error?.message || 'Unknown error';
+  const wrappedMessage = failedPath
+    ? `Failed to copy project files: ${code} ${message} (${failedPath})`
+    : `Failed to copy project files: ${code} ${message}`;
+  const wrapped = new Error(wrappedMessage);
   wrapped.statusCode = 400;
-  wrapped.code = error?.code || 'UNKNOWN';
+  wrapped.code = code;
   wrapped.failedPath = failedPath || null;
   return wrapped;
 };
@@ -57,6 +63,10 @@ export const copyDirectoryRecursive = async (sourcePath, targetPath, options = {
 
 export const cleanupExistingImportTarget = async (targetPath, { rmFn = fs.rm } = {}) => {
   if (!targetPath || typeof targetPath !== 'string') {
+    return false;
+  }
+
+  if (!isWithinManagedProjectsRoot(targetPath)) {
     return false;
   }
 

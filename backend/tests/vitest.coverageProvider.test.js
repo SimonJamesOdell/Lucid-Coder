@@ -6,6 +6,11 @@ describe('resolveCoverageProvider', () => {
     expect(resolveCoverageProvider('18.19.1')).toBe('istanbul');
   });
 
+  it('falls back to istanbul when Node version is invalid', () => {
+    expect(resolveCoverageProvider('not-a-version')).toBe('istanbul');
+    expect(resolveCoverageProvider('0.0.0')).toBe('istanbul');
+  });
+
   it('uses v8 on Node 19 and above', () => {
     expect(resolveCoverageProvider('19.0.0')).toBe('v8');
     expect(resolveCoverageProvider('20.11.1')).toBe('v8');

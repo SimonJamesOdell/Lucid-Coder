@@ -68,6 +68,27 @@ describe('project testing settings routes', () => {
     expect(response.body.settings.frontend.coverageTarget).toBe(80);
   });
 
+  test('GET falls back to default effective target and null custom target when values are missing', async () => {
+    const { getProject, getTestingSettings, getProjectTestingSettings } = await import('../database.js');
+    getProject.mockResolvedValueOnce({ id: 7, name: 'Demo' });
+    getTestingSettings.mockResolvedValueOnce({ coverageTarget: 'not-an-integer' });
+    getProjectTestingSettings.mockResolvedValueOnce({
+      frontend: { mode: 'custom', coverageTarget: undefined, effectiveCoverageTarget: undefined },
+      backend: { mode: 'global', coverageTarget: null, effectiveCoverageTarget: undefined }
+    });
+
+    const app = await buildTestApp();
+    const response = await request(app).get('/api/projects/7/testing-settings').expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.settings.frontend).toMatchObject({
+      mode: 'custom',
+      coverageTarget: null,
+      effectiveCoverageTarget: 100
+    });
+    expect(response.body.settings.backend.effectiveCoverageTarget).toBe(100);
+  });
+
   test('PUT validates local mode coverage target', async () => {
     const { getProject } = await import('../database.js');
     getProject.mockResolvedValueOnce({ id: 7, name: 'Demo' });

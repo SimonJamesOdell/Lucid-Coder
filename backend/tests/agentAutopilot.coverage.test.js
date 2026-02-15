@@ -184,4 +184,51 @@ describe('agent autopilot coverage gates', () => {
     expect(runTests).toHaveBeenCalledTimes(3);
     expect(rollback).toHaveBeenCalledTimes(1);
   });
+
+  test('autopilot continues retries when failure fingerprint changes before repeating', async () => {
+    const plan = vi.fn().mockResolvedValue({
+      parent: { branchName: 'feature/fingerprint-reset' },
+      children: [{ prompt: 'Fix flaky test' }]
+    });
+
+    const edit = vi.fn().mockResolvedValue({ steps: [], summary: 'ok' });
+    const createBranch = vi.fn().mockResolvedValue({});
+    const rollback = vi.fn().mockResolvedValue({ restored: true });
+
+    const runA = {
+      status: 'failed',
+      summary: { failed: 1, coverage: { totals: { lines: 98, statements: 99, functions: 100, branches: 99 } } },
+      workspaceRuns: [{ workspace: 'backend', status: 'failed', exitCode: 1, tests: [], logs: ['FAIL tests/a.test.js > still fails a'] }]
+    };
+    const runB = {
+      status: 'failed',
+      summary: { failed: 1, coverage: { totals: { lines: 98, statements: 99, functions: 100, branches: 99 } } },
+      workspaceRuns: [{ workspace: 'backend', status: 'failed', exitCode: 1, tests: [], logs: ['FAIL tests/b.test.js > still fails b'] }]
+    };
+
+    const runTests = vi
+      .fn()
+      .mockResolvedValueOnce(runA)
+      .mockResolvedValueOnce(runA)
+      .mockResolvedValueOnce(runB)
+      .mockResolvedValueOnce(runB);
+
+    await expect(
+      autopilotFeatureRequest({
+        projectId: 8,
+        prompt: 'Stabilize retry behavior',
+        options: { verificationFixRetries: 2 },
+        deps: {
+          plan,
+          edit,
+          createBranch,
+          runTests,
+          rollback
+        }
+      })
+    ).rejects.toThrow('Autopilot implementation did not pass tests/coverage.');
+
+    expect(runTests).toHaveBeenCalledTimes(4);
+    expect(rollback).toHaveBeenCalledTimes(1);
+  });
 });

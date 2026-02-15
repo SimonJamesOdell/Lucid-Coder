@@ -92,5 +92,58 @@ describe('projects fileOps helpers', () => {
       code: 'EPERM',
       failedPath: 'src/file.txt'
     });
+
+    const cpUnknownMessageFn = vi.fn(async () => {
+      throw { code: 'EIO' };
+    });
+    const fallbackNoopFn = vi.fn(async () => {});
+    await expect(copyProjectFilesWithFallback('src', 'dest', {
+      cpFn: cpUnknownMessageFn,
+      copyDirectoryRecursiveFn: fallbackNoopFn
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'EIO'
+    });
+
+    const cpFailTwiceFn = vi.fn(async () => {
+      throw new Error('cp failed');
+    });
+    const repeatedOnFileErrorFn = vi.fn(async (_source, _target, options = {}) => {
+      const first = new Error('first');
+      first.code = 'EPERM';
+      options.onFileError?.(first, 'src/first.txt');
+
+      const second = new Error('second');
+      second.code = 'EACCES';
+      options.onFileError?.(second, 'src/second.txt');
+    });
+
+    await expect(copyProjectFilesWithFallback('src', 'dest', {
+      cpFn: cpFailTwiceFn,
+      copyDirectoryRecursiveFn: repeatedOnFileErrorFn
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'EPERM',
+      failedPath: 'src/first.txt'
+    });
+
+    const cpFailNoPathFn = vi.fn(async () => {
+      throw new Error('cp failed');
+    });
+    const noPathFallbackFn = vi.fn(async (_source, _target, options = {}) => {
+      const error = new Error('nop');
+      error.code = 'EPERM';
+      options.onFileError?.(error, undefined);
+      throw error;
+    });
+
+    await expect(copyProjectFilesWithFallback('src', 'dest', {
+      cpFn: cpFailNoPathFn,
+      copyDirectoryRecursiveFn: noPathFallbackFn
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'EPERM',
+      failedPath: null
+    });
   });
 });

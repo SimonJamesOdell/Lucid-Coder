@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 const isWindows = process.platform === 'win32'
+const isCoverageRun = process.argv.includes('--coverage') || process.env.VITEST_COVERAGE === '1'
 
 export default defineConfig({
   plugins: [react()],
@@ -11,6 +12,8 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.js'],
     css: true,
     pool: isWindows ? 'forks' : 'threads',
+    maxWorkers: isCoverageRun ? 1 : undefined,
+    fileParallelism: isCoverageRun ? false : true,
     onConsoleLog(log, type) {
       if (process.env.VITE_VERBOSE_TEST_LOGS === 'true') {
         return

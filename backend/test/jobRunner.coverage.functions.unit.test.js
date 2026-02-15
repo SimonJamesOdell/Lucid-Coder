@@ -24,6 +24,7 @@ describe('jobRunner coverage (functions)', () => {
   afterEach(() => {
     jobRunner.__testing.clearJobs();
     jobRunner.__testing.resetJobEvents();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
@@ -161,28 +162,33 @@ describe('jobRunner coverage (functions)', () => {
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       child.pid = 444;
+      const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
       const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
         throw new Error('kill failed');
       });
 
-      spawnMock.mockReturnValueOnce(child);
-      runStore.createRun.mockResolvedValueOnce({ id: 'run-cancel-error' });
+      try {
+        spawnMock.mockReturnValueOnce(child);
+        runStore.createRun.mockResolvedValueOnce({ id: 'run-cancel-error' });
 
-      const started = jobRunner.startJob({
-        projectId: 3,
-        type: 'build',
-        command: 'node',
-        args: ['-v'],
-        cwd: 'C:\\tmp',
-        env: {}
-      });
+        const started = jobRunner.startJob({
+          projectId: 3,
+          type: 'build',
+          command: 'node',
+          args: ['-v'],
+          cwd: 'C:\\tmp',
+          env: {}
+        });
 
-      await tick();
+        await tick();
 
-      const cancelled = jobRunner.cancelJob(started.id);
-      expect(cancelled.status).toBe(jobRunner.JOB_STATUS.CANCELLED);
-      expect((cancelled.logs || []).some((l) => l.stream === 'stderr' && l.message.includes('kill failed'))).toBe(true);
-      killSpy.mockRestore();
+        const cancelled = jobRunner.cancelJob(started.id);
+        expect(cancelled.status).toBe(jobRunner.JOB_STATUS.CANCELLED);
+        expect((cancelled.logs || []).some((l) => l.stream === 'stderr' && l.message.includes('kill failed'))).toBe(true);
+      } finally {
+        killSpy.mockRestore();
+        platformSpy.mockRestore();
+      }
     }
 
     // Case 2: terminatePid throws a non-Error value (fallback message).
@@ -191,28 +197,33 @@ describe('jobRunner coverage (functions)', () => {
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       child.pid = 555;
+      const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
       const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
         throw {};
       });
 
-      spawnMock.mockReturnValueOnce(child);
-      runStore.createRun.mockResolvedValueOnce({ id: 'run-cancel-non-error' });
+      try {
+        spawnMock.mockReturnValueOnce(child);
+        runStore.createRun.mockResolvedValueOnce({ id: 'run-cancel-non-error' });
 
-      const started = jobRunner.startJob({
-        projectId: 4,
-        type: 'build',
-        command: 'node',
-        args: ['-v'],
-        cwd: 'C:\\tmp',
-        env: {}
-      });
+        const started = jobRunner.startJob({
+          projectId: 4,
+          type: 'build',
+          command: 'node',
+          args: ['-v'],
+          cwd: 'C:\\tmp',
+          env: {}
+        });
 
-      await tick();
+        await tick();
 
-      const cancelled = jobRunner.cancelJob(started.id);
-      expect(cancelled.status).toBe(jobRunner.JOB_STATUS.CANCELLED);
-      expect((cancelled.logs || []).some((l) => l.stream === 'stderr' && l.message.includes('Job failed'))).toBe(true);
-      killSpy.mockRestore();
+        const cancelled = jobRunner.cancelJob(started.id);
+        expect(cancelled.status).toBe(jobRunner.JOB_STATUS.CANCELLED);
+        expect((cancelled.logs || []).some((l) => l.stream === 'stderr' && l.message.includes('Job failed'))).toBe(true);
+      } finally {
+        killSpy.mockRestore();
+        platformSpy.mockRestore();
+      }
     }
   });
 

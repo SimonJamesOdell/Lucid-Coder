@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  buildFailureFingerprint,
   extractFailingTestsFromWorkspaceRuns,
   splitLogsByStream,
   summarizeTestRunForPrompt,
@@ -270,6 +271,73 @@ describe('agentAutopilot runs helpers', () => {
     expect(failures[14].message).toContain('Error: issue 15');
   });
 
+  test('extractFailingTestsFromWorkspaceRuns captures generic failure-pattern logs and caps at 15', () => {
+    const logs = Array.from({ length: 20 }, (_, index) => `failure signal ${index + 1}`);
+    const failures = extractFailingTestsFromWorkspaceRuns([
+      {
+        workspace: 'ws-failure-pattern',
+        tests: [],
+        logs
+      }
+    ]);
+
+    expect(failures).toHaveLength(15);
+    expect(failures[0]).toMatchObject({ workspace: 'ws-failure-pattern', name: 'log' });
+  });
+
+  test('extractFailingTestsFromWorkspaceRuns falls back to generic log failure for empty Vitest FAIL lines', () => {
+    const failures = extractFailingTestsFromWorkspaceRuns([
+      {
+        workspace: 'ws-empty-vitest',
+        tests: [],
+        logs: ['stderr: FAIL   ']
+      }
+    ]);
+
+    expect(failures).toEqual([
+      {
+        workspace: 'ws-empty-vitest',
+        name: 'log',
+        message: 'stderr: FAIL   '
+      }
+    ]);
+  });
+
+  test('extractFailingTestsFromWorkspaceRuns deduplicates repeated identical failures', () => {
+    const failures = extractFailingTestsFromWorkspaceRuns([
+      {
+        workspace: 'ws-dedupe',
+        tests: [],
+        logs: [
+          'stderr: FAIL  tests/a.test.js > suite > same failure',
+          'stderr: FAIL  tests/a.test.js > suite > same failure'
+        ]
+      }
+    ]);
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0].name).toBe('same failure');
+  });
+
+  test('extractFailingTestsFromWorkspaceRuns parses and truncates vitest and pytest failures', () => {
+    const longMessage = 'x'.repeat(320);
+    const failures = extractFailingTestsFromWorkspaceRuns([
+      {
+        workspace: 'ws-parse',
+        tests: [],
+        logs: [
+          `stderr: FAIL tests/sample.test.js > suite > terminal-name ${longMessage}`,
+          `stderr: FAILED   - ${longMessage}`
+        ]
+      }
+    ]);
+
+    expect(failures[0].name).toContain('terminal-name');
+    expect(failures[0].message.length).toBeLessThanOrEqual(280);
+    expect(failures[1].name).toBe('pytest failure');
+    expect(failures[1].message.length).toBeLessThanOrEqual(280);
+  });
+
   test('summarizeTestRunForPrompt builds a readable summary', () => {
     const summary = summarizeTestRunForPrompt({
       status: 'failed',
@@ -364,5 +432,75 @@ describe('agentAutopilot runs helpers', () => {
 
   test('summarizeTestRunForPrompt returns empty string for invalid run', () => {
     expect(summarizeTestRunForPrompt(null)).toBe('');
+  });
+
+  test('buildFailureFingerprint returns empty string for invalid run input', () => {
+    expect(buildFailureFingerprint(null)).toBe('');
+  });
+
+  test('buildFailureFingerprint ignores non-object workspace run entries', () => {
+    const fingerprint = buildFailureFingerprint({
+      status: 'failed',
+      summary: {
+        failed: 1,
+        coverage: {
+          totals: { lines: 90, statements: 90, functions: 90, branches: 90 }
+        }
+      },
+      workspaceRuns: [null, { workspace: 'backend', status: 'failed', exitCode: 1, logs: [] }]
+    });
+
+    expect(fingerprint).toContain('backend:failed:1');
+  });
+
+  test('buildFailureFingerprint applies workspace/test/coverage defaults when fields are missing', () => {
+    const fingerprint = buildFailureFingerprint({
+      status: '',
+      summary: {
+        failed: NaN,
+        coverage: {
+          totals: {},
+          missing: ['a.js'],
+          uncoveredLines: [
+            { workspace: '', file: '', lines: null }
+          ]
+        }
+      },
+      workspaceRuns: [
+        {
+          tests: [{ status: 'failed' }],
+          status: '',
+          exitCode: NaN,
+          logs: []
+        }
+      ]
+    });
+
+    expect(fingerprint).toContain('workspace:unknown:x');
+    expect(fingerprint).toContain('workspace|unnamed test|');
+    expect(fingerprint).toContain('workspace/:');
+  });
+
+  test('buildFailureFingerprint keeps unnamed test fallback from failure extraction', () => {
+    const fingerprint = buildFailureFingerprint({
+      status: 'failed',
+      summary: {
+        failed: 1,
+        coverage: {
+          totals: { lines: 1, statements: 1, functions: 1, branches: 1 }
+        }
+      },
+      workspaceRuns: [
+        {
+          workspace: 'ws',
+          tests: [{ status: 'failed', name: '', title: '', message: null }],
+          status: 'failed',
+          exitCode: 1,
+          logs: []
+        }
+      ]
+    });
+
+    expect(fingerprint).toContain('ws|unnamed test|');
   });
 });

@@ -52,13 +52,76 @@ const resolveBackendInstallPlan = async ({ backendPath, projectPath, fileExistsF
     };
   }
 
+  const pyproject = path.join(backendPath, 'pyproject.toml');
+  if (await fileExistsFn(pyproject)) {
+    return {
+      command: 'python',
+      args: ['-m', 'pip', 'install', '-e', '.'],
+      cwd: backendPath
+    };
+  }
+
+  const goMod = path.join(backendPath, 'go.mod');
+  if (await fileExistsFn(goMod)) {
+    return {
+      command: 'go',
+      args: ['mod', 'download'],
+      cwd: backendPath
+    };
+  }
+
+  const cargoToml = path.join(backendPath, 'Cargo.toml');
+  if (await fileExistsFn(cargoToml)) {
+    return {
+      command: 'cargo',
+      args: ['fetch'],
+      cwd: backendPath
+    };
+  }
+
+  const composerJson = path.join(backendPath, 'composer.json');
+  if (await fileExistsFn(composerJson)) {
+    return {
+      command: 'composer',
+      args: ['install'],
+      cwd: backendPath
+    };
+  }
+
+  const gemfile = path.join(backendPath, 'Gemfile');
+  if (await fileExistsFn(gemfile)) {
+    return {
+      command: 'bundle',
+      args: ['install'],
+      cwd: backendPath
+    };
+  }
+
+  const packageSwift = path.join(backendPath, 'Package.swift');
+  if (await fileExistsFn(packageSwift)) {
+    return {
+      command: 'swift',
+      args: ['package', 'resolve'],
+      cwd: backendPath
+    };
+  }
+
+  const pomXml = path.join(backendPath, 'pom.xml');
+  if (await fileExistsFn(pomXml)) {
+    return {
+      command: 'mvn',
+      args: ['-q', '-DskipTests', 'package'],
+      cwd: backendPath
+    };
+  }
+
   const buildGradle = path.join(projectPath, 'build.gradle');
   if (await fileExistsFn(buildGradle)) {
     const gradleBat = path.join(projectPath, 'gradlew.bat');
     if (await fileExistsFn(gradleBat)) {
       return {
         command: gradleBat,
-        args: ['build'],
+        args: ['build', '-x', 'test'],
         cwd: projectPath
       };
     }
@@ -67,14 +130,14 @@ const resolveBackendInstallPlan = async ({ backendPath, projectPath, fileExistsF
     if (await fileExistsFn(gradleSh)) {
       return {
         command: gradleSh,
-        args: ['build'],
+        args: ['build', '-x', 'test'],
         cwd: projectPath
       };
     }
 
     return {
       command: 'gradle',
-      args: ['build'],
+      args: ['build', '-x', 'test'],
       cwd: projectPath
     };
   }

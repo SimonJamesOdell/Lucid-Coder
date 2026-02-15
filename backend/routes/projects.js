@@ -262,6 +262,7 @@ router.post('/import', async (req, res) => {
 
     if (project?.id) {
       const importGitSettings = resolveImportGitSettings({
+        importMethod,
         payload,
         globalSettings: globalGitSettings,
         gitRemoteUrl,
@@ -272,14 +273,26 @@ router.post('/import', async (req, res) => {
       await saveProjectGitSettings(project.id, importGitSettings);
 
       if (importGitSettings.workflow === 'cloud' && importGitSettings.remoteUrl) {
-        const { stdout, code } = await runGitCommand(projectPath, ['remote', 'get-url', 'origin'], { allowFailure: true });
-        const existingRemote = typeof stdout === 'string' ? stdout.trim() : '';
-        if (code === 0 && existingRemote) {
-          if (existingRemote !== importGitSettings.remoteUrl) {
-            await runGitCommand(projectPath, ['remote', 'set-url', 'origin', importGitSettings.remoteUrl]);
+        const remoteLookupResult = await runGitCommand(projectPath, ['remote', 'get-url', 'origin'], { allowFailure: true });
+        const stdout = typeof remoteLookupResult?.stdout === 'string' ? remoteLookupResult.stdout : '';
+        const code = Number.isInteger(remoteLookupResult?.code) ? remoteLookupResult.code : 1;
+        const existingRemote = stdout.trim();
+        if (!(code === 0 && existingRemote === importGitSettings.remoteUrl)) {
+          if (importMethod === 'local' && (code !== 0 || !existingRemote)) {
+            await runGitCommand(projectPath, ['remote', 'add', 'origin', importGitSettings.remoteUrl]);
+          } else {
+            try {
+              const setUrlResult = await runGitCommand(projectPath, ['remote', 'set-url', 'origin', importGitSettings.remoteUrl], {});
+              const setUrlCode = Number.isInteger(setUrlResult?.code) ? setUrlResult.code : null;
+              if (setUrlCode !== null && setUrlCode !== 0) {
+                await runGitCommand(projectPath, ['remote', 'add', 'origin', importGitSettings.remoteUrl]);
+              }
+            } catch {
+              await runGitCommand(projectPath, ['remote', 'add', 'origin', importGitSettings.remoteUrl]);
+            }
           }
         } else {
-          await runGitCommand(projectPath, ['remote', 'add', 'origin', importGitSettings.remoteUrl]);
+          // no-op
         }
       }
     }
