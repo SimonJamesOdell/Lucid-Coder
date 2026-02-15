@@ -67,10 +67,19 @@ const resolveWorkspaceFromPath = (value) => {
     return null;
   }
   const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '').trim().toLowerCase();
+  if (normalized === 'frontend' || normalized === 'backend') {
+    return normalized;
+  }
   if (normalized.startsWith('frontend/')) {
     return 'frontend';
   }
   if (normalized.startsWith('backend/')) {
+    return 'backend';
+  }
+  if (normalized.includes('/frontend/')) {
+    return 'frontend';
+  }
+  if (normalized.includes('/backend/')) {
     return 'backend';
   }
   return null;
@@ -79,13 +88,16 @@ const resolveWorkspaceFromPath = (value) => {
 const collectEditedWorkspaces = (editResult) => {
   const files = extractEditPatchFiles(editResult?.steps);
   const workspaces = new Set();
+  let hasUnscoped = false;
   for (const file of files) {
     const workspace = resolveWorkspaceFromPath(file?.path);
     if (workspace) {
       workspaces.add(workspace);
+    } else {
+      hasUnscoped = true;
     }
   }
-  return workspaces;
+  return { workspaces, hasUnscoped };
 };
 
 const collectWorkspaceStatuses = (run) => {
@@ -101,8 +113,45 @@ const collectWorkspaceStatuses = (run) => {
     const status = String(workspaceRun?.status || '').toLowerCase();
     if (status === 'succeeded' || status === 'passed') {
       passing.add(workspace);
+      failing.delete(workspace);
     } else {
       failing.add(workspace);
+      passing.delete(workspace);
+    }
+  }
+
+  const coverageWorkspaceRuns = Array.isArray(run?.summary?.coverage?.workspaceRuns)
+    ? run.summary.coverage.workspaceRuns
+    : [];
+  for (const coverageRun of coverageWorkspaceRuns) {
+    const workspace = resolveWorkspaceFromPath(coverageRun?.workspace);
+    if (!workspace || typeof coverageRun?.passed !== 'boolean') {
+      continue;
+    }
+    if (coverageRun.passed) {
+      passing.add(workspace);
+      failing.delete(workspace);
+    } else {
+      failing.add(workspace);
+      passing.delete(workspace);
+    }
+  }
+
+  const changedFileRuns = Array.isArray(run?.summary?.coverage?.changedFiles?.workspaces)
+    ? run.summary.coverage.changedFiles.workspaces
+    : [];
+  for (const changedFileRun of changedFileRuns) {
+    const workspace = resolveWorkspaceFromPath(changedFileRun?.workspace);
+    if (!workspace || typeof changedFileRun?.passed !== 'boolean') {
+      continue;
+    }
+    if (changedFileRun.passed) {
+      if (!failing.has(workspace)) {
+        passing.add(workspace);
+      }
+    } else {
+      failing.add(workspace);
+      passing.delete(workspace);
     }
   }
 
@@ -177,18 +226,19 @@ export const autopilotFeatureRequest = async ({ projectId, prompt, options = {},
       return baseOptions;
     }
 
-    const editedWorkspaces = collectEditedWorkspaces(editResult);
-    if (!editedWorkspaces.size) {
-      return baseOptions;
-    }
-
-    for (const workspace of editedWorkspaces) {
-      if (passing.has(workspace)) {
-        return baseOptions;
+    const { workspaces: editedWorkspaces, hasUnscoped } = collectEditedWorkspaces(editResult);
+    if (editedWorkspaces.size > 0) {
+      for (const workspace of editedWorkspaces) {
+        if (passing.has(workspace)) {
+          return baseOptions;
+        }
       }
     }
 
-    const targetWorkspaces = [...failing].filter((workspace) => editedWorkspaces.has(workspace));
+    let targetWorkspaces = [...failing].filter((workspace) => editedWorkspaces.has(workspace));
+    if (!targetWorkspaces.length && hasUnscoped && failing.size === 1 && editedWorkspaces.size === 0) {
+      targetWorkspaces = [...failing];
+    }
     if (!targetWorkspaces.length) {
       return baseOptions;
     }

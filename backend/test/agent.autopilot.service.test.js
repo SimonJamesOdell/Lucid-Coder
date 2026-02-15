@@ -858,6 +858,148 @@ describe('autopilotFeatureRequest', () => {
     });
   });
 
+  test('scopes verification retries using coverage workspace status when workspace run status is incomplete', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Converge backend tests']));
+    const runQueue = [
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'succeeded' }
+        ],
+        summary: {
+          coverage: {
+            passed: false,
+            workspaceRuns: [
+              { workspace: 'frontend', passed: true },
+              { workspace: 'backend', passed: false }
+            ]
+          }
+        }
+      },
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'succeeded' }
+        ],
+        summary: {
+          coverage: {
+            passed: false,
+            workspaceRuns: [
+              { workspace: 'frontend', passed: true },
+              { workspace: 'backend', passed: false }
+            ]
+          }
+        }
+      },
+      {
+        ...runResult('passed'),
+        workspaceRuns: [{ workspace: 'backend', status: 'succeeded' }]
+      }
+    ];
+    const callOptions = [];
+    const runTests = vi.fn((projectId, branchName, options) => {
+      callOptions.push(options);
+      return Promise.resolve(runQueue.shift());
+    });
+
+    const edit = vi
+      .fn()
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResultForPath('backend/src/service.js'));
+
+    await autopilotFeatureRequest({
+      projectId: 16,
+      prompt: 'Converge backend tests',
+      deps: {
+        plan,
+        edit,
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'coverage-status' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates: vi.fn(() => []),
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus: vi.fn(),
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent: createAppendEvent()
+      },
+      options: { verificationFixRetries: 1 }
+    });
+
+    expect(callOptions[2]).toMatchObject({
+      workspaceScope: 'changed',
+      changedPaths: ['backend/.autopilot-retry-scope']
+    });
+  });
+
+  test('scopes to single failing workspace when edit paths are unscoped', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Converge backend tests']));
+    const runQueue = [
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('passed'),
+        workspaceRuns: [{ workspace: 'backend', status: 'succeeded' }]
+      }
+    ];
+    const callOptions = [];
+    const runTests = vi.fn((projectId, branchName, options) => {
+      callOptions.push(options);
+      return Promise.resolve(runQueue.shift());
+    });
+
+    const edit = vi
+      .fn()
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResultForPath('src/service.js'));
+
+    await autopilotFeatureRequest({
+      projectId: 16,
+      prompt: 'Converge backend tests',
+      deps: {
+        plan,
+        edit,
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'unscoped-status' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates: vi.fn(() => []),
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus: vi.fn(),
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent: createAppendEvent()
+      },
+      options: { verificationFixRetries: 1 }
+    });
+
+    expect(callOptions[2]).toMatchObject({
+      workspaceScope: 'changed',
+      changedPaths: ['backend/.autopilot-retry-scope']
+    });
+  });
+
   test('normalizes non-string child prompts in the queue', async () => {
     const plan = vi.fn().mockResolvedValue({
       parent: { branchName: 'feat/autopilot' },
