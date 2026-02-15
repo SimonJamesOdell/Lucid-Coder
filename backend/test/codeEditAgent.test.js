@@ -347,4 +347,60 @@ describe('codeEditAgent', () => {
       'Code edit agent exceeded the maximum number of steps without finalizing.'
     );
   });
+
+  test('rejects global stylesheet write for targeted style prompts', async () => {
+    queueResponses([
+      JSON.stringify({
+        action: 'write_file',
+        path: 'frontend/src/index.css',
+        content: 'body { background: #000; color: #fff; }'
+      }),
+      JSON.stringify({ action: 'finalize', summary: 'done' })
+    ]);
+
+    const result = await applyCodeChange({
+      projectId: 20,
+      prompt: 'make the navigation bar have a black background with white text'
+    });
+
+    expect(result.summary).toBe('done');
+    expect(writeProjectFile).not.toHaveBeenCalled();
+    expect(
+      result.steps.some(
+        (step) => step.type === 'observation' && step.action === 'write_file' && String(step.summary).includes('Rejected:')
+      )
+    ).toBe(true);
+  });
+
+  test('allows targeted navbar style writes when content references target selector', async () => {
+    queueResponses([
+      JSON.stringify({
+        action: 'write_file',
+        path: 'frontend/src/index.css',
+        content: '.navbar { background: #000; color: #fff; }'
+      }),
+      JSON.stringify({ action: 'finalize', summary: 'done' })
+    ]);
+
+    const result = await applyCodeChange({
+      projectId: 21,
+      prompt: 'make the navigation bar have a black background with white text'
+    });
+
+    expect(result.summary).toBe('done');
+    expect(writeProjectFile).toHaveBeenCalledWith(21, 'frontend/src/index.css', '.navbar { background: #000; color: #fff; }');
+  });
+
+  test('style scope helpers derive targeted contract and block global selectors', () => {
+    const contract = __testing.deriveStyleScopeContract('make the navigation bar black with white text');
+    expect(contract).toEqual(expect.objectContaining({ mode: 'targeted' }));
+
+    const violation = __testing.validateStyleWriteScope({
+      contract,
+      path: 'frontend/src/index.css',
+      content: 'body { background: #000; color: #fff; }'
+    });
+
+    expect(violation).toContain('global selectors');
+  });
 });
