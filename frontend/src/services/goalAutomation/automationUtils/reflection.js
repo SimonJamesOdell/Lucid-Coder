@@ -6,6 +6,52 @@ const SCOPE_REFLECTION_DEFAULT = Object.freeze({
   testsNeeded: true
 });
 
+const STYLE_REQUEST_REGEX = /\b(css|style|styling|theme|color|background|foreground|text color|font|typography|palette|button color|navbar|navigation bar|header|footer|sidebar|card|modal|form|input)\b/i;
+const GLOBAL_STYLE_REGEX = /\b(global|app-wide|site-wide|entire app|whole app|across the app|entire page|whole page|page-wide|every page|all pages|entire site|whole site|all screens|body|html|:root)\b/i;
+const GLOBAL_SELECTOR_REGEX = /\b(body|html)\s*[{,]|:root\s*[{,]|(^|\n)\s*\*\s*[{,]|#root\s*[{,]|:global\(\s*(body|html|:root|\*)\s*\)/i;
+
+export const deriveStyleScopeContract = (goalPrompt) => {
+  const prompt = typeof goalPrompt === 'string' ? goalPrompt.trim() : '';
+  if (!prompt) {
+    return null;
+  }
+
+  if (!STYLE_REQUEST_REGEX.test(prompt)) {
+    return null;
+  }
+
+  const globalRequested = GLOBAL_STYLE_REGEX.test(prompt);
+  if (globalRequested) {
+    return {
+      mode: 'global',
+      enforceTargetScoping: false,
+      forbidGlobalSelectors: false
+    };
+  }
+
+  return {
+    mode: 'targeted',
+    enforceTargetScoping: true,
+    forbidGlobalSelectors: true
+  };
+};
+
+const editTouchesGlobalSelectors = (edit = {}) => {
+  if (edit?.type === 'upsert') {
+    return typeof edit?.content === 'string' && GLOBAL_SELECTOR_REGEX.test(edit.content);
+  }
+
+  if (edit?.type === 'modify' && Array.isArray(edit?.replacements)) {
+    return edit.replacements.some((replacement) => {
+      const search = typeof replacement?.search === 'string' ? replacement.search : '';
+      const replace = typeof replacement?.replace === 'string' ? replacement.replace : '';
+      return GLOBAL_SELECTOR_REGEX.test(`${search}\n${replace}`);
+    });
+  }
+
+  return false;
+};
+
 export const normalizeReflectionList = (value) => {
   if (!Array.isArray(value)) {
     return [];
@@ -64,6 +110,7 @@ export const buildScopeReflectionPrompt = ({ projectInfo, goalPrompt }) => {
           'Return ONLY valid JSON with keys: reasoning (string), mustChange (array of repo paths or areas that must change), ' +
           'mustAvoid (array of paths/areas that should remain untouched), mustHave (array of required behaviors or UI outcomes), ' +
           'and testsNeeded (boolean). ' +
+          'For style requests targeting specific elements/components, include global selectors (body/html/:root/*/app-wide wrappers) in mustAvoid unless the user explicitly asks for global/page-wide theming. ' +
           'Mention only work that is strictly required to satisfy the request. Leave arrays empty when uncertain.'
       },
       {
@@ -161,6 +208,9 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
   }
 
   const avoidPrefixes = deriveReflectionPathPrefixes(reflection.mustAvoid || [], normalizeRepoPath);
+  const styleScope = reflection?.styleScope && typeof reflection.styleScope === 'object'
+    ? reflection.styleScope
+    : null;
 
   for (const edit of edits) {
     const normalizedPath = normalizeRepoPath(edit?.path);
@@ -173,6 +223,15 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
         type: 'tests-not-needed',
         path: normalizedPath,
         message: 'Scope reasoning determined new or updated tests are unnecessary for this goal.'
+      };
+    }
+
+    if (styleScope?.forbidGlobalSelectors && editTouchesGlobalSelectors(edit)) {
+      return {
+        type: 'style-scope-global-selector',
+        path: normalizedPath,
+        rule: 'targeted-style-scope',
+        message: 'Style request appears element-scoped; avoid changing global selectors (body/html/:root/*/#root). Apply styles only to the requested target.'
       };
     }
 

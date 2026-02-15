@@ -5,6 +5,7 @@
   "version": "0.7.1",
   "type": "module",
   "scripts": {
+    "release": "npm --prefix .. run release --",
     "start": "vite --host 0.0.0.0",
     "build": "vite build",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",

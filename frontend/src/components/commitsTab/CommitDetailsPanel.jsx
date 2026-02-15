@@ -27,11 +27,13 @@ const CommitDetailsPanel = ({
   onSubjectChange,
   onBodyChange,
   onCommit,
+  onClearChanges,
   onAutofill,
   canAutofill,
   canCommit,
   commitHint,
   isGeneratingCommit,
+  isClearingChanges,
   commitMessageError,
   selectedCommit,
   isDetailLoading,
@@ -153,10 +155,12 @@ const CommitDetailsPanel = ({
         onSubjectChange={onSubjectChange}
         onBodyChange={onBodyChange}
         onCommit={onCommit}
+        onClearChanges={onClearChanges}
         onAutofill={onAutofill}
         canAutofill={canAutofill}
         canCommit={canCommit}
         isCommitting={commitInFlight}
+        isClearing={isClearingChanges}
         commitHint={commitHint}
         isGenerating={isGeneratingCommit}
         commitMessageError={commitMessageError}

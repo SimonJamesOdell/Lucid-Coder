@@ -6,6 +6,7 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
+    "release": "npm --prefix .. run release --",
     "start": "nodemon server.js",
     "test:unit": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.unit.config.js",
     "test:parallel": "cross-env DATABASE_PATH=test-lucidcoder.db vitest run --config vitest.parallel.config.js",

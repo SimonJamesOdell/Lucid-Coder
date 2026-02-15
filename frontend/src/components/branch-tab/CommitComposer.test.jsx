@@ -55,4 +55,29 @@ describe('CommitComposer', () => {
 
     expect(screen.getByText('Add staged files to enable commits')).toBeInTheDocument();
   });
+
+  test('shows clear changes button and calls handler', async () => {
+    const onClearChanges = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <CommitComposer
+        hasSelectedFiles={true}
+        commitSubject="feat: x"
+        commitBody=""
+        onSubjectChange={vi.fn()}
+        onBodyChange={vi.fn()}
+        onCommit={vi.fn()}
+        onClearChanges={onClearChanges}
+        canAutofill={false}
+        canCommit={true}
+        isCommitting={false}
+        isGenerating={false}
+        isClearing={false}
+      />
+    );
+
+    await user.click(screen.getByTestId('branch-commit-clear'));
+    expect(onClearChanges).toHaveBeenCalledTimes(1);
+  });
 });

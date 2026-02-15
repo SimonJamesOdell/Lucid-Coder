@@ -37,11 +37,12 @@ const CommitsTab = ({
   const [revertingSha, setRevertingSha] = useState(initialRevertingSha);
   const [statusMessage, setStatusMessage] = useState(null);
   const [commitInFlight, setCommitInFlight] = useState(false);
+  const [clearInFlight, setClearInFlight] = useState(false);
   const [commitActionError, setCommitActionError] = useState(null);
   const [mergeInFlight, setMergeInFlight] = useState(false);
   const [mergeActionError, setMergeActionError] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
-  const { requestEditorFocus, workingBranches, workspaceChanges, syncBranchOverview } = useAppState();
+  const { requestEditorFocus, workingBranches, workspaceChanges, syncBranchOverview, clearStagedChanges } = useAppState();
 
   const commitComposer = useCommitComposer({ project });
   const {
@@ -470,6 +471,45 @@ const CommitsTab = ({
     syncBranchOverview
   ]);
 
+  const handleClearStagedChanges = useCallback(async () => {
+    if (!projectId || !activeBranchName || !hasStagedFiles || clearInFlight || commitInFlight) {
+      return;
+    }
+
+    if (typeof clearStagedChanges !== 'function') {
+      return;
+    }
+
+    try {
+      setCommitActionError(null);
+      setStatusMessage(null);
+      setClearInFlight(true);
+
+      const response = await clearStagedChanges(projectId, { branchName: activeBranchName });
+
+      if (response?.overview && typeof syncBranchOverview === 'function') {
+        syncBranchOverview(projectId, response.overview);
+      }
+
+      await fetchCommits();
+      setStatusMessage('Cleared staged changes');
+    } catch (err) {
+      console.error('Error clearing staged changes:', err);
+      setCommitActionError(err?.message || 'Failed to clear staged changes');
+    } finally {
+      setClearInFlight(false);
+    }
+  }, [
+    projectId,
+    activeBranchName,
+    hasStagedFiles,
+    clearInFlight,
+    commitInFlight,
+    clearStagedChanges,
+    syncBranchOverview,
+    fetchCommits
+  ]);
+
   const handleMergeBranch = useCallback(async () => {
     if (!projectId || !activeBranchName || !branchReadyToMerge) {
       return;
@@ -684,6 +724,7 @@ const CommitsTab = ({
         openConfirmModal,
         closeConfirmModal,
         handleCommitStagedChanges,
+        handleClearStagedChanges,
         handleManualAutofill,
         handleMergeBranch,
         handleSelectCommit,
@@ -705,6 +746,7 @@ const CommitsTab = ({
     openConfirmModal,
     closeConfirmModal,
     handleCommitStagedChanges,
+    handleClearStagedChanges,
     handleManualAutofill,
     handleMergeBranch,
     handleSelectCommit,
@@ -794,11 +836,13 @@ const CommitsTab = ({
               handleCommitMessageChange(activeBranchName, { body: value });
             }}
             onCommit={handleCommitStagedChanges}
+            onClearChanges={handleClearStagedChanges}
             onAutofill={handleManualAutofill}
             canAutofill={Boolean(isLLMConfigured && activeBranchName && hasStagedFiles)}
             canCommit={canCommit}
             commitHint={commitHint}
             isGeneratingCommit={isGeneratingCommit}
+            isClearingChanges={clearInFlight}
             commitMessageError={mergedCommitError}
             selectedCommit={selectedCommit}
             isDetailLoading={isDetailLoading}
