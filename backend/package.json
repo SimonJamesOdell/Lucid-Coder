@@ -1,7 +1,7 @@
 {
   "name": "lucidcoder-backend",
   "_versionWarning": "DO NOT EDIT VERSION MANUALLY — use npm run release",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Backend for LucidCoder fullstack app",
   "main": "server.js",
   "type": "module",
