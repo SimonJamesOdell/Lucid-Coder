@@ -370,7 +370,7 @@ describe('planning heuristics helpers', () => {
 
 describe('planGoalFromPrompt', () => {
   it('routes style-only prompts through the CSS-only path and propagates colors', async () => {
-    const prompt = 'Please switch the background to bright green for the hero section';
+    const prompt = 'Please switch the app background to bright green';
 
     const result = await planGoalFromPrompt({ projectId: 900, prompt });
 

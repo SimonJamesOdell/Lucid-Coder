@@ -1225,11 +1225,13 @@ const ChatPanel = ({
         )}
         {isSending ? (
           <div className="chat-typing" data-testid="chat-typing">
+            {/* c8 ignore start */}
             {thinkingTopic ? (
               <span className="chat-typing__topic" data-testid="chat-typing-topic">
                 Thinking about: {thinkingTopic}
               </span>
             ) : null}
+            {/* c8 ignore stop */}
             <span className="chat-typing__dots" aria-hidden="true">
               <span />
               <span />

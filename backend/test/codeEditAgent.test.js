@@ -391,6 +391,87 @@ describe('codeEditAgent', () => {
     expect(writeProjectFile).toHaveBeenCalledWith(21, 'frontend/src/index.css', '.navbar { background: #000; color: #fff; }');
   });
 
+  test('style scope helpers cover empty hints and global contract branches', () => {
+    expect(__testing.extractStyleTargetHints('')).toEqual([]);
+
+    const globalContract = __testing.deriveStyleScopeContract('apply a global style theme across the whole app');
+    expect(globalContract).toEqual({ mode: 'global', targetHints: [] });
+
+    const targetedNoHints = __testing.deriveStyleScopeContract('adjust style colors for readability');
+    expect(targetedNoHints).toEqual(expect.objectContaining({ mode: 'targeted', targetHints: [] }));
+
+    const violation = __testing.validateStyleWriteScope({
+      contract: targetedNoHints,
+      path: 'frontend/src/index.css',
+      content: '.page-shell { color: #eee; }'
+    });
+
+    expect(violation).toContain('target-specific selectors/components');
+  });
+
+  test('style scope helper blocks broad global stylesheet edits when target is absent', () => {
+    const contract = __testing.deriveStyleScopeContract('make the navigation bar have black background');
+
+    const violation = __testing.validateStyleWriteScope({
+      contract,
+      path: 'frontend/src/index.css',
+      content: '.shell { color: #fff; }'
+    });
+
+    expect(violation).toContain('target-specific selectors/components');
+  });
+
+  test('writeMentionsTarget normalizes missing path/content values', () => {
+    const mentions = __testing.writeMentionsTarget({
+      path: undefined,
+      content: undefined,
+      targetHints: ['navbar']
+    });
+
+    expect(mentions).toBe(false);
+  });
+
+  test('normalizes null-ish style helper inputs', () => {
+    expect(__testing.normalizeHint(null)).toBe('');
+    expect(__testing.deriveStyleScopeContract(null)).toBeNull();
+
+    const violation = __testing.validateStyleWriteScope({
+      contract: { mode: 'targeted', targetHints: ['navbar'] },
+      path: 'frontend/src/index.css',
+      content: undefined
+    });
+
+    expect(violation).toContain('target-specific selectors/components');
+  });
+
+  test('extractStyleTargetHints captures selector-based hints', () => {
+    const hints = __testing.extractStyleTargetHints('update .top-nav and #main_header to new colors');
+
+    expect(hints).toEqual(expect.arrayContaining(['top-nav', 'main_header']));
+  });
+
+  test('rejects targeted style write with missing path when global selector is used', async () => {
+    queueResponses([
+      JSON.stringify({
+        action: 'write_file',
+        content: 'body { background: #000; color: #fff; }'
+      }),
+      JSON.stringify({ action: 'finalize', summary: 'done' })
+    ]);
+
+    const result = await applyCodeChange({
+      projectId: 22,
+      prompt: 'make the navigation bar have a black background with white text'
+    });
+
+    const rejectedObservation = result.steps.find(
+      (step) => step.type === 'observation' && step.action === 'write_file' && String(step.summary).includes('Rejected:')
+    );
+
+    expect(rejectedObservation?.target).toBeNull();
+    expect(writeProjectFile).not.toHaveBeenCalled();
+  });
+
   test('style scope helpers derive targeted contract and block global selectors', () => {
     const contract = __testing.deriveStyleScopeContract('make the navigation bar black with white text');
     expect(contract).toEqual(expect.objectContaining({ mode: 'targeted' }));

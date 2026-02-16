@@ -159,6 +159,9 @@ const collectWorkspaceStatuses = (run) => {
 };
 
 export const __testing = {
+  resolveWorkspaceFromPath,
+  collectEditedWorkspaces,
+  collectWorkspaceStatuses,
   consumeUpdatesAsPrompts,
   drainUserUpdates,
   extractRollbackMessage,

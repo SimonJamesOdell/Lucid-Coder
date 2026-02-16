@@ -153,4 +153,284 @@ describe('reflection style scope contract', () => {
 
     expect(violation).toBeNull();
   });
+
+  test('derives global style scope when prompt explicitly requests app-wide changes', () => {
+    const contract = deriveStyleScopeContract('apply a global theme across the entire app');
+
+    expect(contract).toEqual({
+      mode: 'global',
+      enforceTargetScoping: false,
+      forbidGlobalSelectors: false,
+      targetHints: []
+    });
+  });
+
+  test('ignores unsupported edit types for global selector checks', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['navbar']
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'delete',
+          path: 'frontend/src/index.css'
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing',
+        rule: 'targeted-style-scope'
+      })
+    );
+  });
+
+  test('filters stop words from extracted target hints', () => {
+    const contract = deriveStyleScopeContract('make the white card have blue text');
+
+    expect(contract?.mode).toBe('targeted');
+    expect(contract?.targetHints).toContain('card');
+    expect(contract?.targetHints).not.toContain('white');
+  });
+
+  test('flags upsert edits in global stylesheet when target hints are missing', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['navbar']
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'upsert',
+          path: 'frontend/src/index.css',
+          content: '.button { color: #fff; }'
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing',
+        rule: 'targeted-style-scope'
+      })
+    );
+  });
+
+  test('flags missing target hints when style scope has no extracted hints', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: []
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'modify',
+          path: 'frontend/src/index.css',
+          replacements: [
+            {
+              search: '.button { color: #111; }',
+              replace: '.button { color: #eee; }'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing',
+        rule: 'targeted-style-scope'
+      })
+    );
+  });
+
+  test('accepts global stylesheet edit when target hint appears in replacement text', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['navbar']
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'modify',
+          path: 'frontend/src/index.css',
+          replacements: [
+            {
+              search: '.header { color: #111; }',
+              replace: '.header .navbar { color: #eee; }'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(violation).toBeNull();
+  });
+
+  test('accepts targeted edit when target hint appears in file path', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['navbar']
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'upsert',
+          path: 'frontend/src/navbar.css',
+          content: '.shell { color: #eee; }'
+        }
+      ]
+    });
+
+    expect(violation).toBeNull();
+  });
+
+  test('falls back safely when modify replacements contain non-string fields', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['navbar']
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'modify',
+          path: 'frontend/src/index.css',
+          replacements: [
+            {
+              search: null,
+              replace: undefined
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing'
+      })
+    );
+  });
+
+  test('falls back safely when upsert content is non-string', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['navbar']
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'upsert',
+          path: 'frontend/src/index.css',
+          content: { value: '.navbar { color: #fff; }' }
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing'
+      })
+    );
+  });
+
+  test('handles targeted style scope without targetHints field', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'modify',
+          path: 'frontend/src/index.css',
+          replacements: [
+            {
+              search: '.button { color: #111; }',
+              replace: '.button { color: #eee; }'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing'
+      })
+    );
+  });
 });

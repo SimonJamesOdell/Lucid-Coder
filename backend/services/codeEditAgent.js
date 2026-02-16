@@ -601,6 +601,8 @@ export default {
 
 export const __testing = {
   normalizeRelativePath,
+  normalizeHint,
+  extractStyleTargetHints,
   ensureSafeRelativePath,
   truncateForObservation,
   stripCodeFences,
@@ -614,5 +616,6 @@ export const __testing = {
   writeFileForAgent,
   LoopDetector,
   deriveStyleScopeContract,
+  writeMentionsTarget,
   validateStyleWriteScope
 };
