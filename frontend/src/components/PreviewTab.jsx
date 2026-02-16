@@ -18,6 +18,10 @@ const PORT_MAP = {
   angular: 4200
 };
 
+const READY_REVEAL_DELAY_MS = 500;
+const LOADING_OVERLAY_FADE_MS = 280;
+const START_REVEAL_DELAY_MS = 1500;
+
 const PreviewTab = forwardRef(
   (
     {
@@ -59,8 +63,11 @@ const PreviewTab = forwardRef(
   const [previewContextMenu, setPreviewContextMenu] = useState(null);
   const [restartStatus, setRestartStatus] = useState(null);
   const [startInFlight, setStartInFlight] = useState(false);
+  const [isManualStartPending, setIsManualStartPending] = useState(false);
   const [hostnameOverride, setHostnameOverride] = useState(null);
   const [previewUrlOverride, setPreviewUrlOverride] = useState(null);
+  const [isLoadingOverlayVisible, setIsLoadingOverlayVisible] = useState(true);
+  const [isLoadingOverlayFading, setIsLoadingOverlayFading] = useState(false);
 
   // ── Timers ───────────────────────────────────────────────────────────
   const loadTimeoutRef = useRef(null);           // 8 s from iframe mount
@@ -68,6 +75,8 @@ const PreviewTab = forwardRef(
   const errorDelayRef = useRef(null);            // 1.2 s error confirmation delay
   const reloadTimeoutRef = useRef(null);         // 400 ms scheduled reload after restart
   const reloadDebounceRef = useRef(null);        // 300 ms debounce for soft-reloads
+  const readyRevealTimeoutRef = useRef(null);    // delayed transition to ready phase
+  const loadingOverlayFadeTimeoutRef = useRef(null); // fade-out cleanup timeout
 
   // ── Refs ──────────────────────────────────────────────────────────────
   const proxyPlaceholderFirstSeenRef = useRef(0);
@@ -135,9 +144,52 @@ const PreviewTab = forwardRef(
 
   // ── Helpers ─────────────────────────────────────────────────────────
   const clearAllTimers = () => {
-    for (const ref of [loadTimeoutRef, placeholderTimeoutRef, errorDelayRef, autoRecoverTimeoutRef, reloadTimeoutRef, reloadDebounceRef]) {
+    for (const ref of [
+      loadTimeoutRef,
+      placeholderTimeoutRef,
+      errorDelayRef,
+      autoRecoverTimeoutRef,
+      reloadTimeoutRef,
+      reloadDebounceRef,
+      readyRevealTimeoutRef,
+      loadingOverlayFadeTimeoutRef
+    ]) {
       if (ref.current) { clearTimeout(ref.current); ref.current = null; }
     }
+  };
+
+  const showLoadingOverlay = () => {
+    if (loadingOverlayFadeTimeoutRef.current) {
+      clearTimeout(loadingOverlayFadeTimeoutRef.current);
+      loadingOverlayFadeTimeoutRef.current = null;
+    }
+    setIsLoadingOverlayFading(false);
+    setIsLoadingOverlayVisible(true);
+  };
+
+  const hideLoadingOverlay = () => {
+    if (loadingOverlayFadeTimeoutRef.current) {
+      clearTimeout(loadingOverlayFadeTimeoutRef.current);
+      loadingOverlayFadeTimeoutRef.current = null;
+    }
+    setIsLoadingOverlayFading(false);
+    setIsLoadingOverlayVisible(false);
+  };
+
+  const fadeOutLoadingOverlay = () => {
+    if (!isLoadingOverlayVisible) {
+      return;
+    }
+    if (loadingOverlayFadeTimeoutRef.current) {
+      clearTimeout(loadingOverlayFadeTimeoutRef.current);
+      loadingOverlayFadeTimeoutRef.current = null;
+    }
+    setIsLoadingOverlayFading(true);
+    loadingOverlayFadeTimeoutRef.current = setTimeout(() => {
+      loadingOverlayFadeTimeoutRef.current = null;
+      setIsLoadingOverlayFading(false);
+      setIsLoadingOverlayVisible(false);
+    }, LOADING_OVERLAY_FADE_MS);
   };
 
   const stopIframeContent = () => {
@@ -228,8 +280,16 @@ const PreviewTab = forwardRef(
     (isProcessInfoCurrent && frontendRawStatus === 'starting')
   );
 
+  const frontendExplicitlyNotRunning = Boolean(
+    isProcessInfoCurrent &&
+      (frontendRawStatus === 'idle' ||
+        frontendRawStatus === 'stopped' ||
+        frontendRawStatus === 'exited' ||
+        frontendRawStatus === 'offline')
+  );
+
   const showNotRunningState = Boolean(
-    isProjectStopped &&
+    (isProjectStopped || frontendExplicitlyNotRunning) &&
       project?.id &&
       onRestartProject &&
       isProcessInfoCurrent &&
@@ -409,6 +469,8 @@ const PreviewTab = forwardRef(
     stopIframeContent();
     setIsSoftReloading(false);
     setIsPlaceholderDetected(false);
+    setIsManualStartPending(false);
+    hideLoadingOverlay();
     const hasDetails = Boolean(title || message);
     if (hasDetails) {
       setPreviewFailureDetails({ kind: kind || 'generic', title: title || '', message: message || '' });
@@ -618,6 +680,7 @@ const PreviewTab = forwardRef(
       }
 
       setPreviewPhase('ready');
+      fadeOutLoadingOverlay();
     };
 
     window.addEventListener('message', handleMessage);
@@ -700,11 +763,13 @@ const PreviewTab = forwardRef(
     proxyPlaceholderFirstSeenRef.current = 0;
 
     if (isStartingProject) {
+      showLoadingOverlay();
       setPreviewPhase('loading');
       return;
     }
 
     if (showNotRunningState) {
+      hideLoadingOverlay();
       return;
     }
 
@@ -712,6 +777,7 @@ const PreviewTab = forwardRef(
       return;
     }
 
+    showLoadingOverlay();
     setPreviewPhase('loading');
     loadTimeoutRef.current = setTimeout(() => {
       loadTimeoutRef.current = null;
@@ -725,6 +791,12 @@ const PreviewTab = forwardRef(
       if (loadTimeoutRef.current) { clearTimeout(loadTimeoutRef.current); loadTimeoutRef.current = null; }
     };
   }, [previewUrl, iframeKey, showNotRunningState, isStartingProject]);
+
+  useEffect(() => {
+    if (showNotRunningState) {
+      hideLoadingOverlay();
+    }
+  }, [showNotRunningState]);
 
   // ── Iframe event handlers ───────────────────────────────────────────
 
@@ -824,9 +896,32 @@ const PreviewTab = forwardRef(
     proxyPlaceholderFirstSeenRef.current = 0;
     setIsPlaceholderDetected(false);
     setPreviewFailureDetails(null);
-    setPreviewPhase('ready');
+    showLoadingOverlay();
+
+    const revealReady = ({ immediate = false } = {}) => {
+      setPreviewPhase('ready');
+      if (immediate) {
+        hideLoadingOverlay();
+      } else {
+        fadeOutLoadingOverlay();
+      }
+    };
+
+    const revealDelayMs = ignoreSuppression
+      ? 0
+      : (isManualStartPending ? START_REVEAL_DELAY_MS : READY_REVEAL_DELAY_MS);
+    if (revealDelayMs <= 0) {
+      revealReady({ immediate: true });
+    } else {
+      readyRevealTimeoutRef.current = setTimeout(() => {
+        readyRevealTimeoutRef.current = null;
+        revealReady({ immediate: false });
+      }, revealDelayMs);
+    }
+
     autoRecoverAttemptRef.current = 0;
     setAutoRecoverState({ attempt: 0, mode: 'idle' });
+    setIsManualStartPending(false);
 
     updateDisplayedUrlFromIframe();
   };
@@ -837,6 +932,7 @@ const PreviewTab = forwardRef(
     clearAllTimers();
     suppressNextLoadRef.current = false;
     setRestartStatus(null);
+    showLoadingOverlay();
     setPreviewPhase('loading');
     setIsSoftReloading(false);
     setIsPlaceholderDetected(false);
@@ -865,6 +961,7 @@ const PreviewTab = forwardRef(
       clearAllTimers();
       suppressNextLoadRef.current = false;
       setRestartStatus(null);
+      showLoadingOverlay();
       setPreviewPhase('loading');
       setIsSoftReloading(true);
       setIsPlaceholderDetected(false);
@@ -1044,6 +1141,9 @@ const PreviewTab = forwardRef(
       return;
     }
 
+    autoRecoverAttemptRef.current = 0;
+    setAutoRecoverState({ attempt: 0, mode: 'idle' });
+    setIsManualStartPending(true);
     setRestartStatus(null);
     setPreviewPhase('loading');
 
@@ -1054,6 +1154,7 @@ const PreviewTab = forwardRef(
     } catch (error) {
       const message = error?.message || 'Failed to restart project';
       setRestartStatus({ type: 'error', message });
+      setIsManualStartPending(false);
     }
   };
 
@@ -1085,6 +1186,9 @@ const PreviewTab = forwardRef(
   };
 
   const handleStartProject = async () => {
+    autoRecoverAttemptRef.current = 0;
+    setAutoRecoverState({ attempt: 0, mode: 'idle' });
+    setIsManualStartPending(true);
     setStartInFlight(true);
     setRestartStatus(null);
     setPreviewPhase('loading');
@@ -1096,6 +1200,7 @@ const PreviewTab = forwardRef(
     } catch (error) {
       const message = error?.message || 'Failed to start project';
       setRestartStatus({ type: 'error', message });
+      setIsManualStartPending(false);
     } finally {
       setStartInFlight(false);
     }
@@ -1281,7 +1386,7 @@ const PreviewTab = forwardRef(
   }, [urlBarValue, isEditingUrl]);
 
   /* c8 ignore next */
-  const startLabel = startInFlight ? 'Starting…' : 'Start project';
+  const startLabel = startInFlight ? 'Starting…' : 'Start project processes';
 
   if (resolvedPreviewPhase === 'error') {
     const expectedUrl = previewUrl;
@@ -1367,14 +1472,18 @@ const PreviewTab = forwardRef(
   }
 
   const renderLoadingOverlay = () => {
-    if (resolvedPreviewPhase !== 'loading' || (!project?.id && !isStartingProject)) {
+    const shouldRenderOverlay =
+      isLoadingOverlayVisible &&
+      (resolvedPreviewPhase === 'loading' || isLoadingOverlayFading);
+
+    if (!shouldRenderOverlay || resolvedPreviewPhase === 'error' || (!project?.id && !isStartingProject)) {
       return null;
     }
 
-    const newTabUrl = toDevServerUrl(normalizedDisplayedUrl) || toDevServerUrl();
-    const shouldShowUrl = normalizedDisplayedUrl && normalizedDisplayedUrl !== 'about:blank';
-
-    const showRecoveryCopy = autoRecoverState.mode === 'running' && (Number(autoRecoverState.attempt) || 0) > 0;
+    const showRecoveryCopy =
+      !isManualStartPending &&
+      autoRecoverState.mode === 'running' &&
+      (Number(autoRecoverState.attempt) || 0) > 0;
     const title = isPlaceholderDetected
       ? 'Preview is not loading'
       : showRecoveryCopy
@@ -1384,14 +1493,12 @@ const PreviewTab = forwardRef(
 
     return (
       <PreviewLoadingOverlay
+        isFadingOut={isLoadingOverlayFading}
         title={title}
         subtitle={subtitle}
         isPlaceholderDetected={isPlaceholderDetected}
         reloadIframe={reloadIframe}
         dispatchPreviewFixGoal={dispatchPreviewFixGoal}
-        shouldShowUrl={shouldShowUrl}
-        normalizedDisplayedUrl={normalizedDisplayedUrl}
-        newTabUrl={newTabUrl}
       />
     );
   };

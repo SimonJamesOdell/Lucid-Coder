@@ -1,17 +1,18 @@
 import React from 'react';
 
 const PreviewLoadingOverlay = ({
+  isFadingOut,
   title,
   subtitle,
   isPlaceholderDetected,
   reloadIframe,
-  dispatchPreviewFixGoal,
-  shouldShowUrl,
-  normalizedDisplayedUrl,
-  newTabUrl
+  dispatchPreviewFixGoal
 }) => {
   return (
-    <div className="preview-loading" data-testid="preview-loading">
+    <div
+      className={`preview-loading${isFadingOut ? ' preview-loading--fade-out' : ''}`}
+      data-testid="preview-loading"
+    >
       <div className="preview-loading-card">
         <h3>{title}</h3>
         {!isPlaceholderDetected && (
@@ -38,18 +39,6 @@ const PreviewLoadingOverlay = ({
           </>
         )}
 
-        {shouldShowUrl && (
-          <p className="expected-url">
-            URL: <code>{normalizedDisplayedUrl}</code>
-          </p>
-        )}
-        {newTabUrl && shouldShowUrl ? (
-          <p className="expected-url">
-            <a href={newTabUrl} target="_blank" rel="noopener noreferrer">
-              Open in a new tab
-            </a>
-          </p>
-        ) : null}
       </div>
     </div>
   );

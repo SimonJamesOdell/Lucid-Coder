@@ -60,7 +60,7 @@
   height: 100%;
   border: none;
   background: var(--background-primary, #000);
-  transition: opacity 0.15s ease-out;
+  transition: opacity 0.28s ease-out;
 }
 
 .full-iframe--loading {
@@ -183,6 +183,13 @@
   background: color-mix(in srgb, var(--background-primary, #000) 70%, transparent);
   backdrop-filter: blur(2px);
   z-index: 2;
+  opacity: 1;
+  transition: opacity 0.28s ease;
+}
+
+.preview-loading--fade-out {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .preview-loading-card {

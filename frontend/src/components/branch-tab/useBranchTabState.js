@@ -57,6 +57,7 @@ const useBranchTabState = ({
     const normalized = branchName || '';
     setSelectedBranchState(normalized);
     persistBranchSelection(projectId, normalized);
+    setMergeWarning(null);
   }, [projectId]);
 
   const {
@@ -905,10 +906,6 @@ const useBranchTabState = ({
     selectedFiles.length,
     markBranchValidated
   ]);
-
-  useEffect(() => {
-    setMergeWarning(null);
-  }, [selectedBranchName]);
 
   const handleOpenFile = useCallback((filePath) => {
     if (!filePath) {

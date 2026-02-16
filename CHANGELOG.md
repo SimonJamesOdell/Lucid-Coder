@@ -1,3 +1,9 @@
+## 0.7.2 (2026-02-16)
+- Stabilize Preview startup UX by keeping the loading overlay visible until the preview is actually ready, adding smoother overlay/iframe crossfade behavior, and preventing early-hide flicker during manual starts.
+- Improve Preview not-running/error handling with clearer copy and actions (including explicit not-running messaging), while removing redundant loading-overlay URL/new-tab text.
+- Fix Branch tab merge gating reliability by clearing `mergeWarning` only on explicit branch selection updates, preventing race-driven warning resets during test-and-merge flows.
+- Bump version metadata to `0.7.2` across root/backend/frontend package manifests + lockfiles, shared version exports, and versioning docs.
+
 ## 0.7.1 (2026-02-16)
 - Scope autopilot verification retries to the affected workspace (`frontend` or `backend`) when edits stay contained, reducing unnecessary cross-workspace reruns while preserving full-coverage enforcement.
 - Harden targeted styling flows by enforcing style-scope contracts in backend edit writes and frontend goal-automation reflection (reject global-selector/app-wide stylesheet edits unless the request is explicitly global).
