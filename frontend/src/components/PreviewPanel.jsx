@@ -11,6 +11,7 @@ import GitTab from './GitTab';
 import ProcessesTab from './ProcessesTab';
 import PackageTab from './PackageTab';
 import LLMUsageTab from './LLMUsageTab';
+import AssetsTab from './AssetsTab';
 import './PreviewPanel.css';
 
 const PreviewPanel = () => {
@@ -46,6 +47,7 @@ const PreviewPanel = () => {
     'preview',
     'goals',
     'files',
+    'assets',
     'test',
     'branch',
     'commits',
@@ -178,6 +180,7 @@ const PreviewPanel = () => {
   const isPreviewActive = safeActiveTab === 'preview';
   const isGoalsActive = safeActiveTab === 'goals';
   const isFilesActive = safeActiveTab === 'files';
+  const isAssetsActive = safeActiveTab === 'assets';
   const isTestActive = safeActiveTab === 'test';
   const isBranchActive = safeActiveTab === 'branch';
   const isCommitsActive = safeActiveTab === 'commits';
@@ -516,6 +519,8 @@ const PreviewPanel = () => {
             onFileSaved={handleFileSaved}
           />
         );
+      case 'assets':
+        return <AssetsTab project={currentProject} />;
       case 'test':
         return (
           <TestTab
@@ -604,6 +609,13 @@ const PreviewPanel = () => {
             Files
           </button>
           <button
+            data-testid="assets-tab"
+            className={`tab ${activeTab === 'assets' ? 'active' : ''}`}
+            onClick={() => setActiveTab('assets', { source: 'user' })}
+          >
+            Assets
+          </button>
+          <button
             data-testid="test-tab"
             className={`tab ${activeTab === 'test' ? 'active' : ''}`}
             onClick={() => setActiveTab('test', { source: 'user' })}
@@ -659,6 +671,7 @@ const PreviewPanel = () => {
               Save
             </button>
           )}
+          {isAssetsActive && null}
           {isTestActive && (
             <>
             </>

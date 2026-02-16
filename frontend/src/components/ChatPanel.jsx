@@ -74,6 +74,7 @@ const ChatPanel = ({
     projectProcesses
   } = useAppState();
   const inputRef = useRef(null);
+  const filePickerRef = useRef(null);
   const autoFixInFlightRef = useRef(false);
   const autoFixCancelRef = useRef(false);
   const lastProjectIdRef = useRef(null);
@@ -250,6 +251,101 @@ const ChatPanel = ({
   const readStoredChat = useCallback((projectId) => {
     return readStoredChatMessages(projectId);
   }, []);
+
+  const toBase64 = useCallback(async (file) => {
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      const chunk = bytes.subarray(index, index + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+
+    return btoa(binary);
+  }, []);
+
+  const sanitizeUploadFileName = useCallback((name) => {
+    const normalized = String(name || 'file').replace(/[\\/]+/g, '-').trim();
+    const fallback = normalized || 'file';
+    return fallback.replace(/[^a-zA-Z0-9._-]/g, '_');
+  }, []);
+
+  const buildUniqueUploadPath = useCallback((fileName, attempt = 0) => {
+    const safeName = sanitizeUploadFileName(fileName);
+    const dotIndex = safeName.lastIndexOf('.');
+    const hasExtension = dotIndex > 0;
+    const stem = hasExtension ? safeName.slice(0, dotIndex) : safeName;
+    const extension = hasExtension ? safeName.slice(dotIndex) : '';
+    const suffix = attempt > 0 ? `-${attempt}` : '';
+    return `uploads/${stem}${suffix}${extension}`;
+  }, [sanitizeUploadFileName]);
+
+  const createProjectFileFromUpload = useCallback(async (projectId, file, attempt = 0) => {
+    const filePath = buildUniqueUploadPath(file.name, attempt);
+    const contentBase64 = await toBase64(file);
+
+    try {
+      await axios.post(`/api/projects/${projectId}/files-ops/create-file`, {
+        filePath,
+        contentBase64,
+        encoding: 'base64',
+        openInEditor: false
+      });
+      return filePath;
+    } catch (error) {
+      if (error?.response?.status === 409) {
+        return createProjectFileFromUpload(projectId, file, attempt + 1);
+      }
+      throw error;
+    }
+  }, [buildUniqueUploadPath, toBase64]);
+
+  const handleAttachFilesClick = useCallback(() => {
+    filePickerRef.current?.click?.();
+  }, []);
+
+  const handleAttachFilesSelected = useCallback(async (event) => {
+    const selected = Array.from(event?.target?.files || []);
+    if (!selected.length || !currentProject?.id) {
+      if (event?.target) {
+        event.target.value = '';
+      }
+      return;
+    }
+
+    setIsSending(true);
+    setErrorMessage('');
+    try {
+      const uploadedPaths = await Promise.all(
+        selected.map((file) => createProjectFileFromUpload(currentProject.id, file))
+      );
+
+      setPreviewPanelTab?.('assets', { source: 'user' });
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('lucidcoder:assets-updated', {
+          detail: { projectId: currentProject.id, paths: uploadedPaths }
+        }));
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        createMessage('assistant', `Added files to project:\n${uploadedPaths.map((path) => `- ${path}`).join('\n')}`, { variant: 'status' })
+      ]);
+    } catch (error) {
+      console.error('Failed to attach files:', error);
+      setMessages((prev) => [
+        ...prev,
+        createMessage('assistant', 'Failed to add one or more files to the project.', { variant: 'error' })
+      ]);
+    } finally {
+      setIsSending(false);
+      if (event?.target) {
+        event.target.value = '';
+      }
+    }
+  }, [createMessage, createProjectFileFromUpload, currentProject?.id, setPreviewPanelTab]);
 
   const persistChat = useCallback((projectId, nextMessages) => {
     persistChatMessages(projectId, nextMessages);
@@ -1150,6 +1246,9 @@ const ChatPanel = ({
     ChatPanel.__testHooks.handlers.runAutomatedTestFixGoal = runAutomatedTestFixGoal;
     ChatPanel.__testHooks.handlers.runAgentRequestStream = runAgentRequestStream;
     ChatPanel.__testHooks.handlers.handleAgentResult = handleAgentResult;
+    ChatPanel.__testHooks.handlers.sanitizeUploadFileName = sanitizeUploadFileName;
+    ChatPanel.__testHooks.handlers.buildUniqueUploadPath = buildUniqueUploadPath;
+    ChatPanel.__testHooks.handlers.handleAttachFilesSelected = handleAttachFilesSelected;
   }
 
   return (
@@ -1468,14 +1567,34 @@ const ChatPanel = ({
           placeholder="Ask about your project..."
           rows={3}
         />
-        <button
-          data-testid="chat-send-button"
-          className="chat-send-button"
-          onClick={handleSendMessage}
-          disabled={!inputValue.trim() || isSending}
-        >
-          Send
-        </button>
+        <div className="chat-input-actions">
+          <button
+            data-testid="chat-send-button"
+            className="chat-send-button"
+            onClick={handleSendMessage}
+            disabled={!inputValue.trim() || isSending}
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            data-testid="chat-attach-button"
+            className="chat-attach-button"
+            onClick={handleAttachFilesClick}
+            disabled={isSending || !currentProject?.id}
+            aria-label="Add files"
+            title="Add files to project"
+          >
+            +
+          </button>
+          <input
+            ref={filePickerRef}
+            type="file"
+            multiple
+            className="chat-file-picker"
+            onChange={handleAttachFilesSelected}
+          />
+        </div>
       </div>
     </div>
   );

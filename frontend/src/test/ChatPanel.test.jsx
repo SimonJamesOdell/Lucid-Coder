@@ -246,6 +246,152 @@ describe('ChatPanel', () => {
       
       expect(mockToggle).toHaveBeenCalledTimes(1);
     });
+
+    it('triggers the hidden file picker when attach button is clicked', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+
+      await userEvent.click(screen.getByTestId('chat-attach-button'));
+
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+      clickSpy.mockRestore();
+    });
+
+    it('uploads selected files, switches to assets tab, and emits assets-updated event', async () => {
+      const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+      axios.post.mockResolvedValue({ data: { success: true } });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = document.querySelector('input[type="file"]');
+      expect(input).toBeTruthy();
+
+      const fileA = {
+        name: 'report final?.txt',
+        arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([65, 66, 67]).buffer)
+      };
+
+      const fileB = {
+        name: 'chunky.bin',
+        arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array(40_000).buffer)
+      };
+
+      fireEvent.change(input, { target: { files: [fileA, fileB] } });
+
+      await waitFor(() => {
+        expect(axios.post).toHaveBeenCalledTimes(2);
+      });
+
+      expect(axios.post).toHaveBeenNthCalledWith(
+        1,
+        '/api/projects/123/files-ops/create-file',
+        expect.objectContaining({
+          filePath: 'uploads/report_final_.txt',
+          encoding: 'base64',
+          openInEditor: false
+        })
+      );
+
+      expect(axios.post).toHaveBeenNthCalledWith(
+        2,
+        '/api/projects/123/files-ops/create-file',
+        expect.objectContaining({
+          filePath: 'uploads/chunky.bin',
+          encoding: 'base64',
+          openInEditor: false
+        })
+      );
+
+      expect(mockSetPreviewPanelTab).toHaveBeenCalledWith('assets', { source: 'user' });
+      expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'lucidcoder:assets-updated',
+        detail: expect.objectContaining({
+          projectId: 123,
+          paths: ['uploads/report_final_.txt', 'uploads/chunky.bin']
+        })
+      }));
+
+      expect(await screen.findByText(/Added files to project:/)).toBeInTheDocument();
+      dispatchSpy.mockRestore();
+    });
+
+    it('retries uploaded file path with numeric suffix on 409 conflict', async () => {
+      axios.post
+        .mockRejectedValueOnce({ response: { status: 409 } })
+        .mockResolvedValueOnce({ data: { success: true } });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = document.querySelector('input[type="file"]');
+      const conflictedFile = {
+        name: 'collision.txt',
+        arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]).buffer)
+      };
+
+      fireEvent.change(input, { target: { files: [conflictedFile] } });
+
+      await waitFor(() => {
+        expect(axios.post).toHaveBeenCalledTimes(2);
+      });
+
+      expect(axios.post).toHaveBeenNthCalledWith(
+        1,
+        '/api/projects/123/files-ops/create-file',
+        expect.objectContaining({ filePath: 'uploads/collision.txt' })
+      );
+      expect(axios.post).toHaveBeenNthCalledWith(
+        2,
+        '/api/projects/123/files-ops/create-file',
+        expect.objectContaining({ filePath: 'uploads/collision-1.txt' })
+      );
+    });
+
+    it('shows assistant error message when file attach upload fails', async () => {
+      axios.post.mockRejectedValueOnce(new Error('upload failed'));
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = document.querySelector('input[type="file"]');
+      const failedFile = {
+        name: 'broken.txt',
+        arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([7, 8, 9]).buffer)
+      };
+
+      fireEvent.change(input, { target: { files: [failedFile] } });
+
+      expect(await screen.findByText('Failed to add one or more files to the project.')).toBeInTheDocument();
+    });
+
+    it('resets the file picker when no files are selected', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const input = document.querySelector('input[type="file"]');
+      fireEvent.change(input, { target: { files: [] } });
+
+      await waitFor(() => {
+        expect(axios.post).not.toHaveBeenCalled();
+      });
+
+      expect(input.value).toBe('');
+    });
+
+    it('covers upload helper fallback branches for sanitize/build path and selection extraction', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const hooks = ChatPanel.__testHooks?.handlers;
+      expect(typeof hooks?.sanitizeUploadFileName).toBe('function');
+      expect(typeof hooks?.buildUniqueUploadPath).toBe('function');
+      expect(typeof hooks?.handleAttachFilesSelected).toBe('function');
+
+      expect(hooks.sanitizeUploadFileName(undefined)).toBe('file');
+      expect(hooks.sanitizeUploadFileName('   ')).toBe('file');
+      expect(hooks.buildUniqueUploadPath('noext', 0)).toBe('uploads/noext');
+
+      await hooks.handleAttachFilesSelected({ target: {} });
+
+      expect(axios.post).not.toHaveBeenCalled();
+    });
   });
 
   describe('Auto-fix failing tests', () => {

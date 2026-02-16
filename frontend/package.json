@@ -2,7 +2,7 @@
   "name": "lucidcoder-frontend",
   "private": true,
   "_versionWarning": "DO NOT EDIT VERSION MANUALLY — use npm run release",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "type": "module",
   "scripts": {
     "release": "npm --prefix .. run release --",
@@ -15,7 +15,8 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json",
     "test:coverage:quick": "vitest run --coverage --coverage.reporter=text-summary --coverage.reporter=json",
-    "test:coverage:html": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html"
+    "test:coverage:html": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html",
+    "test:coverage:full:file": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html --coverage.reporter=lcov > coverage/coverage-full.txt"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

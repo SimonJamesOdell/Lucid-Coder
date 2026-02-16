@@ -13,6 +13,8 @@ const normalizePreviewTab = (value) => {
     tests: 'test',
     branches: 'branch',
     goals: 'goals',
+    asset: 'assets',
+    assets: 'assets',
     runs: 'llm-usage',
     'llm usage': 'llm-usage',
     llmusage: 'llm-usage'
@@ -23,6 +25,7 @@ const normalizePreviewTab = (value) => {
     'preview',
     'goals',
     'files',
+    'assets',
     'branch',
     'test',
     'commits',
