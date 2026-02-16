@@ -1764,11 +1764,43 @@ describe('agentOrchestrator', () => {
 
     const { children } = await planGoalFromPrompt({
       projectId: 78,
-      prompt: 'Please switch the background to bright green for the hero section'
+      prompt: 'Please switch the app background to bright green'
     });
 
     const prompts = children.map((c) => c.prompt);
     expect(prompts[1]).toBe('Change the background color to bright green (CSS-only change; no tests required).');
+  });
+
+  it('does not use CSS-only shortcut for targeted navbar styling prompts', async () => {
+    llmClient.generateResponse.mockClear();
+    llmClient.generateResponse
+      .mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [
+          { prompt: 'Locate the existing navbar styles in the frontend codebase.' },
+          { prompt: 'Update navbar background and text color styles to match the request.' },
+          { prompt: 'Verify the navbar style changes are applied only to navigation UI.' }
+        ]
+      })
+    )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          childGoals: [
+            { prompt: 'Locate the existing navbar styles in the frontend codebase.' },
+            { prompt: 'Update navbar background and text color styles to match the request.' },
+            { prompt: 'Verify the navbar style changes are applied only to navigation UI.' }
+          ]
+        })
+      );
+
+    const { children } = await planGoalFromPrompt({
+      projectId: 79,
+      prompt: 'make the navigation bar have a black background with white text'
+    });
+
+    expect(llmClient.generateResponse).toHaveBeenCalled();
+    expect(children.map((c) => c.prompt).join(' ').toLowerCase()).toContain('navbar');
+    expect(children.map((c) => c.prompt)).not.toContain('Change the background color to black (CSS-only change; no tests required).');
   });
 
   it('reuses an existing parent goal when goalId is provided (no duplicate goals)', async () => {

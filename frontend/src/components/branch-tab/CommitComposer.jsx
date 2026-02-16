@@ -8,9 +8,11 @@ const CommitComposer = ({
   onBodyChange,
   onCommit,
   onAutofill,
+  onClearChanges,
   canAutofill,
   canCommit,
   isCommitting,
+  isClearing,
   commitHint,
   isGenerating,
   commitMessageError
@@ -28,7 +30,7 @@ const CommitComposer = ({
       value={commitSubject}
       onChange={(event) => onSubjectChange(event.target.value)}
       placeholder="Short summary (≤72 chars)"
-      disabled={!hasSelectedFiles || isGenerating || isCommitting}
+      disabled={!hasSelectedFiles || isGenerating || isCommitting || isClearing}
       maxLength={160}
       data-testid="branch-commit-subject"
     />
@@ -38,7 +40,7 @@ const CommitComposer = ({
       onChange={(event) => onBodyChange(event.target.value)}
       placeholder="Add more context about what changed and why"
       rows={5}
-      disabled={!hasSelectedFiles || isGenerating || isCommitting}
+      disabled={!hasSelectedFiles || isGenerating || isCommitting || isClearing}
       data-testid="branch-commit-input"
     />
     {commitMessageError && (
@@ -55,17 +57,29 @@ const CommitComposer = ({
           type="button"
           className="branch-action secondary"
           onClick={onAutofill}
-          disabled={!canAutofill || !hasSelectedFiles || isGenerating || isCommitting}
+          disabled={!canAutofill || !hasSelectedFiles || isGenerating || isCommitting || isClearing}
           data-testid="branch-commit-autofill"
         >
           {isGenerating ? 'Autofilling…' : 'Autofill with AI'}
+        </button>
+      )}
+      {onClearChanges && (
+        <button
+          type="button"
+          className="branch-action destructive branch-action-clear-changes"
+          onClick={onClearChanges}
+          disabled={!hasSelectedFiles || isGenerating || isCommitting || isClearing}
+          data-testid="branch-commit-clear"
+        >
+          <span className="branch-action-icon" aria-hidden="true">🗑️</span>
+          {isClearing ? 'Clearing…' : 'Clear changes'}
         </button>
       )}
       <button
         type="button"
         className="branch-action primary"
         onClick={onCommit}
-        disabled={!canCommit || isCommitting}
+        disabled={!canCommit || isCommitting || isClearing}
         data-testid="branch-commit-submit"
       >
         {isCommitting ? 'Committing…' : 'Commit staged changes'}

@@ -12,6 +12,7 @@ import {
 } from './automationUtils/jsonParsing.js';
 import {
   buildScopeReflectionPrompt,
+  deriveStyleScopeContract,
   deriveReflectionPathPrefixes as deriveReflectionPathPrefixesFromModule,
   formatScopeReflectionContext,
   isTestFilePath,
@@ -30,6 +31,7 @@ import {
 export {
   buildFallbackBranchNameFromPrompt,
   buildScopeReflectionPrompt,
+  deriveStyleScopeContract,
   extractBranchName,
   extractJsonObject,
   isBranchNameRelevantToPrompt,
@@ -820,6 +822,8 @@ export const buildEditsPrompt = ({
           '{"type":"upsert","path":"...","content":"<full file content>"}, ' +
           '{"type":"delete","path":"...","recursive":false}. ' +
           'Prefer type="modify" with replacements. Each search MUST match exactly once. Use repo-relative POSIX paths. ' +
+            'For styling requests, scope changes to the explicitly requested element/component/selector. ' +
+            'Do NOT change global selectors (body, html, :root, *, or app-wide wrappers) unless the request explicitly asks for page-wide/app-wide/global styling. ' +
           'IMPORTANT: Never wrap a component in <BrowserRouter> (or <HashRouter>, <MemoryRouter>) if the app already has a router in App.jsx or main.jsx. ' +
           'Adding a second router causes a "Cannot read properties of null (reading \'useRef\')" React crash. ' +
           'New route-aware components should use <Link>, useNavigate, etc. without their own Router provider.'

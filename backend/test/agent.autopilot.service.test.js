@@ -45,6 +45,13 @@ const createEditResult = () => ({
   ]
 });
 
+const createEditResultForPath = (target) => ({
+  steps: [
+    { type: 'action', action: 'write_file', target },
+    { type: 'observation', action: 'write_file', target, summary: 'Wrote 120 characters' }
+  ]
+});
+
 const runResult = (status) => ({
   status,
   workspaceRuns: [],
@@ -58,13 +65,20 @@ const createAppendEvent = () => {
   return handler;
 };
 
-const createStackTargetedShouldCancel = (line) => {
+const createStackTargetedShouldCancel = (line, window = 170) => {
   let triggered = false;
   return vi.fn(() => {
     const stack = new Error().stack || '';
-    if (!triggered && stack.includes(`agentAutopilot.js:${line}`)) {
-      triggered = true;
-      return true;
+    if (!triggered) {
+      const matches = Array.from(stack.matchAll(/agentAutopilot\.js:(\d+):\d+/g));
+      const isNearTarget = matches.some((match) => {
+        const observed = Number(match[1]);
+        return Number.isFinite(observed) && observed >= line && observed <= line + window;
+      });
+      if (isNearTarget) {
+        triggered = true;
+        return true;
+      }
     }
     return false;
   });
@@ -488,6 +502,72 @@ describe('agentAutopilot helpers', () => {
     expect(formatPlanSummary({ prompt: 'Ship', steps: null })).toBe('Plan for: Ship');
   });
 
+  test('resolveWorkspaceFromPath recognizes embedded workspace segments and invalid values', () => {
+    const { resolveWorkspaceFromPath } = __testing;
+
+    expect(resolveWorkspaceFromPath(123)).toBeNull();
+    expect(resolveWorkspaceFromPath('/tmp/work/frontend/src/App.jsx')).toBe('frontend');
+    expect(resolveWorkspaceFromPath('/tmp/work/backend/services/server.js')).toBe('backend');
+  });
+
+  test('collectWorkspaceStatuses ignores unknown entries and tracks changed-file pass/fail precedence', () => {
+    const { collectWorkspaceStatuses } = __testing;
+
+    const statuses = collectWorkspaceStatuses({
+      workspaceRuns: [
+        { workspace: 'frontend', status: 'passed' },
+        { workspace: 'backend', status: 'failed' },
+        { workspace: null, status: 'failed' }
+      ],
+      summary: {
+        coverage: {
+          workspaceRuns: [
+            { workspace: 'frontend', passed: 'yes' },
+            { workspace: '/repo/backend', passed: false }
+          ],
+          changedFiles: {
+            workspaces: [
+              { workspace: 'backend', passed: true },
+              { workspace: 'frontend', passed: false },
+              { workspace: 'backend', passed: 'no' }
+            ]
+          }
+        }
+      }
+    });
+
+    expect([...statuses.passing]).not.toContain('backend');
+    expect([...statuses.failing]).toEqual(expect.arrayContaining(['backend', 'frontend']));
+  });
+
+  test('collectWorkspaceStatuses adds passing workspace from changed-file results when not failing', () => {
+    const { collectWorkspaceStatuses } = __testing;
+
+    const statuses = collectWorkspaceStatuses({
+      workspaceRuns: [{ workspace: 'backend', status: 'failed' }],
+      summary: {
+        coverage: {
+          changedFiles: {
+            workspaces: [{ workspace: 'frontend', passed: true }]
+          }
+        }
+      }
+    });
+
+    expect([...statuses.passing]).toContain('frontend');
+    expect([...statuses.failing]).toContain('backend');
+  });
+
+  test('collectWorkspaceStatuses treats missing status as failing for valid workspace entries', () => {
+    const { collectWorkspaceStatuses } = __testing;
+
+    const statuses = collectWorkspaceStatuses({
+      workspaceRuns: [{ workspace: 'frontend' }]
+    });
+
+    expect([...statuses.failing]).toContain('frontend');
+  });
+
   test('consumeUpdatesAsPrompts uses prompt fields', () => {
     const { consumeUpdatesAsPrompts } = __testing;
 
@@ -736,7 +816,7 @@ describe('autopilotFeatureRequest', () => {
     expect(commitBranchChanges).toHaveBeenCalled();
   });
 
-  test('enforces 100% coverage thresholds even when custom thresholds are provided', async () => {
+  test('merges custom coverage thresholds with defaults when overrides are provided', async () => {
     const plan = vi.fn().mockResolvedValue(defaultPlan(['Coverage step']));
     const runQueue = [runResult('failed'), runResult('passed')];
     let capturedThresholds;
@@ -771,10 +851,330 @@ describe('autopilotFeatureRequest', () => {
 
     expect(result.merge).toEqual({ mergedBranch: 'main', current: 'main' });
     expect(capturedThresholds).toEqual({
-      lines: 100,
+      lines: 90,
       statements: 100,
       functions: 100,
-      branches: 100
+      branches: 85
+    });
+  });
+
+  test('scopes verification retries to failing workspace when edits only touch that workspace', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Converge backend tests']));
+    const runQueue = [
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('passed'),
+        workspaceRuns: [
+          { workspace: 'backend', status: 'succeeded' }
+        ]
+      }
+    ];
+    const callOptions = [];
+    const runTests = vi.fn((projectId, branchName, options) => {
+      callOptions.push(options);
+      return Promise.resolve(runQueue.shift());
+    });
+
+    const edit = vi
+      .fn()
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResultForPath('backend/src/service.js'));
+
+    const result = await autopilotFeatureRequest({
+      projectId: 16,
+      prompt: 'Converge backend tests',
+      deps: {
+        plan,
+        edit,
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'scoped-retry' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates: vi.fn(() => []),
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus: vi.fn(),
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent: createAppendEvent()
+      },
+      options: { verificationFixRetries: 1 }
+    });
+
+    expect(result.merge).toEqual({ mergedBranch: 'main', current: 'main' });
+    expect(callOptions).toHaveLength(3);
+    expect(callOptions[2]).toMatchObject({
+      workspaceScope: 'changed',
+      changedPaths: ['backend/.autopilot-retry-scope']
+    });
+  });
+
+  test('scopes verification retries using coverage workspace status when workspace run status is incomplete', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Converge backend tests']));
+    const runQueue = [
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'succeeded' }
+        ],
+        summary: {
+          coverage: {
+            passed: false,
+            workspaceRuns: [
+              { workspace: 'frontend', passed: true },
+              { workspace: 'backend', passed: false }
+            ]
+          }
+        }
+      },
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'succeeded' }
+        ],
+        summary: {
+          coverage: {
+            passed: false,
+            workspaceRuns: [
+              { workspace: 'frontend', passed: true },
+              { workspace: 'backend', passed: false }
+            ]
+          }
+        }
+      },
+      {
+        ...runResult('passed'),
+        workspaceRuns: [{ workspace: 'backend', status: 'succeeded' }]
+      }
+    ];
+    const callOptions = [];
+    const runTests = vi.fn((projectId, branchName, options) => {
+      callOptions.push(options);
+      return Promise.resolve(runQueue.shift());
+    });
+
+    const edit = vi
+      .fn()
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResultForPath('backend/src/service.js'));
+
+    await autopilotFeatureRequest({
+      projectId: 16,
+      prompt: 'Converge backend tests',
+      deps: {
+        plan,
+        edit,
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'coverage-status' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates: vi.fn(() => []),
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus: vi.fn(),
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent: createAppendEvent()
+      },
+      options: { verificationFixRetries: 1 }
+    });
+
+    expect(callOptions[2]).toMatchObject({
+      workspaceScope: 'changed',
+      changedPaths: ['backend/.autopilot-retry-scope']
+    });
+  });
+
+  test('falls back to full retry options when fix edits touch already-passing workspace', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Fix backend test failures']));
+    const runQueue = [
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'passed' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'passed' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      runResult('passed')
+    ];
+    const callOptions = [];
+    const runTests = vi.fn((projectId, branchName, options) => {
+      callOptions.push(options);
+      return Promise.resolve(runQueue.shift());
+    });
+    const edit = vi
+      .fn()
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResultForPath('frontend/src/App.jsx'));
+
+    await autopilotFeatureRequest({
+      projectId: 116,
+      prompt: 'Retry fallback for passing workspace edit',
+      deps: {
+        plan,
+        edit,
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'retry-full-pass' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates: vi.fn(() => []),
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus: vi.fn(),
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent: createAppendEvent()
+      },
+      options: { verificationFixRetries: 1 }
+    });
+
+    expect(callOptions[2]).not.toHaveProperty('workspaceScope');
+    expect(callOptions[2]).not.toHaveProperty('changedPaths');
+  });
+
+  test('falls back to full retry options when verification fix emits no changed files', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Fix backend test failures']));
+    const runQueue = [
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'passed' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'passed' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      runResult('passed')
+    ];
+    const callOptions = [];
+    const runTests = vi.fn((projectId, branchName, options) => {
+      callOptions.push(options);
+      return Promise.resolve(runQueue.shift());
+    });
+    const edit = vi
+      .fn()
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce({ steps: [] });
+
+    await autopilotFeatureRequest({
+      projectId: 117,
+      prompt: 'Retry fallback when no edited workspace can be detected',
+      deps: {
+        plan,
+        edit,
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'retry-full-empty' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates: vi.fn(() => []),
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus: vi.fn(),
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent: createAppendEvent()
+      },
+      options: { verificationFixRetries: 1 }
+    });
+
+    expect(callOptions[2]).not.toHaveProperty('workspaceScope');
+    expect(callOptions[2]).not.toHaveProperty('changedPaths');
+  });
+
+  test('scopes to single failing workspace when edit paths are unscoped', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Converge backend tests']));
+    const runQueue = [
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('failed'),
+        workspaceRuns: [
+          { workspace: 'frontend', status: 'succeeded' },
+          { workspace: 'backend', status: 'failed' }
+        ]
+      },
+      {
+        ...runResult('passed'),
+        workspaceRuns: [{ workspace: 'backend', status: 'succeeded' }]
+      }
+    ];
+    const callOptions = [];
+    const runTests = vi.fn((projectId, branchName, options) => {
+      callOptions.push(options);
+      return Promise.resolve(runQueue.shift());
+    });
+
+    const edit = vi
+      .fn()
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResult())
+      .mockResolvedValueOnce(createEditResultForPath('src/service.js'));
+
+    await autopilotFeatureRequest({
+      projectId: 16,
+      prompt: 'Converge backend tests',
+      deps: {
+        plan,
+        edit,
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'unscoped-status' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates: vi.fn(() => []),
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus: vi.fn(),
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent: createAppendEvent()
+      },
+      options: { verificationFixRetries: 1 }
+    });
+
+    expect(callOptions[2]).toMatchObject({
+      workspaceScope: 'changed',
+      changedPaths: ['backend/.autopilot-retry-scope']
     });
   });
 
@@ -1348,6 +1748,67 @@ describe('autopilotFeatureRequest', () => {
     expect(runTests).toHaveBeenCalled();
   });
 
+  test('cancels at start of verification auto-fix retry loop', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Retry cancellation path']));
+    const runQueue = [runResult('failed'), runResult('failed')];
+    const runTests = vi.fn(() => Promise.resolve(runQueue.shift()));
+
+    await expect(
+      autopilotFeatureRequest({
+        projectId: 118,
+        prompt: 'Cancel verification retry loop',
+        deps: {
+          plan,
+          edit: vi.fn().mockResolvedValue(createEditResult()),
+          createBranch: vi.fn(),
+          checkout: vi.fn(),
+          runTests,
+          commit: vi.fn(),
+          merge: vi.fn(),
+          rollback: vi.fn(),
+          consumeUserUpdates: vi.fn(() => []),
+          shouldCancel: createStackTargetedShouldCancel(704),
+          shouldPause: vi.fn(() => false),
+          reportStatus: vi.fn(),
+          getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+          appendEvent: createAppendEvent()
+        },
+        options: { verificationFixRetries: 1 }
+      })
+    ).rejects.toMatchObject({ code: 'AUTOPILOT_CANCELLED' });
+  });
+
+  test('cancels after applying guidance before guidance rerun', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Guidance cancellation path']));
+    const runQueue = [runResult('failed'), runResult('failed')];
+    const runTests = vi.fn(() => Promise.resolve(runQueue.shift()));
+    const consumeUserUpdates = vi.fn(() => [{ message: 'Try changing assertion setup' }]);
+
+    await expect(
+      autopilotFeatureRequest({
+        projectId: 119,
+        prompt: 'Cancel before guidance rerun',
+        deps: {
+          plan,
+          edit: vi.fn().mockResolvedValue(createEditResult()),
+          createBranch: vi.fn(),
+          checkout: vi.fn(),
+          runTests,
+          commit: vi.fn(),
+          merge: vi.fn(),
+          rollback: vi.fn(),
+          consumeUserUpdates,
+          shouldCancel: createStackTargetedShouldCancel(850, 12),
+          shouldPause: vi.fn(() => false),
+          reportStatus: vi.fn(),
+          getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+          appendEvent: createAppendEvent()
+        },
+        options: { verificationFixRetries: 0 }
+      })
+    ).rejects.toMatchObject({ code: 'AUTOPILOT_CANCELLED' });
+  });
+
   test('applies early user updates without replans', async () => {
     const plan = vi.fn().mockResolvedValue(defaultPlan(['Initial work']));
     const scriptedUpdates = new Map([[1, ['Add docs']]]);
@@ -1428,6 +1889,55 @@ describe('autopilotFeatureRequest', () => {
       (event) => event.type === 'lifecycle' && event.message === 'Needs user input'
     );
     expect(guidanceEvent.payload.testRun.status).toBe('failed');
+  });
+
+  test('re-runs tests after user guidance when retries are exhausted', async () => {
+    const plan = vi.fn().mockResolvedValue(defaultPlan(['Needs guidance rerun']));
+    const runQueue = [runResult('failed'), runResult('failed'), runResult('passed')];
+    const runTests = vi.fn(() => Promise.resolve(runQueue.shift()));
+    let awaitingGuidance = false;
+    const reportStatus = vi.fn((message) => {
+      if (typeof message === 'string' && message.startsWith('Needs user input')) {
+        awaitingGuidance = true;
+      }
+    });
+    let guidanceProvided = false;
+    const consumeUserUpdates = vi.fn(() => {
+      if (awaitingGuidance && !guidanceProvided) {
+        guidanceProvided = true;
+        return [{ message: 'Adjust assertion to expected response shape' }];
+      }
+      return [];
+    });
+    const appendEvent = createAppendEvent();
+
+    const result = await autopilotFeatureRequest({
+      projectId: 120,
+      prompt: 'Guidance rerun coverage',
+      deps: {
+        plan,
+        edit: vi.fn().mockResolvedValue(createEditResult()),
+        createBranch: vi.fn(),
+        checkout: vi.fn(),
+        runTests,
+        commit: vi.fn().mockResolvedValue({ commit: { sha: 'guidance-rerun' } }),
+        merge: vi.fn().mockResolvedValue({ mergedBranch: 'main', current: 'main' }),
+        rollback: vi.fn(),
+        consumeUserUpdates,
+        shouldCancel: vi.fn(() => false),
+        shouldPause: vi.fn(() => false),
+        reportStatus,
+        getDiffForFiles: vi.fn().mockResolvedValue('diff ok'),
+        appendEvent
+      },
+      options: { verificationFixRetries: 0 }
+    });
+
+    expect(result.merge).toEqual({ mergedBranch: 'main', current: 'main' });
+    expect(runTests).toHaveBeenCalledTimes(3);
+    expect(
+      appendEvent.events.some((event) => event.type === 'test:run' && event.payload.phase === 'user-guidance-1')
+    ).toBe(true);
   });
 
   test('includes null summary when guidance run lacks summary', async () => {

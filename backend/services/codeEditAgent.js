@@ -27,6 +27,16 @@ const MAX_OBSERVATION_CHARS = 20_000;
 const MAX_FILE_CHARS = 200_000;
 const LOOP_WINDOW = 6;
 
+const STYLE_REQUEST_REGEX = /\b(css|style|styling|theme|color|background|foreground|text|font|typography|navbar|navigation bar|header|footer|sidebar|card|modal|button|input|form)\b/i;
+const GLOBAL_STYLE_REQUEST_REGEX = /\b(global|app-wide|site-wide|entire app|whole app|across the app|entire page|whole page|page-wide|every page|all pages|entire site|whole site|all screens)\b/i;
+const GLOBAL_SELECTOR_REGEX = /\b(body|html)\s*[{,]|:root\s*[{,]|(^|\n)\s*\*\s*[{,]|#root\s*[{,]|:global\(\s*(body|html|:root|\*)\s*\)/i;
+const GLOBAL_STYLE_FILE_REGEX = /(^|\/)(index|app|styles|theme|globals?)\.(css|scss|sass|less)$/i;
+const TARGET_STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'to', 'of', 'for', 'with', 'in', 'on', 'at', 'by',
+  'make', 'set', 'change', 'update', 'turn', 'give', 'use', 'have', 'has', 'be', 'as',
+  'black', 'white', 'red', 'green', 'blue', 'yellow', 'orange', 'purple', 'pink', 'gray', 'grey'
+]);
+
 const IGNORED_DIRECTORIES = new Set([
   '.git',
   'node_modules',
@@ -51,6 +61,82 @@ const IGNORED_FILES = new Set([
 ]);
 
 const normalizeRelativePath = (value = '') => value.replace(/\\/g, '/').replace(/^\/+/g, '').trim();
+
+const normalizeHint = (value = '') => String(value || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').trim();
+
+const extractStyleTargetHints = (prompt = '') => {
+  const lower = String(prompt || '').toLowerCase();
+  if (!lower) {
+    return [];
+  }
+
+  const hints = new Set();
+  const addHint = (value) => {
+    const normalized = normalizeHint(value);
+    if (!normalized || normalized.length < 3 || TARGET_STOP_WORDS.has(normalized)) {
+      return;
+    }
+    hints.add(normalized);
+  };
+
+  if (/\b(navbar|navigation\s+bar|nav\s+bar)\b/.test(lower)) {
+    ['navbar', 'navigation', 'nav', 'bar'].forEach(addHint);
+  }
+
+  const targetPhraseMatch = lower.match(/\b(?:the|a|an)\s+([a-z0-9_-]+(?:\s+[a-z0-9_-]+){0,3})\s+(?:have|has|with|to|should|needs|need|be)\b/);
+  if (targetPhraseMatch?.[1]) {
+    targetPhraseMatch[1].split(/\s+/).forEach(addHint);
+  }
+
+  const selectorMatches = lower.match(/[.#][a-z0-9_-]+/g) || [];
+  selectorMatches.forEach((selector) => addHint(selector.slice(1)));
+
+  return Array.from(hints).slice(0, 8);
+};
+
+const deriveStyleScopeContract = (prompt = '') => {
+  const text = String(prompt || '').trim();
+  if (!text || !STYLE_REQUEST_REGEX.test(text)) {
+    return null;
+  }
+  if (GLOBAL_STYLE_REQUEST_REGEX.test(text)) {
+    return {
+      mode: 'global',
+      targetHints: []
+    };
+  }
+  return {
+    mode: 'targeted',
+    targetHints: extractStyleTargetHints(text)
+  };
+};
+
+const writeMentionsTarget = ({ path: filePath, content, targetHints = [] } = {}) => {
+  if (!Array.isArray(targetHints) || targetHints.length === 0) {
+    return false;
+  }
+  const haystack = `${String(filePath || '').toLowerCase()}\n${String(content || '').toLowerCase()}`;
+  return targetHints.some((hint) => haystack.includes(hint));
+};
+
+const validateStyleWriteScope = ({ contract, path: filePath, content } = {}) => {
+  if (!contract || contract.mode !== 'targeted') {
+    return null;
+  }
+
+  const normalizedPath = normalizeRelativePath(filePath || '').toLowerCase();
+  const text = String(content || '');
+
+  if (GLOBAL_SELECTOR_REGEX.test(text)) {
+    return 'Targeted style request cannot change global selectors (body/html/:root/*/#root).';
+  }
+
+  if (GLOBAL_STYLE_FILE_REGEX.test(normalizedPath) && !writeMentionsTarget({ path: normalizedPath, content: text, targetHints: contract.targetHints })) {
+    return 'Targeted style request must include target-specific selectors/components; broad global stylesheet edits are not allowed.';
+  }
+
+  return null;
+};
 
 const ensureSafeRelativePath = (value = '') => {
   const normalized = normalizeRelativePath(value || '');
@@ -339,11 +425,21 @@ export const applyCodeChange = async ({ projectId, prompt, ui } = {}) => {
 
   const projectRoot = await getProjectRoot(projectId);
   const fileTree = await buildFileTreeSnapshot(projectRoot);
+  const styleScopeContract = deriveStyleScopeContract(prompt);
 
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: buildInitialUserMessage({ prompt, fileTree }) }
   ];
+
+  if (styleScopeContract?.mode === 'targeted') {
+    messages.push({
+      role: 'user',
+      content:
+        'Style scope contract: this request is element-scoped. Do NOT edit global selectors (body/html/:root/*/#root). ' +
+        'Do NOT satisfy the request by changing app-wide theme/background tokens. Update only selectors/components tied to the requested target.'
+    });
+  }
 
   const steps = [];
   const loopDetector = new LoopDetector();
@@ -433,6 +529,28 @@ export const applyCodeChange = async ({ projectId, prompt, ui } = {}) => {
         });
         continue;
       }
+
+      const styleScopeViolation = validateStyleWriteScope({
+        contract: styleScopeContract,
+        path: actionPayload.path,
+        content
+      });
+      if (styleScopeViolation) {
+        const targetPath = normalizeRelativePath(actionPayload.path || '') || null;
+        steps.push(createActionStep('write_file', targetPath, actionPayload.reason || null));
+        steps.push(createObservationStep('write_file', targetPath, `Rejected: ${styleScopeViolation}`));
+        messages.push({
+          role: 'user',
+          content: JSON.stringify({
+            action: 'write_file',
+            path: targetPath,
+            status: 'rejected',
+            error: styleScopeViolation
+          })
+        });
+        continue;
+      }
+
       const result = await writeFileForAgent(projectId, actionPayload.path, content);
       writes += 1;
       const summaryText = `Wrote ${result.bytesWritten} characters`;
@@ -483,6 +601,8 @@ export default {
 
 export const __testing = {
   normalizeRelativePath,
+  normalizeHint,
+  extractStyleTargetHints,
   ensureSafeRelativePath,
   truncateForObservation,
   stripCodeFences,
@@ -494,5 +614,8 @@ export const __testing = {
   listDirectoryForAgent,
   readFileForAgent,
   writeFileForAgent,
-  LoopDetector
+  LoopDetector,
+  deriveStyleScopeContract,
+  writeMentionsTarget,
+  validateStyleWriteScope
 };

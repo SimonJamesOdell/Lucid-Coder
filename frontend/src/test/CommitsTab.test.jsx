@@ -11,6 +11,7 @@ let workingBranchesValue = {};
 let workspaceChangesValue = {};
 let syncBranchOverviewValue = vi.fn();
 let isLLMConfiguredValue = false;
+let clearStagedChangesValue = vi.fn();
 
 vi.mock('../context/AppStateContext', () => ({
   useAppState: () => ({
@@ -18,7 +19,8 @@ vi.mock('../context/AppStateContext', () => ({
     workingBranches: workingBranchesValue,
     workspaceChanges: workspaceChangesValue,
     syncBranchOverview: syncBranchOverviewValue,
-    isLLMConfigured: isLLMConfiguredValue
+    isLLMConfigured: isLLMConfiguredValue,
+    clearStagedChanges: clearStagedChangesValue
   })
 }));
 
@@ -84,6 +86,7 @@ beforeEach(() => {
   workspaceChangesValue = {};
   syncBranchOverviewValue = vi.fn();
   isLLMConfiguredValue = false;
+  clearStagedChangesValue = vi.fn();
 });
 
 describe('CommitsTab', () => {
@@ -1361,6 +1364,150 @@ describe('CommitsTab', () => {
     await waitFor(() => {
       expect(screen.getByTestId('branch-commit-error')).toHaveTextContent('Failed to commit staged changes');
     });
+  });
+
+  test('clear changes button clears staged changes for active branch', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-login',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T10:00:00.000Z' }]
+      }
+    };
+
+    axios.get
+      .mockResolvedValueOnce({ data: { success: true, commits: [] } })
+      .mockResolvedValueOnce({ data: { success: true, commits: [] } });
+
+    clearStagedChangesValue.mockResolvedValue({ success: true });
+
+    const user = userEvent.setup();
+    await renderCommitsTab();
+
+    await user.click(screen.getByTestId('branch-commit-clear'));
+
+    await waitFor(() => {
+      expect(clearStagedChangesValue).toHaveBeenCalledWith(mockProject.id, { branchName: 'feature-login' });
+      expect(screen.getByText('Cleared staged changes')).toBeInTheDocument();
+    });
+  });
+
+  test('clear changes syncs overview when clear API returns overview payload', async () => {
+    const testApiRef = { current: null };
+    const overview = {
+      current: 'feature-login',
+      branches: [],
+      workingBranches: [
+        {
+          name: 'feature-login',
+          status: 'needs-fix',
+          lastTestStatus: 'failed',
+          testsRequired: true,
+          stagedFiles: []
+        }
+      ]
+    };
+
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-login',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T10:00:00.000Z' }]
+      }
+    };
+
+    axios.get.mockResolvedValue({ data: { success: true, commits: [] } });
+    clearStagedChangesValue.mockResolvedValue({ success: true, overview });
+
+    await renderCommitsTab({}, { testApiRef });
+    await waitFor(() => expect(testApiRef.current?.handleClearStagedChanges).toBeTypeOf('function'));
+
+    await act(async () => {
+      await testApiRef.current.handleClearStagedChanges();
+    });
+
+    await waitFor(() => {
+      expect(syncBranchOverviewValue).toHaveBeenCalledWith(mockProject.id, overview);
+      expect(screen.getByText('Cleared staged changes')).toBeInTheDocument();
+    });
+  });
+
+  test('clear changes falls back to default error message when clear call rejects without message', async () => {
+    const testApiRef = { current: null };
+
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-login',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T10:00:00.000Z' }]
+      }
+    };
+
+    axios.get.mockResolvedValue({ data: { success: true, commits: [] } });
+    clearStagedChangesValue.mockRejectedValueOnce(new Error());
+
+    await renderCommitsTab({}, { testApiRef });
+    await waitFor(() => expect(testApiRef.current?.handleClearStagedChanges).toBeTypeOf('function'));
+
+    await act(async () => {
+      await testApiRef.current.handleClearStagedChanges();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('branch-commit-error')).toHaveTextContent('Failed to clear staged changes');
+    });
+  });
+
+  test('clear changes handler no-ops when staged files are unavailable', async () => {
+    const testApiRef = { current: null };
+
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-login',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        stagedFiles: []
+      }
+    };
+
+    axios.get.mockResolvedValue({ data: { success: true, commits: [] } });
+
+    await renderCommitsTab({}, { testApiRef });
+    await waitFor(() => expect(testApiRef.current?.handleClearStagedChanges).toBeTypeOf('function'));
+
+    await act(async () => {
+      await testApiRef.current.handleClearStagedChanges();
+    });
+
+    expect(clearStagedChangesValue).not.toHaveBeenCalled();
+  });
+
+  test('clear changes handler no-ops when clear function is unavailable', async () => {
+    const testApiRef = { current: null };
+
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-login',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        stagedFiles: [{ path: 'src/App.jsx', source: 'editor', timestamp: '2025-01-01T10:00:00.000Z' }]
+      }
+    };
+
+    clearStagedChangesValue = undefined;
+    axios.get.mockResolvedValue({ data: { success: true, commits: [] } });
+
+    await renderCommitsTab({}, { testApiRef });
+    await waitFor(() => expect(testApiRef.current?.handleClearStagedChanges).toBeTypeOf('function'));
+
+    await act(async () => {
+      await testApiRef.current.handleClearStagedChanges();
+    });
+
+    expect(syncBranchOverviewValue).not.toHaveBeenCalled();
   });
 
   test('commit composer auto-generates a message when LLM is configured and draft is empty', async () => {

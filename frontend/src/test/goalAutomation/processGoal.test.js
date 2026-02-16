@@ -21,6 +21,7 @@ const automationModuleMock = vi.hoisted(() => ({
   notifyGoalsUpdated: vi.fn(),
   normalizeRepoPath: vi.fn(),
   buildScopeReflectionPrompt: vi.fn(),
+  deriveStyleScopeContract: vi.fn(),
   parseScopeReflectionResponse: vi.fn(),
   validateEditsAgainstReflection: vi.fn()
 }));
@@ -80,6 +81,7 @@ beforeEach(() => {
   automationModuleMock.notifyGoalsUpdated.mockReturnValue();
   automationModuleMock.normalizeRepoPath.mockImplementation((value) => value);
   automationModuleMock.buildScopeReflectionPrompt.mockReturnValue({});
+  automationModuleMock.deriveStyleScopeContract.mockReturnValue(null);
   automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
   automationModuleMock.validateEditsAgainstReflection.mockReturnValue(null);
 

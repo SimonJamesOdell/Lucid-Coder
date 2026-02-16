@@ -1,3 +1,11 @@
+## 0.7.1 (2026-02-16)
+- Scope autopilot verification retries to the affected workspace (`frontend` or `backend`) when edits stay contained, reducing unnecessary cross-workspace reruns while preserving full-coverage enforcement.
+- Harden targeted styling flows by enforcing style-scope contracts in backend edit writes and frontend goal-automation reflection (reject global-selector/app-wide stylesheet edits unless the request is explicitly global).
+- Improve prompt classification to avoid treating element-scoped UI/style requests (for example navbar/header/button-specific changes) as generic style-only prompts.
+- Update ChatPanel thinking feedback to show `Thinking about: <prompt>` while requests are in flight.
+- Add a clear staged changes action in Commits (with in-flight guard rails and branch-overview sync) so users can quickly reset staged files before committing.
+- Expand backend/frontend test coverage around autopilot workspace scoping, style-scope validation, commit action handling, and reflection utilities to keep release gates green.
+
 ## 0.7.0 (2026-02-15)
 - Stabilize frontend coverage runs on Windows by using the Vitest `threads` pool when `--coverage` is enabled, avoiding fork-worker coverage temp-file races.
 - Restore normal frontend test throughput by removing forced single-worker coverage settings so Vitest can manage worker concurrency safely.

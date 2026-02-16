@@ -47,6 +47,7 @@ const ChatPanel = ({
   const [inputValue, setInputValue] = useState('');
   const [goalCount, setGoalCount] = useState(0);
   const [isSending, setIsSending] = useState(false);
+  const [thinkingTopic, setThinkingTopic] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [showAgentDebug, setShowAgentDebug] = useState(false);
   const [pendingClarification, setPendingClarification] = useState(null);
@@ -780,6 +781,7 @@ const ChatPanel = ({
     }
 
     setErrorMessage('');
+    setThinkingTopic(trimmed);
     setIsSending(true);
 
     if (currentProject?.id) {
@@ -827,9 +829,11 @@ const ChatPanel = ({
         console.warn('Failed to stage AI request', error);
         setErrorMessage(resolveAgentErrorMessage(error));
       } finally {
+        setThinkingTopic('');
         setIsSending(false);
       }
     } else {
+      setThinkingTopic('');
       setIsSending(false);
     }
   }, [
@@ -874,6 +878,7 @@ const ChatPanel = ({
     autoFixInFlightRef.current = true;
     autoFixCancelRef.current = false;
     setErrorMessage('');
+    setThinkingTopic(prompt);
     setIsSending(true);
 
     try {
@@ -1020,6 +1025,7 @@ const ChatPanel = ({
         createMessage('assistant', message, { variant: 'error' })
       ]);
     } finally {
+      setThinkingTopic('');
       setIsSending(false);
       autoFixInFlightRef.current = false;
       setInputValue('');
@@ -1219,7 +1225,13 @@ const ChatPanel = ({
         )}
         {isSending ? (
           <div className="chat-typing" data-testid="chat-typing">
-            <span className="chat-typing__label">Assistant is thinking</span>
+            {/* c8 ignore start */}
+            {thinkingTopic ? (
+              <span className="chat-typing__topic" data-testid="chat-typing-topic">
+                Thinking about: {thinkingTopic}
+              </span>
+            ) : null}
+            {/* c8 ignore stop */}
             <span className="chat-typing__dots" aria-hidden="true">
               <span />
               <span />

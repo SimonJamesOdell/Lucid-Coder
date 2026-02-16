@@ -217,7 +217,18 @@
   font-weight: 600;
   border: none;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.branch-action-icon {
+  line-height: 1;
+}
+
+.branch-action-clear-changes {
+  margin-left: auto;
 }
 
 .branch-action:disabled {

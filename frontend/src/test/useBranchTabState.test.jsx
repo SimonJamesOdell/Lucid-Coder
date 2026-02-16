@@ -1444,7 +1444,9 @@ describe('useBranchTabState targeted guards', () => {
 
     axios.post.mockReset();
     axios.get.mockReset();
-    axios.get.mockResolvedValueOnce({ data: stagedOverview });
+    axios.get
+      .mockResolvedValueOnce({ data: { isCssOnly: false } })
+      .mockResolvedValueOnce({ data: stagedOverview });
     axios.post.mockResolvedValueOnce({ data: { testRun: { status: 'passed' }, overview: stagedOverview } });
     const commitError = Object.assign(new Error('commit blocked'), {
       response: { data: { error: 'Commit blocked before merge' } }

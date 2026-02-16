@@ -31,6 +31,17 @@ export const isStyleOnlyPrompt = (prompt = '') => {
   const text = normalizePrompt(extractLatestRequest(prompt));
   if (!text) return false;
 
+  const targetedStyleSignals = [
+    /\b(navbar|navigation\s+bar|nav\s+bar)\b/,
+    /\b(header|footer|sidebar|hero|card|modal|toolbar)\b/,
+    /\b(button|input|form|menu|dropdown|link|tab)\b/,
+    /\b(for|on|in)\s+the\s+[a-z0-9_-]+\b/,
+    /[.#][a-z0-9_-]+/
+  ];
+  if (targetedStyleSignals.some((re) => re.test(text))) {
+    return false;
+  }
+
   // Positive signals for style-only changes.
   // Require a "core" styling keyword (css/color/background/etc) so generic UI nouns
   // like "button" or "header" don't get misclassified as style-only.

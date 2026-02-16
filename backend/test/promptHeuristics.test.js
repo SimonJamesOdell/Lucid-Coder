@@ -21,6 +21,11 @@ describe('promptHeuristics', () => {
     expect(isStyleOnlyPrompt('Refine the onboarding workflow for authentication')).toBe(false);
   });
 
+  it('returns false for targeted component style prompts', () => {
+    expect(isStyleOnlyPrompt('Make the navigation bar have a black background with white text')).toBe(false);
+    expect(isStyleOnlyPrompt('Set .navbar background to black and text to white')).toBe(false);
+  });
+
   it('ignores style-only context when a non-style current request is provided', () => {
     const prompt = [
       'Conversation context:',

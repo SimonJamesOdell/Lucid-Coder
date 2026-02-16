@@ -795,6 +795,8 @@ describe('goalAutomationService', () => {
       const systemContent = prompt.messages[0].content;
       expect(systemContent).toContain('Never wrap a component in <BrowserRouter>');
       expect(systemContent).toContain('second router');
+      expect(systemContent).toContain('For styling requests, scope changes to the explicitly requested element/component/selector.');
+      expect(systemContent).toContain('Do NOT change global selectors (body, html, :root, *, or app-wide wrappers)');
     });
 
     test('applyEdits uses fallback rewrite error message when caught error loses its message', async () => {

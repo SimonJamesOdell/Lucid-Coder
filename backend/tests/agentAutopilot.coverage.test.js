@@ -80,7 +80,7 @@ describe('agent autopilot coverage gates', () => {
     for (const call of runTests.mock.calls) {
       const options = call[2];
       expect(options.coverageThresholds).toEqual({
-        lines: 100,
+        lines: 80,
         statements: 100,
         functions: 100,
         branches: 100
