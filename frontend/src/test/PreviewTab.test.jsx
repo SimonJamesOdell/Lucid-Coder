@@ -282,12 +282,12 @@ describe('PreviewTab', () => {
 
     renderPreviewTab({ processInfo, onRestartProject, isProjectStopped: true });
 
-    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-    expect(screen.getByText('Project not running')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Project not running' })).toBeInTheDocument();
+    expect(screen.getByText(/preview is unavailable because the project isn.?t currently running/i)).toBeInTheDocument();
     expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Start project' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Start project processes' }));
     });
 
     expect(onRestartProject).toHaveBeenCalledWith(mockProject.id);
@@ -361,7 +361,7 @@ describe('PreviewTab', () => {
 
     renderPreviewTab({ processInfo, onRestartProject, isProjectStopped: true });
 
-    const startButton = screen.getByRole('button', { name: 'Start project' });
+    const startButton = screen.getByRole('button', { name: 'Start project processes' });
     expect(startButton).toBeEnabled();
 
     fireEvent.click(startButton);
@@ -369,6 +369,34 @@ describe('PreviewTab', () => {
     await waitFor(() => {
       expect(screen.getByTestId('preview-loading')).toBeInTheDocument();
     });
+
+    await act(async () => {
+      resolveStart(null);
+      await startPromise;
+    });
+  });
+
+  test('manual start keeps loading copy instead of recovery copy', async () => {
+    let resolveStart;
+    const startPromise = new Promise((resolve) => {
+      resolveStart = resolve;
+    });
+    const onRestartProject = vi.fn().mockReturnValue(startPromise);
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: { status: 'idle' }
+      }
+    });
+
+    renderPreviewTab({ processInfo, onRestartProject, isProjectStopped: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start project processes' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-loading')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Loading preview…')).toBeInTheDocument();
+    expect(screen.queryByText('Recovering preview…')).toBeNull();
 
     await act(async () => {
       resolveStart(null);
@@ -398,9 +426,22 @@ describe('PreviewTab', () => {
 
     renderPreviewTab({ processInfo, isProjectStopped: true });
 
-    expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-    expect(screen.getByText('Project not running')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Project not running' })).toBeInTheDocument();
+    expect(screen.getByText(/preview is unavailable because the project isn.?t currently running/i)).toBeInTheDocument();
     expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
+  });
+
+  test('shows not-running empty state when frontend is idle even without explicit stop flag', () => {
+    const processInfo = buildProcessInfo({
+      processes: {
+        frontend: { status: 'idle' }
+      }
+    });
+
+    renderPreviewTab({ processInfo, isProjectStopped: false, autoStartOnNotRunning: false });
+
+    expect(screen.getByRole('heading', { name: 'Project not running' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start project processes' })).toBeInTheDocument();
   });
 
   test('start handler shows default error message when API rejects without text', async () => {
@@ -414,13 +455,13 @@ describe('PreviewTab', () => {
     renderPreviewTab({ processInfo, onRestartProject, isProjectStopped: true });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Start project' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Start project processes' }));
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to load preview')).toBeInTheDocument();
-      expect(screen.getByText('Project not running')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Start project' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Project not running' })).toBeInTheDocument();
+      expect(screen.getByText(/preview is unavailable because the project isn.?t currently running/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Start project processes' })).toBeInTheDocument();
     });
   });
 
@@ -2848,13 +2889,13 @@ describe('PreviewTab', () => {
 
     const { previewRef } = renderPreviewTab({ processInfo, isProjectStopped: true });
 
-    expect(screen.getByText('Project not running')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Project not running' })).toBeInTheDocument();
 
     act(() => {
       previewRef.current.__testHooks.triggerIframeError();
     });
 
-    expect(screen.getByText('Project not running')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Project not running' })).toBeInTheDocument();
     expect(screen.getByTestId('preview-iframe')).toBeInTheDocument();
   });
 
@@ -3281,7 +3322,8 @@ describe('PreviewTab', () => {
     expect(screen.getByTestId('preview-loading')).toBeInTheDocument();
     expect(screen.getByText('Recovering preview…')).toBeInTheDocument();
     expect(screen.getByText('Attempt 2/3')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open in a new tab' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open in a new tab' })).toBeNull();
+    expect(screen.queryByText(/^URL:/i)).toBeNull();
   });
 
   test('loading overlay keeps loading copy when recovery is running but attempt is zero', () => {

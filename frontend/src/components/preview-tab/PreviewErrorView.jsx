@@ -27,11 +27,13 @@ const PreviewErrorView = ({
   showBackendLogsModal,
   backendLogsText
 }) => {
+  const title = showNotRunningState ? 'Project not running' : 'Failed to load preview';
+
   return (
     <div className="preview-tab">
       <div className="preview-error">
         <div className="preview-loading-card">
-          <h3>Failed to load preview</h3>
+          <h3>{title}</h3>
 
           {showAutoRecoverSwoosh && (
             <div className="preview-loading-bar" aria-hidden="true">
