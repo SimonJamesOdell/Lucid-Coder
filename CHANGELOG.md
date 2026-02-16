@@ -1,3 +1,10 @@
+## 0.7.3 (2026-02-16)
+- Add a full Assets management flow with image/video/audio/file previews, wheel zoom + pan, optimize controls, and a dedicated optimize modal.
+- Expand backend assets route coverage with a comprehensive `routes.files` assets test suite and close remaining edge branches.
+- Expand frontend coverage for PreviewPanel, ChatPanel, AssetOptimizeModal, and AssetsTab (including fallback/error/guard paths) to keep strict 100% gates green.
+- Tune frontend coverage-report performance by making Vitest cache/coverage directories deterministic per-frontend workspace and setting `coverage.processingConcurrency` based on local profiling.
+- Bump version metadata to `0.7.3` across root/backend/frontend package manifests + lockfiles, shared version exports, and versioning docs.
+
 ## 0.7.2 (2026-02-16)
 - Stabilize Preview startup UX by keeping the loading overlay visible until the preview is actually ready, adding smoother overlay/iframe crossfade behavior, and preventing early-hide flicker during manual starts.
 - Improve Preview not-running/error handling with clearer copy and actions (including explicit not-running messaging), while removing redundant loading-overlay URL/new-tab text.
