@@ -1,0 +1,306 @@
+.assets-tab {
+  height: 100%;
+  overflow: auto;
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.assets-tab__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.assets-tab__header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.assets-tab__refresh {
+  border: 1px solid var(--border-color, #333);
+  background: var(--background-secondary, #1a1a1a);
+  color: var(--text-primary, #fff);
+  border-radius: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+}
+
+.assets-tab__refresh:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.assets-tab__status {
+  color: var(--text-secondary, #cfcfcf);
+}
+
+.assets-tab__status--error {
+  color: var(--error-color, #ff6b81);
+}
+
+.assets-tab__empty {
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.assets-tab__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.assets-tab__viewer {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.6rem;
+  overflow: hidden;
+  background: var(--background-secondary, #1a1a1a);
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.assets-tab__viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.assets-tab__viewer-title {
+  color: var(--text-primary, #fff);
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assets-tab__viewer-close {
+  border: 1px solid var(--border-color, #333);
+  background: transparent;
+  color: var(--text-primary, #fff);
+  border-radius: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  cursor: pointer;
+}
+
+.assets-tab__viewer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.assets-tab__viewer-zoom {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.35rem;
+  padding: 0.22rem 0.5rem;
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.75rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.assets-tab__viewer-optimize {
+  border: 1px solid var(--accent-color, #007acc);
+  background: rgba(0, 122, 204, 0.2);
+  color: var(--text-primary, #fff);
+  border-radius: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  cursor: pointer;
+}
+
+.assets-tab__viewer-optimize:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.assets-tab__viewer-body {
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  background: var(--background-primary, #000);
+}
+
+.assets-tab__viewer-body--image {
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.assets-tab__image-panzoom {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+
+.assets-tab__image-panzoom--active {
+  cursor: grab;
+}
+
+.assets-tab__image-panzoom--panning {
+  cursor: grabbing;
+}
+
+.assets-tab__viewer-body .assets-tab__image-panzoom img {
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  transform-origin: center center;
+  user-select: none;
+}
+
+.assets-tab__viewer-body img,
+.assets-tab__viewer-body video {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.assets-tab__viewer-body audio {
+  width: calc(100% - 1rem);
+}
+
+.assets-tab__viewer-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.assets-tab__viewer-download {
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.35rem;
+  text-decoration: none;
+  padding: 0.3rem 0.6rem;
+}
+
+.assets-tab__card {
+  border: 1px solid var(--border-color, #333);
+  background: var(--background-secondary, #1a1a1a);
+  border-radius: 0.6rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.assets-tab__card:hover {
+  border-color: var(--accent-color, #007acc);
+}
+
+.assets-tab__preview {
+  height: 150px;
+  background: var(--background-primary, #000);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.assets-tab__preview img,
+.assets-tab__preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.assets-tab__preview audio {
+  width: calc(100% - 1rem);
+}
+
+.assets-tab__file-badge {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary, #cfcfcf);
+}
+
+.assets-tab__meta {
+  padding: 0.55rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.assets-tab__name {
+  color: var(--text-primary, #fff);
+  font-size: 0.88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assets-tab__path {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assets-tab__detail {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.75rem;
+}
+
+.assets-tab__optimization {
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.assets-tab__optimization--optimized {
+  color: var(--success-color, #4caf50);
+}
+
+.assets-tab__optimization--unoptimized {
+  color: var(--error-color, #ff6b81);
+}
+
+.assets-tab__actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.65rem 0.65rem;
+}
+
+.assets-tab__action {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--text-primary, #fff);
+  text-decoration: none;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.78rem;
+  text-align: center;
+  cursor: pointer;
+}
+
+.assets-tab__action--delete {
+  color: var(--error-color, #ff6b81);
+}
+
+.assets-tab__action--optimize {
+  color: var(--accent-color, #007acc);
+}
+
+.assets-tab__action:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}

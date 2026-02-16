@@ -1,0 +1,91 @@
+.asset-optimize-modal-panel {
+  --settings-modal-panel-width: 960px;
+}
+
+.asset-optimize-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.asset-optimize-target {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asset-optimize-field {
+  display: grid;
+  grid-template-columns: 180px 1fr auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.asset-optimize-label {
+  color: var(--text-primary, #fff);
+  font-size: 0.9rem;
+}
+
+.asset-optimize-input {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.45rem;
+  background: var(--background-secondary, #1a1a1a);
+  color: var(--text-primary, #fff);
+  padding: 0.5rem 0.6rem;
+}
+
+.asset-optimize-range {
+  width: 100%;
+}
+
+.asset-optimize-value {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.85rem;
+  min-width: 48px;
+  text-align: right;
+}
+
+.asset-optimize-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+.asset-optimize-button {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--text-primary, #fff);
+  padding: 0.45rem 0.85rem;
+  cursor: pointer;
+}
+
+.asset-optimize-button--auto {
+  border-color: var(--accent-color, #007acc);
+  color: var(--accent-color, #4da3ff);
+}
+
+.asset-optimize-button--primary {
+  background: var(--accent-color, #007acc);
+  border-color: var(--accent-color, #007acc);
+}
+
+.asset-optimize-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .asset-optimize-field {
+    grid-template-columns: 1fr;
+    gap: 0.45rem;
+  }
+
+  .asset-optimize-actions {
+    justify-content: stretch;
+    flex-wrap: wrap;
+  }
+}

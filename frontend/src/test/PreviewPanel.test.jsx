@@ -81,6 +81,11 @@ vi.mock('../components/FilesTab', () => ({
   }
 }));
 
+vi.mock('../components/AssetsTab', () => ({
+  __esModule: true,
+  default: () => <div data-testid="mock-assets-tab" />
+}));
+
 vi.mock('../components/TestTab', () => ({
   __esModule: true,
   default: (props) => {
@@ -1282,6 +1287,19 @@ describe('PreviewPanel', () => {
 
     await user.click(screen.getByTestId('preview-tab'));
     expect(reloadPreviewMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('renders AssetsTab when assets tab is selected', async () => {
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 730, name: 'Assets Coverage' } })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('assets-tab'));
+
+    expect(screen.getByTestId('mock-assets-tab')).toBeInTheDocument();
   });
 
   test('defers preview reload when preview ref lacks reload handler and replays when active', async () => {

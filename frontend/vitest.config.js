@@ -1,8 +1,14 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const isWindows = process.platform === 'win32'
 const isCoverageRun = process.argv.includes('--coverage') || process.env.VITEST_COVERAGE === '1'
+const configDir = dirname(fileURLToPath(import.meta.url))
+const frontendCacheDir = resolve(configDir, '.vite-cache')
+const frontendCoverageDir = resolve(configDir, 'coverage')
+const frontendCoverageTempDir = resolve(configDir, 'coverage-tmp')
 
 export default defineConfig({
   plugins: [react()],
@@ -46,10 +52,12 @@ export default defineConfig({
     hookTimeout: 10000,
     teardownTimeout: 5000,
     isolate: true,
-    cacheDir: './.vite-cache', 
+    cacheDir: frontendCacheDir,
     coverage: {
       reporter: ['text', 'json', 'html'],
-      tempDirectory: './coverage-tmp',
+      reportsDirectory: frontendCoverageDir,
+      tempDirectory: frontendCoverageTempDir,
+      processingConcurrency: 8,
       thresholds: {
         lines: 100,
         statements: 100,
