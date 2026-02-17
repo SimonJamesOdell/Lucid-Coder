@@ -1,0 +1,89 @@
+.asset-rename-modal-panel {
+  --settings-modal-panel-width: 760px;
+}
+
+.asset-rename-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.asset-rename-target {
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asset-rename-field {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.asset-rename-label {
+  color: var(--text-primary, #fff);
+  font-size: 0.9rem;
+}
+
+.asset-rename-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.asset-rename-input {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.45rem;
+  background: var(--background-secondary, #1a1a1a);
+  color: var(--text-primary, #fff);
+  padding: 0.5rem 0.6rem;
+  flex: 1;
+}
+
+.asset-rename-extension {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  color: var(--text-secondary, #b3b3b3);
+  background: var(--background-secondary, #1a1a1a);
+  white-space: nowrap;
+}
+
+.asset-rename-error {
+  color: var(--error-color, #ff6b81);
+  font-size: 0.85rem;
+}
+
+.asset-rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.asset-rename-button {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--text-primary, #fff);
+  padding: 0.45rem 0.85rem;
+  cursor: pointer;
+}
+
+.asset-rename-button--primary {
+  background: var(--accent-color, #007acc);
+  border-color: var(--accent-color, #007acc);
+}
+
+.asset-rename-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .asset-rename-field {
+    grid-template-columns: 1fr;
+  }
+}

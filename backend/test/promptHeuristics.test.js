@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
-import { isStyleOnlyPrompt, extractStyleColor } from '../services/promptHeuristics.js';
+import {
+  isStyleOnlyPrompt,
+  extractStyleColor,
+  extractLatestRequest,
+  extractSelectedProjectAssets
+} from '../services/promptHeuristics.js';
 
 describe('promptHeuristics', () => {
   it('returns false for empty/undefined prompts (covers default arg branches)', () => {
@@ -70,6 +75,66 @@ describe('promptHeuristics', () => {
     ].join('\n');
 
     expect(isStyleOnlyPrompt(prompt)).toBe(true);
+  });
+
+  it('unwraps nested request labels', () => {
+    const prompt = 'Original request: Current request: Use the image as the site background';
+    expect(extractLatestRequest(prompt)).toBe('Use the image as the site background');
+  });
+
+  it('stops unwrapping nested request labels after max depth', () => {
+    const prompt = 'Original request: User answer: Current request: Original request: Current request: Keep this text';
+    expect(extractLatestRequest(prompt)).toBe('Current request: Keep this text');
+  });
+
+  it('returns empty string for whitespace-only latest request payloads', () => {
+    expect(extractLatestRequest('   ')).toBe('');
+  });
+
+  it('extracts selected project assets from wrapped prompts', () => {
+    const prompt = [
+      'Conversation context:',
+      'User: hello',
+      '',
+      'Selected project assets:',
+      '- uploads/hero.png',
+      '- uploads/logo.svg',
+      '',
+      'Current request: Use the image as the site background'
+    ].join('\n');
+
+    expect(extractSelectedProjectAssets(prompt)).toEqual(['uploads/hero.png', 'uploads/logo.svg']);
+  });
+
+  it('returns empty selected assets when no asset section exists', () => {
+    expect(extractSelectedProjectAssets('Current request: update header')).toEqual([]);
+  });
+
+  it('returns empty selected assets for blank prompts', () => {
+    expect(extractSelectedProjectAssets('')).toEqual([]);
+  });
+
+  it('skips leading blank lines and stops at section-style headers', () => {
+    const prompt = [
+      'Selected project assets:',
+      '',
+      '- uploads/hero.png',
+      'Current request:',
+      '- uploads/should-not-be-read.png'
+    ].join('\n');
+
+    expect(extractSelectedProjectAssets(prompt)).toEqual(['uploads/hero.png']);
+  });
+
+  it('accepts selected asset lines without bullet prefixes', () => {
+    const prompt = [
+      'Selected project assets:',
+      'uploads/hero.png',
+      '',
+      'Current request: use the hero image'
+    ].join('\n');
+
+    expect(extractSelectedProjectAssets(prompt)).toEqual(['uploads/hero.png']);
   });
 
   describe('extractStyleColor', () => {

@@ -430,8 +430,24 @@ export const createBranchWorkflowCommits = (core) => {
 
     try {
       await runProjectGit(context, ['add', ...addPaths]);
+
+      const stagedResult = await runProjectGit(context, ['diff', '--cached', '--name-only', '--', ...addPaths]);
+      const stagedText = String(stagedResult?.stdout || '');
+      const hasStagedChanges = stagedText
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .some(Boolean);
+
+      if (!hasStagedChanges) {
+        return null;
+      }
+
       await runProjectGit(context, ['commit', '-m', `chore: bump version to ${nextVersion}`]);
     } catch (error) {
+      const message = String(error?.message || '');
+      if (/nothing to commit|no changes added to commit/i.test(message)) {
+        return null;
+      }
       throw withStatusCode(new Error(`Failed to bump version after merge: ${error.message}`), 500);
     }
 
@@ -461,7 +477,7 @@ export const createBranchWorkflowCommits = (core) => {
   const ensureCleanWorkingTree = async (context, message) => {
     let porcelain = '';
     try {
-      const statusResult = await runProjectGit(context, ['status', '--porcelain']);
+      const statusResult = await runProjectGit(context, ['status', '--porcelain', '--untracked-files=no']);
       /* c8 ignore next */
       porcelain = typeof statusResult?.stdout === 'string' ? statusResult.stdout.trim() : '';
     } catch {
@@ -470,6 +486,50 @@ export const createBranchWorkflowCommits = (core) => {
 
     if (porcelain) {
       throw withStatusCode(new Error(message), 400);
+    }
+  };
+
+  const ensureNoUntrackedMergeConflicts = async (context, branchName) => {
+    try {
+      const [untrackedResult, branchDiffResult] = await Promise.all([
+        runProjectGit(context, ['status', '--porcelain', '--untracked-files=all']),
+        runProjectGit(context, ['diff', '--name-only', `main..${branchName}`])
+      ]);
+
+      const untrackedPaths = String(untrackedResult?.stdout || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('?? '))
+        .map((line) => line.slice(3).trim())
+        .filter(Boolean);
+
+      if (untrackedPaths.length === 0) {
+        return;
+      }
+
+      const branchPaths = new Set(
+        String(branchDiffResult?.stdout || '')
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+      );
+
+      const conflicting = untrackedPaths.filter((filePath) => branchPaths.has(filePath));
+      if (conflicting.length === 0) {
+        return;
+      }
+
+      const preview = conflicting.slice(0, 3).join(', ');
+      const suffix = conflicting.length > 3 ? ' …' : '';
+      throw withStatusCode(
+        new Error(`Untracked files would be overwritten by merge: ${preview}${suffix}`),
+        409
+      );
+    } catch (error) {
+      if (error?.statusCode) {
+        throw error;
+      }
+      throw withStatusCode(new Error('Unable to verify untracked merge conflicts'), 500);
     }
   };
 
@@ -821,6 +881,7 @@ export const createBranchWorkflowCommits = (core) => {
       // Require a clean working tree before attempting any merge operations.
       // This keeps merges deterministic and avoids implicitly stashing changes.
       await ensureCleanWorkingTree(context, 'Working tree must be clean before merging');
+      await ensureNoUntrackedMergeConflicts(context, branch.name);
 
       // Auto-bump is only safe when we can reliably inspect changed paths.
       const canAutoBump = typeof listBranchChangedPaths === 'function';
@@ -885,8 +946,9 @@ export const createBranchWorkflowCommits = (core) => {
 
         const currentBranch = await resolveCurrentGitBranch();
         await ensureGitBranchExists(context, branch.name);
-        await runProjectGit(context, ['checkout', branch.name]);
-        await runProjectGit(context, ['checkout', 'main']);
+        if (currentBranch !== 'main') {
+          await runProjectGit(context, ['checkout', 'main']);
+        }
 
         let preMergeSha = '';
         try {

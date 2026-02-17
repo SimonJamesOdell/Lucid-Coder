@@ -33,6 +33,63 @@ const MIN_COVERAGE_TARGET = 50;
 const MAX_COVERAGE_TARGET = 100;
 const COVERAGE_STEP = 10;
 
+const normalizeFailureFingerprintText = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/[a-z]:\\[^\s)\]]+/gi, '<path>')
+    .replace(/(?:frontend|backend|src|tests?)\/[a-z0-9._\-/]+/gi, '<path>')
+    .replace(/:\d+(?::\d+)?/g, ':#')
+    .replace(/\b\d+\b/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const buildAutofixFailureFingerprint = ({ jobsByType, visibleTestConfigs }) => {
+  const parts = [];
+
+  for (const config of visibleTestConfigs) {
+    const job = jobsByType[config.type];
+    if (!job || (job.status !== 'failed' && !isCoverageGateFailed(job))) {
+      continue;
+    }
+
+    const failingIds = extractFailingTestIdsFromJob(job).sort();
+    const jobContext = buildJobFailureContext({
+      label: config.type.startsWith('backend') ? 'Backend tests' : 'Frontend tests',
+      kind: config.type.startsWith('backend') ? 'backend' : 'frontend',
+      job
+    });
+
+    const normalizedFailureReport = normalizeFailureFingerprintText(jobContext?.failureReport || '')
+      .slice(0, 220);
+    const normalizedError = normalizeFailureFingerprintText(jobContext?.error || '').slice(0, 160);
+    const coverageFiles = Array.isArray(job?.summary?.coverage?.uncoveredLines)
+      ? job.summary.coverage.uncoveredLines
+        .map((entry) => {
+          const workspace = typeof entry?.workspace === 'string' ? entry.workspace.trim() : '';
+          const file = typeof entry?.file === 'string' ? entry.file.trim() : '';
+          return [workspace, file].filter(Boolean).join('/');
+        })
+        .filter(Boolean)
+        .sort()
+      : [];
+
+    parts.push([
+      config.type,
+      failingIds.length > 0 ? `ids:${failingIds.join('|')}` : 'ids:none',
+      normalizedFailureReport ? `report:${normalizedFailureReport}` : 'report:none',
+      normalizedError ? `error:${normalizedError}` : 'error:none',
+      coverageFiles.length > 0 ? `coverage:${coverageFiles.join('|')}` : 'coverage:none'
+    ].join(';'));
+  }
+
+  return parts.length > 0 ? parts.join(' || ') : null;
+};
+
 const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   const {
     startAutomationJob,
@@ -554,6 +611,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       }
 
       if (!activeBranchName || activeBranchName === 'main') {
+                  normalizeFailureFingerprintText,
         resetCommitResumeState();
         setResultModalVariant('danger');
         setResultModalTitle('Cannot commit');
@@ -721,26 +779,10 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
 
     // Compute a fingerprint from the current failure so the circuit breaker
     // can detect identical errors across consecutive autofix rounds.
-    const failureFingerprint = (() => {
-      const parts = [];
-      for (const config of visibleTestConfigs) {
-        const job = jobsByType[config.type];
-        /* c8 ignore next -- allTestsCompleted guarantees every visible config has a job */
-        if (!job) continue;
-        const ids = extractFailingTestIdsFromJob(job);
-        if (ids.length > 0) {
-          parts.push(`${config.type}:${ids.sort().join(',')}`);
-        } else if (isCoverageGateFailed(job)) {
-          const uncovered = job?.summary?.coverage?.uncoveredLines;
-          /* c8 ignore next 2 -- defensive: uncoveredLines is always an array when the gate fires */
-          const lineKeys = Array.isArray(uncovered)
-            ? uncovered.map((u) => `${u?.file || ''}:${(u?.lines || []).join('-')}`).sort().join('|')
-            : '';
-          parts.push(`${config.type}:cov:${lineKeys}`);
-        }
-      }
-      return parts.join(';;') || null;
-    })();
+    const failureFingerprint = buildAutofixFailureFingerprint({
+      jobsByType,
+      visibleTestConfigs
+    });
 
     const session = autoFixSessionRef.current;
     const lastRunSource = typeof testRunIntent?.source === 'string' ? testRunIntent.source : 'unknown';
@@ -780,7 +822,11 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       if (activeSession.active) {
         // Circuit breaker: halt early if the same failure fingerprint repeats,
         // meaning the previous fix attempt made no progress on the error.
-        if (failureFingerprint && activeSession.lastFailureFingerprint === failureFingerprint) {
+        const repeatedFailureCount = failureFingerprint && activeSession.lastFailureFingerprint === failureFingerprint
+          ? (Number(activeSession.repeatedFailureCount) || 0) + 1
+          : 0;
+
+        if (failureFingerprint && repeatedFailureCount >= 1) {
           autoFixSessionRef.current = {
             active: false,
             origin: 'user',
@@ -802,7 +848,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         autoFixSessionRef.current = {
           ...activeSession,
           attempt: activeSession.attempt + 1,
-          lastFailureFingerprint: failureFingerprint
+          lastFailureFingerprint: failureFingerprint,
+          repeatedFailureCount
         };
 
         triggerTestFix({ origin: activeSession.origin });
@@ -1386,10 +1433,12 @@ Object.assign(TestTab.__testHooks, {
   formatLogMessage,
   renderLogLines,
   buildProofFailureMessage,
-   buildJobFailureContext,
-   buildTestFailureContext,
+  buildJobFailureContext,
+  buildTestFailureContext,
   isCoverageGateFailed,
   buildCoverageGateMessage,
+  normalizeFailureFingerprintText,
+  buildAutofixFailureFingerprint,
   getAutofixMaxAttempts,
   setClassifyLogTokenOverride,
   resetClassifyLogTokenOverride,

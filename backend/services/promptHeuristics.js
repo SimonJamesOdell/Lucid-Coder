@@ -1,8 +1,62 @@
 const normalizePrompt = (prompt = '') => String(prompt || '').trim().toLowerCase();
 
+export const extractSelectedProjectAssets = (prompt = '') => {
+  const raw = String(prompt || '');
+  if (!raw) {
+    return [];
+  }
+
+  const lines = raw.split(/\r?\n/);
+  let startIndex = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = String(lines[index] || '').trim();
+    if (/^selected\s+project\s+assets\s*:\s*$/i.test(line)) {
+      startIndex = index + 1;
+      break;
+    }
+  }
+
+  if (startIndex < 0) {
+    return [];
+  }
+
+  const collected = [];
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const rawLine = String(lines[index] || '');
+    const line = rawLine.trim();
+
+    if (!line) {
+      if (collected.length > 0) {
+        break;
+      }
+      continue;
+    }
+
+    if (/^[A-Za-z][A-Za-z0-9 _-]{0,40}:\s*$/.test(line)) {
+      break;
+    }
+
+    const bulletMatch = line.match(/^(?:[-*•])\s+(.+)$/);
+    const candidate = bulletMatch?.[1] ? bulletMatch[1].trim() : line;
+    if (candidate) {
+      collected.push(candidate);
+    }
+  }
+
+  return Array.from(new Set(collected));
+};
+
 export const extractLatestRequest = (prompt = '') => {
   const raw = String(prompt || '');
   if (!raw) return raw;
+
+  const unwrapNestedLabel = (value, depth = 0) => {
+    const trimmed = value.trim();
+    if (!trimmed || depth >= 3) return trimmed;
+    const nested = trimmed.match(/^(?:current request|user answer|original request)\s*:\s*([\s\S]+)$/i);
+    if (!nested?.[1]) return trimmed;
+    return unwrapNestedLabel(nested[1], depth + 1);
+  };
 
   const lines = raw.split(/\r?\n/).map((line) => line.trim());
   const findValueAfterPrefix = (prefix) => {
@@ -16,15 +70,15 @@ export const extractLatestRequest = (prompt = '') => {
   };
 
   const current = findValueAfterPrefix('Current request:');
-  if (current) return current;
+  if (current) return unwrapNestedLabel(current);
 
   const answer = findValueAfterPrefix('User answer:');
-  if (answer) return answer;
+  if (answer) return unwrapNestedLabel(answer);
 
   const original = findValueAfterPrefix('Original request:');
-  if (original) return original;
+  if (original) return unwrapNestedLabel(original);
 
-  return raw;
+  return unwrapNestedLabel(raw);
 };
 
 export const isStyleOnlyPrompt = (prompt = '') => {
@@ -136,5 +190,6 @@ export const extractStyleColor = (prompt = '') => {
 export default {
   isStyleOnlyPrompt,
   extractStyleColor,
-  extractLatestRequest
+  extractLatestRequest,
+  extractSelectedProjectAssets
 };

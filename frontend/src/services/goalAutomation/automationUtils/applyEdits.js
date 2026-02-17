@@ -302,6 +302,17 @@ export const createApplyEditsModule = ({
         ? normalizePackageJsonContent(content)
         : content;
 
+      const existingContent = await applyEditsDeps.readProjectFile({ projectId, filePath });
+      const comparableExisting = isPackageJsonPath(filePath)
+        ? normalizePackageJsonContent(existingContent)
+        : existingContent;
+
+      if (typeof comparableExisting === 'string' && comparableExisting === normalizedContent) {
+        skipped += 1;
+        automationLog('skipping edit (no-op upsert)', { type, path: filePath });
+        continue;
+      }
+
       try {
         await applyEditsDeps.upsertProjectFile({
           projectId,

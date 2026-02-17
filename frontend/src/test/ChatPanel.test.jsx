@@ -8,6 +8,7 @@ import * as goalAutomationService from '../services/goalAutomationService';
 import { io } from 'socket.io-client';
 import axios from 'axios';
 import {
+  getAssistantAssetContextPaths,
   clearAssistantAssetContextPaths,
   setAssistantAssetContextPaths
 } from '../utils/assistantAssetContext';
@@ -203,6 +204,26 @@ describe('ChatPanel', () => {
       expect(toggleButton).toHaveAttribute('aria-label', 'Move assistant to right side');
     });
 
+    it('returns early when clearing assistant context without a current project', () => {
+      useAppState.mockReturnValue({
+        currentProject: null,
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        setPreviewPanelTab: mockSetPreviewPanelTab,
+        startAutomationJob: mockStartAutomationJob,
+        markTestRunIntent: mockMarkTestRunIntent,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        workingBranches: {}
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const hooks = ChatPanel.__testHooks?.handlers;
+      expect(typeof hooks?.handleClearAssistantContext).toBe('function');
+      expect(() => hooks.handleClearAssistantContext()).not.toThrow();
+    });
+
     it('renders an auto-fix stop/resume button and toggles the global halt flag', async () => {
       window.__lucidcoderAutofixHalted = false;
       render(<ChatPanel width={320} side="left" />);
@@ -225,6 +246,26 @@ describe('ChatPanel', () => {
       render(<ChatPanel width={320} side="left" />);
 
       expect(screen.getByTestId('chat-autofix-toggle')).toHaveTextContent('Resume');
+    });
+
+    it('shows clear pending actions while halted and clears pending state when clicked', async () => {
+      window.__lucidcoderAutofixHalted = false;
+      render(<ChatPanel width={320} side="left" />);
+
+      expect(screen.queryByTestId('chat-autofix-clear')).not.toBeInTheDocument();
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('chat-autofix-toggle'));
+
+      expect(window.__lucidcoderAutofixHalted).toBe(true);
+      expect(screen.getByTestId('chat-autofix-clear')).toBeInTheDocument();
+
+      await user.click(screen.getByTestId('chat-autofix-clear'));
+
+      expect(window.__lucidcoderAutofixHalted).toBe(false);
+      expect(screen.getByTestId('chat-autofix-toggle')).toHaveTextContent('■');
+      expect(screen.queryByTestId('chat-autofix-clear')).not.toBeInTheDocument();
+      expect(screen.getByText('Cleared pending agent actions.')).toBeInTheDocument();
     });
 
     it('renders toggle button on right side with left arrow icon', () => {
@@ -1772,6 +1813,24 @@ describe('ChatPanel', () => {
       expect(indicator.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
+    it('clears selected context when clicking the context clear button', async () => {
+      setAssistantAssetContextPaths(123, ['uploads/context-image.png']);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent(
+        'Included in context: uploads/context-image.png'
+      );
+
+      await userEvent.click(screen.getByTestId('chat-context-clear'));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('chat-context-indicator')).not.toBeInTheDocument();
+      });
+
+      expect(getAssistantAssetContextPaths(123)).toEqual([]);
+    });
+
     it('includes selected project assets in the request prompt context', async () => {
       goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'OK', steps: [] });
       setAssistantAssetContextPaths(123, ['uploads/background.png', 'uploads/logo.svg']);
@@ -1834,6 +1893,36 @@ describe('ChatPanel', () => {
       await waitFor(() => {
         expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent('Included in context: uploads/current.png');
       });
+    });
+
+    it('ignores automation-log events when banner text is blank', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:automation-log', {
+        detail: {
+          bannerText: '   '
+        }
+      }));
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:automation-log', {
+        detail: {
+          bannerText: null
+        }
+      }));
+
+      await waitFor(() => {
+        expect(screen.queryByText(/Thinking:/)).not.toBeInTheDocument();
+      });
+    });
+
+    it('unregisters automation-log listener on unmount', () => {
+      const removeSpy = vi.spyOn(window, 'removeEventListener');
+      const { unmount } = render(<ChatPanel width={320} side="left" />);
+
+      unmount();
+
+      expect(removeSpy).toHaveBeenCalledWith('lucidcoder:automation-log', expect.any(Function));
+      removeSpy.mockRestore();
     });
 
     it('clears assistant context selection when changed event fires without a current project', async () => {
@@ -3264,6 +3353,20 @@ describe('ChatPanel', () => {
       await waitFor(() => {
         expect(screen.getByTestId('chat-typing')).toBeInTheDocument();
         expect(screen.getByTestId('chat-typing-topic')).toHaveTextContent('Thinking about: Test message');
+      });
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:automation-log', {
+        detail: {
+          label: 'processGoal:phase',
+          details: { phase: 'implementing' },
+          bannerText: 'processGoal:phase'
+        }
+      }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-typing-topic')).toHaveTextContent(
+          'Thinking about: processGoal:phase'
+        );
       });
     });
 

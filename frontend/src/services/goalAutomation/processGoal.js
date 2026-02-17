@@ -39,6 +39,14 @@ const classifyInstructionOnlyGoal = (prompt) => {
   if (normalized.startsWith('stage ') || normalized.includes('stage the updated')) {
     return 'stage-only';
   }
+  if (
+    normalized.includes('verify visual integration') ||
+    normalized.includes('manually verify') ||
+    normalized.includes('visual verification') ||
+    /^run\s+(?:the\s+)?(?:frontend|backend)\s+(?:dev\s+server|server)\b/.test(normalized)
+  ) {
+    return 'verification-only';
+  }
   return null;
 };
 
@@ -48,6 +56,9 @@ const describeInstructionOnlyOutcome = (type) => {
   }
   if (type === 'stage-only') {
     return 'Files are already staged after edits';
+  }
+  if (type === 'verification-only') {
+    return 'Manual verification step acknowledged';
   }
   return 'No edits required';
 };

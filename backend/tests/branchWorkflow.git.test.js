@@ -1957,6 +1957,55 @@ describe('branchWorkflow git-ready operations', () => {
     });
   });
 
+  it('allows merges when only untracked files are present in git status', async () => {
+    const targetPath = `C:/tmp/git-merge-untracked-only-${Date.now()}`;
+
+    await runGitScenario(async ({ branchWorkflow, createProject, forceGitContext, gitSpies }) => {
+      gitSpies.runGitCommand.mockImplementation(async (projectPath, args) => {
+        if (
+          projectPath === targetPath
+          && Array.isArray(args)
+          && args[0] === 'status'
+          && args[1] === '--porcelain'
+        ) {
+          if (args[2] === '--untracked-files=no') {
+            return { stdout: '' };
+          }
+          return { stdout: '?? coverage/tmp-report.txt\n' };
+        }
+        return { stdout: '' };
+      });
+
+      const project = await createProject({
+        ...createProjectPayload('-merge-untracked-only'),
+        path: targetPath
+      });
+      forceGitContext(project.id, targetPath);
+
+      await branchWorkflow.createWorkingBranch(project.id, { name: 'feature/untracked-only-merge' });
+
+      const branchRow = await branchWorkflow.__testing.getSql(
+        'SELECT id FROM branches WHERE project_id = ? AND name = ?',
+        [project.id, 'feature/untracked-only-merge']
+      );
+
+      await branchWorkflow.__testing.runSql(
+        'UPDATE branches SET status = ? WHERE id = ?',
+        ['ready-for-merge', branchRow.id]
+      );
+
+      await branchWorkflow.__testing.runSql(
+        `INSERT INTO test_runs (project_id, branch_id, status, created_at, completed_at)
+         VALUES (?, ?, 'passed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [project.id, branchRow.id]
+      );
+
+      const result = await branchWorkflow.mergeBranch(project.id, 'feature/untracked-only-merge');
+
+      expect(result).toMatchObject({ mergedBranch: 'feature/untracked-only-merge', current: 'main' });
+    });
+  });
+
   it('getBranchOverview tolerates css-only detection failures (covers catch fallback)', async () => {
     const targetPath = `C:/tmp/git-overview-css-only-failure-${Date.now()}`;
 
@@ -2221,6 +2270,14 @@ describe('branchWorkflow git-ready operations', () => {
                 return { stdout: '', stderr: '', code: 0 };
               }
 
+              if (args[0] === 'diff' && args[1] === '--cached' && args[2] === '--name-only') {
+                return {
+                  stdout: 'CHANGELOG.md\nVERSION\nfrontend/package.json\nbackend/package.json\n',
+                  stderr: '',
+                  code: 0
+                };
+              }
+
               if (args[0] === 'commit' && args[1] === '-m') {
                 headSha = `sha-main-bump-${Date.now()}`;
                 return { stdout: '', stderr: '', code: 0 };
@@ -2442,6 +2499,10 @@ describe('branchWorkflow git-ready operations', () => {
 
               if (args[0] === 'add') {
                 return { stdout: '', stderr: '', code: 0 };
+              }
+
+              if (args[0] === 'diff' && args[1] === '--cached' && args[2] === '--name-only') {
+                return { stdout: 'CHANGELOG.md\nVERSION\n', stderr: '', code: 0 };
               }
 
               if (args[0] === 'commit' && args[1] === '-m' && String(args[2] || '').startsWith('chore: bump version to')) {

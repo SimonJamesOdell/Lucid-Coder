@@ -10,6 +10,10 @@ vi.mock('../services/agentUiCommands.js', () => ({
   sendAgentUiCommand: vi.fn()
 }));
 
+vi.mock('../services/branchWorkflow.js', () => ({
+  stageWorkspaceChange: vi.fn().mockResolvedValue({ success: true })
+}));
+
 vi.mock('../routes/projects/cleanup.js', () => ({
   isWithinManagedProjectsRoot: vi.fn(() => true)
 }));
@@ -90,6 +94,7 @@ describe('Project file routes emit OPEN_FILE commands', () => {
 
   it('POST /api/projects/:id/files-ops/create-file sends OPEN_FILE when io is present', async () => {
     const { sendAgentUiCommand } = await import('../services/agentUiCommands.js');
+    const { stageWorkspaceChange } = await import('../services/branchWorkflow.js');
 
     await request(app)
       .post('/api/projects/123/files-ops/create-file')
@@ -101,5 +106,6 @@ describe('Project file routes emit OPEN_FILE commands', () => {
       projectId: '123',
       command: { type: 'OPEN_FILE', payload: { filePath: 'src/newFile.js' } }
     });
+    expect(stageWorkspaceChange).not.toHaveBeenCalled();
   });
 });

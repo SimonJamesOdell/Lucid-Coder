@@ -568,6 +568,79 @@ describe('planGoalFromPrompt', () => {
     ]);
   });
 
+  it('uses the latest current request for planning when prompt includes conversation wrappers', async () => {
+    const wrappedPrompt = [
+      'Conversation context:',
+      'User: make the page yellow',
+      'Assistant: sure',
+      '',
+      'Current request: Use the image as the site background'
+    ].join('\n');
+
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [{ prompt: 'Implement background image usage from selected assets' }]
+      })
+    );
+
+    const result = await planGoalFromPrompt({ projectId: 911, prompt: wrappedPrompt });
+
+    const plannerMessages = llmClient.generateResponse.mock.calls[0]?.[0] || [];
+    const userMessage = plannerMessages.find((message) => message?.role === 'user');
+
+    expect(userMessage?.content || '').toContain('Use the image as the site background');
+    expect(userMessage?.content || '').not.toContain('Conversation context:');
+    expect(result.parent.prompt).toBe('Use the image as the site background');
+  });
+
+  it('includes selected project assets in planner context when present', async () => {
+    const wrappedPrompt = [
+      'Conversation context:',
+      'User: use the image',
+      '',
+      'Selected project assets:',
+      '- uploads/bg.png',
+      '',
+      'Current request: Use the image as the site background'
+    ].join('\n');
+
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [{ prompt: 'Apply the provided image asset as page background' }]
+      })
+    );
+
+    await planGoalFromPrompt({ projectId: 912, prompt: wrappedPrompt });
+
+    const plannerMessages = llmClient.generateResponse.mock.calls[0]?.[0] || [];
+    const userMessage = plannerMessages.find((message) => message?.role === 'user');
+
+    expect(userMessage?.content || '').toContain('Selected project assets:');
+    expect(userMessage?.content || '').toContain('uploads/bg.png');
+  });
+
+  it('falls back to the original prompt when extractLatestRequest returns a non-string', async () => {
+    const promptHeuristics = await import('../services/promptHeuristics.js');
+    const latestRequestSpy = vi.spyOn(promptHeuristics, 'extractLatestRequest').mockReturnValueOnce({ value: 'invalid' });
+
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [{ prompt: 'Use fallback prompt for planning context' }]
+      })
+    );
+
+    const rawPrompt = 'Build dashboard widgets';
+    const result = await planGoalFromPrompt({ projectId: 917, prompt: rawPrompt });
+
+    const plannerMessages = llmClient.generateResponse.mock.calls[0]?.[0] || [];
+    const userMessage = plannerMessages.find((message) => message?.role === 'user');
+
+    expect(userMessage?.content || '').toContain(rawPrompt);
+    expect(result.parent.prompt).toBe(rawPrompt);
+
+    latestRequestSpy.mockRestore();
+  });
+
   it('retries planning for compound prompts even without near-duplicate child goals', async () => {
     llmClient.generateResponse
       .mockResolvedValueOnce(

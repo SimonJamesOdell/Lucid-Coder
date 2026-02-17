@@ -155,7 +155,13 @@ describe('commitsApi.mergeBranch changelog + bump coverage', () => {
       'utf8'
     );
 
-    runProjectGit.mockResolvedValue({ stdout: '' });
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd.startsWith('add ')) return { stdout: '' };
+      if (cmd.startsWith('diff --cached --name-only -- ')) return { stdout: 'CHANGELOG.md\nVERSION\n' };
+      if (cmd.startsWith('commit -m')) return { stdout: '' };
+      return { stdout: '' };
+    });
 
     const { __testOnly } = api();
     const result = await __testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: tmpDir }, branchName);
@@ -173,10 +179,113 @@ describe('commitsApi.mergeBranch changelog + bump coverage', () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-commits-'));
     await fs.writeFile(path.join(tmpDir, 'VERSION'), '0.1.0\n', 'utf8');
 
-    runProjectGit.mockResolvedValue({ stdout: '' });
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd.startsWith('add ')) return { stdout: '' };
+      if (cmd.startsWith('diff --cached --name-only -- ')) {
+        return { stdout: 'CHANGELOG.md\nVERSION\nfrontend/package.json\nbackend/package.json\n' };
+      }
+      if (cmd.startsWith('commit -m')) return { stdout: '' };
+      return { stdout: '' };
+    });
     const { __testOnly } = api();
 
     await expect(__testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: tmpDir }, branchName)).resolves.toBe(null);
+  });
+
+  it('bumpVersionAfterMerge skips commit when git staged diff has no files', async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-commits-'));
+    await fs.writeFile(path.join(tmpDir, 'VERSION'), '0.1.0\n', 'utf8');
+    await fs.writeFile(
+      path.join(tmpDir, 'CHANGELOG.md'),
+      ['# Changelog', '', '## Unreleased', '', '- note', ''].join('\n'),
+      'utf8'
+    );
+
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd.startsWith('add ')) return { stdout: '' };
+      if (cmd.startsWith('diff --cached --name-only -- ')) return { stdout: '' };
+      if (cmd.startsWith('commit -m')) return { stdout: '' };
+      return { stdout: '' };
+    });
+
+    const { __testOnly } = api();
+    await expect(__testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: tmpDir }, branchName)).resolves.toBe(null);
+
+    const commitCalls = runProjectGit.mock.calls
+      .map((call) => call[1].join(' '))
+      .filter((cmd) => cmd.startsWith('commit -m'));
+    expect(commitCalls).toHaveLength(0);
+  });
+
+  it('bumpVersionAfterMerge tolerates commit no-op errors', async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-commits-'));
+    await fs.writeFile(path.join(tmpDir, 'VERSION'), '0.1.0\n', 'utf8');
+    await fs.writeFile(
+      path.join(tmpDir, 'CHANGELOG.md'),
+      ['# Changelog', '', '## Unreleased', '', '- note', ''].join('\n'),
+      'utf8'
+    );
+
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd.startsWith('add ')) return { stdout: '' };
+      if (cmd.startsWith('diff --cached --name-only -- ')) return { stdout: 'CHANGELOG.md\nVERSION\n' };
+      if (cmd.startsWith('commit -m')) throw new Error('nothing to commit, working tree clean');
+      return { stdout: '' };
+    });
+
+    const { __testOnly } = api();
+    await expect(__testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: tmpDir }, branchName)).resolves.toBe(null);
+  });
+
+  it('bumpVersionAfterMerge accepts non-string staged diff stdout values', async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-commits-'));
+    await fs.writeFile(path.join(tmpDir, 'VERSION'), '0.1.0\n', 'utf8');
+    await fs.writeFile(
+      path.join(tmpDir, 'CHANGELOG.md'),
+      ['# Changelog', '', '## Unreleased', '', '- note', ''].join('\n'),
+      'utf8'
+    );
+
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd.startsWith('add ')) return { stdout: '' };
+      if (cmd.startsWith('diff --cached --name-only -- ')) return { stdout: Buffer.from('CHANGELOG.md\nVERSION\n') };
+      if (cmd.startsWith('commit -m')) return { stdout: '' };
+      return { stdout: '' };
+    });
+
+    const { __testOnly } = api();
+    await expect(__testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: tmpDir }, branchName)).resolves.toMatchObject({
+      previous: '0.1.0',
+      next: '0.1.1'
+    });
+  });
+
+  it('bumpVersionAfterMerge wraps non-message errors from commit failures', async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lucidcoder-commits-'));
+    await fs.writeFile(path.join(tmpDir, 'VERSION'), '0.1.0\n', 'utf8');
+    await fs.writeFile(
+      path.join(tmpDir, 'CHANGELOG.md'),
+      ['# Changelog', '', '## Unreleased', '', '- note', ''].join('\n'),
+      'utf8'
+    );
+
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd.startsWith('add ')) return { stdout: '' };
+      if (cmd.startsWith('diff --cached --name-only -- ')) return { stdout: 'CHANGELOG.md\nVERSION\n' };
+      if (cmd.startsWith('commit -m')) throw {};
+      return { stdout: '' };
+    });
+
+    const { __testOnly } = api();
+    await expect(__testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: tmpDir }, branchName)).rejects.toMatchObject({
+      statusCode: 500,
+      message: expect.stringContaining('Failed to bump version after merge')
+    });
   });
 
   it('bumpVersionAfterMerge uses default VERSION when missing and stages package.json files when present', async () => {
@@ -200,7 +309,15 @@ describe('commitsApi.mergeBranch changelog + bump coverage', () => {
       'utf8'
     );
 
-    runProjectGit.mockResolvedValue({ stdout: '' });
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd.startsWith('add ')) return { stdout: '' };
+      if (cmd.startsWith('diff --cached --name-only -- ')) {
+        return { stdout: 'CHANGELOG.md\nVERSION\nfrontend/package.json\nbackend/package.json\n' };
+      }
+      if (cmd.startsWith('commit -m')) return { stdout: '' };
+      return { stdout: '' };
+    });
     const { __testOnly } = api();
     const result = await __testOnly.bumpVersionAfterMerge({ gitReady: true, projectPath: tmpDir }, branchName);
 

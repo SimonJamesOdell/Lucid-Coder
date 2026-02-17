@@ -20,6 +20,10 @@ vi.mock('../services/agentUiCommands.js', () => ({
   sendAgentUiCommand: vi.fn()
 }));
 
+vi.mock('../services/branchWorkflow.js', () => ({
+  stageWorkspaceChange: vi.fn().mockResolvedValue({ success: true })
+}));
+
 vi.mock('../routes/projects/cleanup.js', () => ({
   isWithinManagedProjectsRoot: vi.fn(() => true)
 }));
@@ -569,6 +573,7 @@ describe('Project file routes assets coverage', () => {
 
   it('POST /api/projects/:id/files-ops/create-file handles base64 content and openInEditor=false', async () => {
     const { sendAgentUiCommand } = await import('../services/agentUiCommands.js');
+    const { stageWorkspaceChange } = await import('../services/branchWorkflow.js');
 
     await request(app)
       .post('/api/projects/321/files-ops/create-file')
@@ -585,6 +590,10 @@ describe('Project file routes assets coverage', () => {
     expect(Buffer.isBuffer(writeArgs[1])).toBe(true);
     expect(writeArgs[2]).toEqual({ flag: 'wx' });
     expect(sendAgentUiCommand).not.toHaveBeenCalled();
+    expect(stageWorkspaceChange).toHaveBeenCalledWith('321', {
+      filePath: 'uploads/test.bin',
+      source: 'editor'
+    });
   });
 
   it('POST /api/projects/:id/files-ops/create-file writes utf-8 content when encoding is omitted', async () => {

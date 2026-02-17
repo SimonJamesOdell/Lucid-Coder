@@ -1,5 +1,6 @@
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import {
+  automationLog,
   buildFallbackBranchNameFromPrompt,
   extractBranchPromptContext,
   isBranchNameRelevantToPrompt
@@ -60,5 +61,48 @@ describe('automationUtils coverage helpers', () => {
   test('isBranchNameRelevantToPrompt checks for token overlap when prompt is specific', () => {
     expect(isBranchNameRelevantToPrompt('feature/added-login-button', 'Add login button to header')).toBe(true);
     expect(isBranchNameRelevantToPrompt('feature/updated-readme', 'Add login button to header')).toBe(false);
+  });
+
+  test('automationLog emits empty banner text for blank labels', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    automationLog('   ', { sample: true });
+
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'lucidcoder:automation-log',
+      detail: expect.objectContaining({ bannerText: '' })
+    }));
+
+    dispatchSpy.mockRestore();
+  });
+
+  test('automationLog treats non-string labels as empty banner text', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    automationLog(null, { sample: true });
+
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'lucidcoder:automation-log',
+      detail: expect.objectContaining({ bannerText: '' })
+    }));
+
+    dispatchSpy.mockRestore();
+  });
+
+  test('automationLog tolerates missing window.dispatchEvent', () => {
+    const originalDispatch = window.dispatchEvent;
+    Object.defineProperty(window, 'dispatchEvent', {
+      configurable: true,
+      writable: true,
+      value: undefined
+    });
+
+    expect(() => automationLog('label', { sample: true })).not.toThrow();
+
+    Object.defineProperty(window, 'dispatchEvent', {
+      configurable: true,
+      writable: true,
+      value: originalDispatch
+    });
   });
 });

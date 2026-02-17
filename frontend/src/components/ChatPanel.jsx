@@ -35,8 +35,10 @@ import { buildAutopilotJobLogLines } from './chatPanel/jobLogs.js';
 import { updateChatPanelTestHooks } from './chatPanel/testHooks.js';
 import {
   ASSISTANT_ASSET_CONTEXT_CHANGED_EVENT,
+  clearAssistantAssetContextPaths,
   getAssistantAssetContextPaths
 } from '../utils/assistantAssetContext';
+import { AUTOMATION_LOG_EVENT } from '../services/goalAutomation/automationUtils';
 
 export { formatAgentStepMessage };
 
@@ -52,6 +54,7 @@ const ChatPanel = ({
   const [goalCount, setGoalCount] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const [thinkingTopic, setThinkingTopic] = useState('');
+  const [thinkingAutomationTopic, setThinkingAutomationTopic] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [showAgentDebug, setShowAgentDebug] = useState(false);
   const [pendingClarification, setPendingClarification] = useState(null);
@@ -408,6 +411,14 @@ const ChatPanel = ({
     };
   }, [currentProject?.id]);
 
+  const handleClearAssistantContext = useCallback(() => {
+    if (!currentProject?.id) {
+      return;
+    }
+    clearAssistantAssetContextPaths(currentProject.id);
+    setSelectedAssistantAssetPaths([]);
+  }, [currentProject?.id]);
+
   useEffect(() => {
     if (
       typeof window === 'undefined' ||
@@ -581,6 +592,31 @@ const ChatPanel = ({
       return undefined;
     }
 
+    const handleAutomationLog = (event) => {
+      const bannerText = typeof event?.detail?.bannerText === 'string'
+        ? event.detail.bannerText.trim()
+        : '';
+      if (!bannerText) {
+        return;
+      }
+      setThinkingAutomationTopic(bannerText);
+    };
+
+    window.addEventListener(AUTOMATION_LOG_EVENT, handleAutomationLog);
+    return () => {
+      window.removeEventListener(AUTOMATION_LOG_EVENT, handleAutomationLog);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      typeof window.addEventListener !== 'function' ||
+      typeof window.removeEventListener !== 'function'
+    ) {
+      return undefined;
+    }
+
     const handleAssistantAssetContextChanged = (event) => {
       if (!currentProject?.id) {
         setSelectedAssistantAssetPaths([]);
@@ -616,6 +652,18 @@ const ChatPanel = ({
     }
     setAutofixHaltFlag(!autoFixHalted);
   };
+
+  const handleClearPendingAgentActions = useCallback(() => {
+    autoFixCancelRef.current = true;
+    setAutofixHaltFlag(false);
+    setThinkingAutomationTopic('');
+    setThinkingTopic('');
+    setIsSending(false);
+    setMessages((prev) => [
+      ...prev,
+      createMessage('assistant', 'Cleared pending agent actions.', { variant: 'status' })
+    ]);
+  }, [createMessage, setAutofixHaltFlag]);
 
   const panelClassName = `chat-panel ${side === 'right' ? 'chat-panel--right' : 'chat-panel--left'} ${isResizing ? 'chat-panel--resizing' : ''}`;
   const panelStyle = {
@@ -925,6 +973,7 @@ const ChatPanel = ({
     }
 
     setErrorMessage('');
+    setThinkingAutomationTopic('');
     setThinkingTopic(trimmed);
     setIsSending(true);
 
@@ -961,7 +1010,11 @@ const ChatPanel = ({
             ...(() => {
               const selectedAssetPaths = getAssistantAssetContextPaths(currentProject.id);
               return selectedAssetPaths.length
-                ? ['Selected project assets:', ...selectedAssetPaths.map((path) => `- ${path}`)]
+                ? [
+                  'Selected project assets:',
+                  ...selectedAssetPaths.map((path) => `- ${path}`),
+                  'Asset URL policy: when referencing selected assets in web code, use root-relative URLs like /uploads/<filename>.'
+                ]
                 : [];
             })(),
             `User answer: ${trimmed}`
@@ -971,7 +1024,11 @@ const ChatPanel = ({
             (() => {
               const selectedAssetPaths = getAssistantAssetContextPaths(currentProject.id);
               return selectedAssetPaths.length
-                ? `Selected project assets:\n${selectedAssetPaths.map((path) => `- ${path}`).join('\n')}`
+                ? [
+                  'Selected project assets:',
+                  ...selectedAssetPaths.map((path) => `- ${path}`),
+                  'Asset URL policy: when referencing selected assets in web code, use root-relative URLs like /uploads/<filename>.'
+                ].join('\n')
                 : '';
             })(),
             `Current request: ${trimmed}`
@@ -996,10 +1053,12 @@ const ChatPanel = ({
         console.warn('Failed to stage AI request', error);
         setErrorMessage(resolveAgentErrorMessage(error));
       } finally {
+        setThinkingAutomationTopic('');
         setThinkingTopic('');
         setIsSending(false);
       }
     } else {
+      setThinkingAutomationTopic('');
       setThinkingTopic('');
       setIsSending(false);
     }
@@ -1045,6 +1104,7 @@ const ChatPanel = ({
     autoFixInFlightRef.current = true;
     autoFixCancelRef.current = false;
     setErrorMessage('');
+    setThinkingAutomationTopic('');
     setThinkingTopic(prompt);
     setIsSending(true);
 
@@ -1192,6 +1252,7 @@ const ChatPanel = ({
         createMessage('assistant', message, { variant: 'error' })
       ]);
     } finally {
+      setThinkingAutomationTopic('');
       setThinkingTopic('');
       setIsSending(false);
       autoFixInFlightRef.current = false;
@@ -1313,6 +1374,7 @@ const ChatPanel = ({
 
   if (ChatPanel.__testHooks?.handlers) {
     ChatPanel.__testHooks.handlers.submitPrompt = submitPrompt;
+    ChatPanel.__testHooks.handlers.handleClearAssistantContext = handleClearAssistantContext;
     ChatPanel.__testHooks.handlers.handleClarificationSubmit = handleClarificationSubmit;
     ChatPanel.__testHooks.handlers.runAutomatedTestFixGoal = runAutomatedTestFixGoal;
     ChatPanel.__testHooks.handlers.runAgentRequestStream = runAgentRequestStream;
@@ -1337,6 +1399,17 @@ const ChatPanel = ({
           >
             {assistantToggleLabel}
           </button>
+          {!autopilotIsActive && autoFixHalted ? (
+            <button
+              type="button"
+              className="chat-autofix-clear"
+              data-testid="chat-autofix-clear"
+              onClick={handleClearPendingAgentActions}
+              title="Clear pending agent actions"
+            >
+              Clear
+            </button>
+          ) : null}
           <button
             type="button"
             className={`chat-debug-toggle${showAgentDebug ? ' is-active' : ''}`}
@@ -1396,9 +1469,9 @@ const ChatPanel = ({
         {isSending ? (
           <div className="chat-typing" data-testid="chat-typing">
             {/* c8 ignore start */}
-            {thinkingTopic ? (
+            {thinkingAutomationTopic || thinkingTopic ? (
               <span className="chat-typing__topic" data-testid="chat-typing-topic">
-                Thinking about: {thinkingTopic}
+                Thinking about: {thinkingAutomationTopic || thinkingTopic}
               </span>
             ) : null}
             {/* c8 ignore stop */}
@@ -1629,7 +1702,18 @@ const ChatPanel = ({
 
       {selectedAssistantAssetPath ? (
         <div className="chat-context-indicator" data-testid="chat-context-indicator">
-          Included in context: {selectedAssistantAssetPath}
+          <span className="chat-context-indicator__text">
+            Included in context: {selectedAssistantAssetPath}
+          </span>
+          <button
+            type="button"
+            className="chat-context-indicator__clear"
+            data-testid="chat-context-clear"
+            aria-label="Clear included context"
+            onClick={handleClearAssistantContext}
+          >
+            ×
+          </button>
         </div>
       ) : null}
 

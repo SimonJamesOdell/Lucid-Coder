@@ -5536,7 +5536,10 @@ line2"}]}`;
       const result = await promise;
 
       expect(result).toEqual({ success: true });
-      expect(dispatchSpy).not.toHaveBeenCalled();
+      const goalsUpdatedEvents = dispatchSpy.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event?.type === 'lucidcoder:goals-updated');
+      expect(goalsUpdatedEvents).toHaveLength(0);
       dispatchSpy.mockRestore();
       if (!originalWindow) {
         delete globalThis.window;

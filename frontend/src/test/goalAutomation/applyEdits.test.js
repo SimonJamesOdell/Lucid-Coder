@@ -745,6 +745,25 @@ describe('applyEdits modify fallbacks', () => {
     expect(result).toEqual({ applied: 1, skipped: 0 });
     expect(onFileApplied).toHaveBeenCalledWith('frontend/src/New.jsx', { type: 'upsert' });
   });
+
+  test('skips no-op upsert edits when content is unchanged', async () => {
+    deps.readProjectFile.mockResolvedValue('export default 1;');
+    const onFileApplied = vi.fn();
+
+    const result = await automationUtils.applyEdits({
+      projectId,
+      edits: [
+        { type: 'upsert', path: 'frontend/src/New.jsx', content: 'export default 1;' }
+      ],
+      onFileApplied,
+      stage: 'tests'
+    });
+
+    expect(result).toEqual({ applied: 0, skipped: 1 });
+    expect(deps.upsertProjectFile).not.toHaveBeenCalled();
+    expect(deps.stageProjectFile).not.toHaveBeenCalled();
+    expect(onFileApplied).not.toHaveBeenCalled();
+  });
 });
 
 describe('buildRelevantFilesContext edge cases', () => {
