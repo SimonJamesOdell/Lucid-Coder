@@ -7,6 +7,10 @@ import * as goalsApi from '../utils/goalsApi';
 import * as goalAutomationService from '../services/goalAutomationService';
 import { io } from 'socket.io-client';
 import axios from 'axios';
+import {
+  clearAssistantAssetContextPaths,
+  setAssistantAssetContextPaths
+} from '../utils/assistantAssetContext';
 
 vi.mock('../context/AppStateContext');
 vi.mock('../utils/goalsApi');
@@ -122,6 +126,7 @@ describe('ChatPanel', () => {
     goalAutomationService.processGoals.mockResolvedValue({ success: true, processed: 1 });
 
     mockStartAutomationJob.mockResolvedValue({ success: true });
+    clearAssistantAssetContextPaths(123);
   });
 
   afterEach(() => {
@@ -1753,6 +1758,111 @@ describe('ChatPanel', () => {
       expect(lastPrompt).toBe('Current request: Hello');
     });
 
+    it('shows selected context file above the text input area', () => {
+      setAssistantAssetContextPaths(123, ['uploads/context-image.png']);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const indicator = screen.getByTestId('chat-context-indicator');
+      const input = screen.getByTestId('chat-input');
+
+      expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent(
+        'Included in context: uploads/context-image.png'
+      );
+      expect(indicator.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('includes selected project assets in the request prompt context', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'OK', steps: [] });
+      setAssistantAssetContextPaths(123, ['uploads/background.png', 'uploads/logo.svg']);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Use selected assets');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+
+      const prompt = goalsApi.agentRequest.mock.calls[0][0].prompt;
+      expect(prompt).toContain('Selected project assets:');
+      expect(prompt).toContain('- uploads/background.png');
+      expect(prompt).toContain('- uploads/logo.svg');
+      expect(prompt).toContain('Current request: Use selected assets');
+    });
+
+    it('filters assistant context event paths and falls back to stored paths when paths are omitted', async () => {
+      setAssistantAssetContextPaths(123, ['uploads/stored.png']);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:assistant-asset-context-changed', {
+        detail: {
+          projectId: 123,
+          paths: ['uploads/new.png', '', '   ', null, 0]
+        }
+      }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent('Included in context: uploads/new.png');
+      });
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:assistant-asset-context-changed', {
+        detail: {
+          projectId: 123
+        }
+      }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent('Included in context: uploads/stored.png');
+      });
+    });
+
+    it('ignores assistant context events for different projects', async () => {
+      setAssistantAssetContextPaths(123, ['uploads/current.png']);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:assistant-asset-context-changed', {
+        detail: {
+          projectId: 999,
+          paths: ['uploads/other.png']
+        }
+      }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent('Included in context: uploads/current.png');
+      });
+    });
+
+    it('clears assistant context selection when changed event fires without a current project', async () => {
+      useAppState.mockReturnValue({
+        currentProject: null,
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        setPreviewPanelTab: mockSetPreviewPanelTab,
+        startAutomationJob: mockStartAutomationJob,
+        markTestRunIntent: mockMarkTestRunIntent,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        workingBranches: {}
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:assistant-asset-context-changed', {
+        detail: {
+          projectId: 123,
+          paths: ['uploads/other.png']
+        }
+      }));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('chat-context-indicator')).not.toBeInTheDocument();
+      });
+    });
+
     it('handles missing containers in scroll helpers', () => {
       render(<ChatPanel width={320} side="left" />);
 
@@ -2139,6 +2249,72 @@ describe('ChatPanel', () => {
       });
 
       expect(goalsApi.agentRequest.mock.calls[2][0].prompt).toContain('Current request: Third');
+    });
+
+    it('keeps nested current-request prefix and selected assets in clarified prompts', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Ok', steps: [] });
+      goalsApi.fetchGoals.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+      setAssistantAssetContextPaths(123, ['uploads/clarify.png']);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      expect(instance?.setPendingClarification).toEqual(expect.any(Function));
+
+      await act(async () => {
+        instance.setPendingClarification({
+          projectId: 123,
+          prompt: 'Current request: Keep this line',
+          questions: ['Need details?']
+        });
+      });
+
+      const submitPrompt = ChatPanel.__testHooks?.handlers?.submitPrompt;
+      expect(submitPrompt).toEqual(expect.any(Function));
+
+      await act(async () => {
+        await submitPrompt('Answer from hooks');
+      });
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+
+      const clarifiedPrompt = goalsApi.agentRequest.mock.calls[0][0].prompt;
+      expect(clarifiedPrompt).toContain('Original request: Current request: Keep this line');
+      expect(clarifiedPrompt).toContain('Selected project assets:');
+      expect(clarifiedPrompt).toContain('- uploads/clarify.png');
+      expect(clarifiedPrompt).toContain('User answer: Answer from hooks');
+    });
+
+    it('normalizes non-string clarification prompts to an empty current request', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'Ok', steps: [] });
+      goalsApi.fetchGoals.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      expect(instance?.setPendingClarification).toEqual(expect.any(Function));
+
+      await act(async () => {
+        instance.setPendingClarification({
+          projectId: 123,
+          prompt: null,
+          questions: ['Need details?']
+        });
+      });
+
+      const submitPrompt = ChatPanel.__testHooks?.handlers?.submitPrompt;
+      await act(async () => {
+        await submitPrompt('Answer from null prompt');
+      });
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+
+      expect(goalsApi.agentRequest.mock.calls[0][0].prompt).toContain('Original request: Current request: ');
     });
 
     it('logs a warning when stale goal cleanup fails after clarification', async () => {

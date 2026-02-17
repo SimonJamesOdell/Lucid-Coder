@@ -899,7 +899,15 @@ export const createBranchWorkflowCommits = (core) => {
           preMergeSha = '';
         }
 
-        await runProjectGit(context, ['merge', '--no-ff', branch.name]);
+        try {
+          await runProjectGit(context, ['merge', '--no-ff', branch.name]);
+        } catch (error) {
+          await runProjectGit(context, ['merge', '--abort']).catch(() => null);
+          throw withStatusCode(
+            new Error(`Git merge could not be completed automatically: ${error?.message || 'unknown merge failure'}`),
+            409
+          );
+        }
 
         if (!preMergeBumpPerformed) {
           try {

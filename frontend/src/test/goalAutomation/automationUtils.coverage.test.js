@@ -1,10 +1,42 @@
 import { describe, test, expect } from 'vitest';
 import {
   buildFallbackBranchNameFromPrompt,
+  extractBranchPromptContext,
   isBranchNameRelevantToPrompt
 } from '../../services/goalAutomation/automationUtils.js';
 
 describe('automationUtils coverage helpers', () => {
+  test('extractBranchPromptContext uses direct user answer when no current request exists', () => {
+    const prompt = [
+      'Original request: Improve dashboard clarity',
+      'User answer:   tighten spacing around cards',
+      '  and align icon labels  '
+    ].join('\n');
+
+    expect(extractBranchPromptContext(prompt)).toBe('tighten spacing around cards');
+  });
+
+  test('extractBranchPromptContext unwraps nested original request current request content', () => {
+    const prompt = [
+      'Original request: Current request:',
+      '  make footer links more compact',
+      'Clarification questions:',
+      '- none'
+    ].join('\n');
+
+    expect(extractBranchPromptContext(prompt)).toBe('make footer links more compact');
+  });
+
+  test('extractBranchPromptContext falls back to original request text when nested context is not extractable', () => {
+    const prompt = [
+      'Original request: Current request:',
+      'Clarification questions:',
+      '- none'
+    ].join('\n');
+
+    expect(extractBranchPromptContext(prompt)).toBe('Current request:');
+  });
+
   test('buildFallbackBranchNameFromPrompt returns fallback when prompt is empty', () => {
     expect(buildFallbackBranchNameFromPrompt('', 'feature-123')).toBe('feature-123');
     expect(buildFallbackBranchNameFromPrompt('   ', 'feature-123')).toBe('feature-123');

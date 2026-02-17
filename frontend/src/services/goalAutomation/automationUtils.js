@@ -22,6 +22,7 @@ import {
 } from './automationUtils/reflection.js';
 import {
   buildFallbackBranchNameFromPrompt,
+  extractBranchPromptContext,
   extractBranchName,
   isBranchNameRelevantToPrompt,
   isValidBranchName,
@@ -32,6 +33,7 @@ export {
   buildFallbackBranchNameFromPrompt,
   buildScopeReflectionPrompt,
   deriveStyleScopeContract,
+  extractBranchPromptContext,
   extractBranchName,
   extractJsonObject,
   isBranchNameRelevantToPrompt,

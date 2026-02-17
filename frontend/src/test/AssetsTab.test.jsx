@@ -4,6 +4,11 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import AssetsTab from '../components/AssetsTab';
+import {
+  clearAssistantAssetContextPaths,
+  getAssistantAssetContextPaths,
+  setAssistantAssetContextPaths
+} from '../utils/assistantAssetContext';
 
 const mockAxios = axios;
 
@@ -55,6 +60,7 @@ beforeEach(() => {
   mockAxios.post.mockReset();
   window.confirm = vi.fn(() => true);
   window.alert = vi.fn();
+  clearAssistantAssetContextPaths(project.id);
 });
 
 describe('AssetsTab', () => {
@@ -77,6 +83,34 @@ describe('AssetsTab', () => {
     expect(cards).toHaveLength(4);
     expect(screen.getByText('Dimensions: 1024 × 1536 px')).toBeInTheDocument();
     expect(screen.queryByText('No uploaded assets yet. Use the + button in chat to add files.')).not.toBeInTheDocument();
+  });
+
+  test('toggles include in AI context without opening the viewer', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const videoCard = cards.find((card) => within(card).queryByText('uploads/clip.mp4'));
+    const imageCheckbox = within(imageCard).getByRole('checkbox', { name: 'Include in AI context' });
+    const videoCheckbox = within(videoCard).getByRole('checkbox', { name: 'Include in AI context' });
+
+    await user.click(imageCheckbox);
+
+    expect(screen.queryByTestId('asset-viewer')).not.toBeInTheDocument();
+    expect(imageCheckbox).toBeChecked();
+    expect(videoCheckbox).toBeDisabled();
+    expect(videoCard).toHaveClass('assets-tab__card--dimmed');
+    expect(getAssistantAssetContextPaths(project.id)).toContain('uploads/image.png');
+    expect(screen.getByText('AI context: 1')).toBeInTheDocument();
+
+    await user.click(imageCheckbox);
+    expect(videoCheckbox).not.toBeDisabled();
+    expect(videoCard).not.toHaveClass('assets-tab__card--dimmed');
+    expect(getAssistantAssetContextPaths(project.id)).not.toContain('uploads/image.png');
+    expect(screen.getByText('AI context: 0')).toBeInTheDocument();
   });
 
   test('shows server error and supports refresh', async () => {
@@ -705,5 +739,69 @@ describe('AssetsTab', () => {
     await waitFor(() => {
       expect(mockAxios.get).toHaveBeenCalledTimes(2);
     });
+  });
+
+  test('prunes stale AI context paths after reloading assets', async () => {
+    setAssistantAssetContextPaths(project.id, ['uploads/stale.png']);
+
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findAllByTestId('asset-card');
+
+    expect(getAssistantAssetContextPaths(project.id)).toEqual([]);
+    expect(screen.getByText('AI context: 0')).toBeInTheDocument();
+  });
+
+  test('keeps AI context paths when reload still contains selected assets', async () => {
+    setAssistantAssetContextPaths(project.id, ['uploads/image.png']);
+
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findAllByTestId('asset-card');
+
+    expect(getAssistantAssetContextPaths(project.id)).toEqual(['uploads/image.png']);
+    expect(screen.getByText('AI context: 1')).toBeInTheDocument();
+  });
+
+  test('updates AI context mapping when optimize returns a replacement path', async () => {
+    setAssistantAssetContextPaths(project.id, ['uploads/image.png', 'uploads/clip.mp4']);
+
+    mockAxios.get
+      .mockResolvedValueOnce(assetsResponse(sampleAssets))
+      .mockResolvedValueOnce(assetsResponse(sampleAssets));
+    mockAxios.post.mockResolvedValueOnce({
+      data: {
+        success: true,
+        path: 'uploads/image-optimized.png'
+      }
+    });
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findAllByTestId('asset-card');
+
+    const hooks = AssetsTab.__testHooks?.handlers;
+    expect(typeof hooks?.optimizeAsset).toBe('function');
+
+    await hooks.optimizeAsset('uploads/image.png', { quality: 76, scalePercent: 100, format: 'auto' });
+
+    await waitFor(() => {
+      expect(getAssistantAssetContextPaths(project.id)).toEqual(['uploads/clip.mp4', 'uploads/image-optimized.png']);
+    });
+  });
+
+  test('covers toggleAssistantAssetContextPath guard for empty asset path', () => {
+    render(<AssetsTab project={project} />);
+
+    const hooks = AssetsTab.__testHooks?.handlers;
+    expect(typeof hooks?.toggleAssistantAssetContextPath).toBe('function');
+
+    hooks.toggleAssistantAssetContextPath('');
+
+    expect(getAssistantAssetContextPaths(project.id)).toEqual([]);
   });
 });

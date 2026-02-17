@@ -369,25 +369,42 @@ describe('planning heuristics helpers', () => {
 });
 
 describe('planGoalFromPrompt', () => {
-  it('routes style-only prompts through the CSS-only path and propagates colors', async () => {
+  it('routes style-only prompts through normal LLM planning', async () => {
     const prompt = 'Please switch the app background to bright green';
+
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [
+          { prompt: 'Update app background styling to use the requested look.' },
+          { prompt: 'Apply style changes in the relevant frontend styles/components.' },
+          { prompt: 'Verify the resulting background presentation matches the request.' }
+        ]
+      })
+    );
 
     const result = await planGoalFromPrompt({ projectId: 900, prompt });
 
-    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(llmClient.generateResponse).toHaveBeenCalled();
     const prompts = result.children.map((child) => child.prompt);
-    expect(prompts).toEqual([
-      'Create a branch for this change if needed.',
-      'Change the background color to bright green (CSS-only change; no tests required).',
-      'Stage the updated file(s).'
-    ]);
+    expect(prompts[0]).toContain('background');
   });
 
-  it('falls back to a generic background description when color is not detected', async () => {
+  it('plans background styling prompts via LLM when no explicit color is detected', async () => {
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [
+          { prompt: 'Identify affected app background styling surfaces.' },
+          { prompt: 'Implement the requested background styling update.' },
+          { prompt: 'Confirm the final styling behavior is correct.' }
+        ]
+      })
+    );
+
     const result = await planGoalFromPrompt({ projectId: 901, prompt: 'Tweak the background styling across the app' });
 
     const prompts = result.children.map((child) => child.prompt);
-    expect(prompts[1]).toBe('Update the background color as requested (CSS-only change; no tests required).');
+    expect(llmClient.generateResponse).toHaveBeenCalled();
+    expect(prompts[0]).toContain('background');
   });
 
   it('parses structured childGoals objects and filters unusable prompts', async () => {

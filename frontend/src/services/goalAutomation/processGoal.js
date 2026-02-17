@@ -13,7 +13,6 @@ import {
   notifyGoalsUpdated,
   normalizeRepoPath,
   buildScopeReflectionPrompt,
-  deriveStyleScopeContract,
   parseScopeReflectionResponse,
   validateEditsAgainstReflection
 } from './automationUtils';
@@ -391,14 +390,6 @@ export async function processGoal(
       } catch (error) {
         automationLog('processGoal:scopeReflection:error', { message: error?.message });
       }
-    }
-
-    const styleScopeContract = deriveStyleScopeContract(goal?.prompt);
-    if (styleScopeContract) {
-      scopeReflection = {
-        ...(scopeReflection || {}),
-        styleScope: styleScopeContract
-      };
     }
 
     const testsStageEnabled = scopeReflection?.testsNeeded !== false;

@@ -1,6 +1,6 @@
 const normalizePrompt = (prompt = '') => String(prompt || '').trim().toLowerCase();
 
-const extractLatestRequest = (prompt = '') => {
+export const extractLatestRequest = (prompt = '') => {
   const raw = String(prompt || '');
   if (!raw) return raw;
 
@@ -135,5 +135,6 @@ export const extractStyleColor = (prompt = '') => {
 
 export default {
   isStyleOnlyPrompt,
-  extractStyleColor
+  extractStyleColor,
+  extractLatestRequest
 };

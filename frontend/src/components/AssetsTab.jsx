@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios';
 import './AssetsTab.css';
 import AssetOptimizeModal from './AssetOptimizeModal';
+import {
+  getAssistantAssetContextPaths,
+  setAssistantAssetContextPaths
+} from '../utils/assistantAssetContext';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif']);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogg', 'mov']);
@@ -58,6 +62,7 @@ const AssetsTab = ({ project }) => {
   const [optimizingPath, setOptimizingPath] = useState('');
   const [selectedAssetPath, setSelectedAssetPath] = useState('');
   const [optimizeModalAssetPath, setOptimizeModalAssetPath] = useState('');
+  const [assistantAssetContextPaths, setAssistantAssetContextPathsState] = useState([]);
   const [imageZoom, setImageZoom] = useState(1);
   const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
   const [isImagePanning, setIsImagePanning] = useState(false);
@@ -80,7 +85,23 @@ const AssetsTab = ({ project }) => {
       }
 
       const entries = Array.isArray(response.data.assets) ? response.data.assets : [];
-      setAssets(sortAssets(entries));
+      const sortedEntries = sortAssets(entries);
+      setAssets(sortedEntries);
+      setAssistantAssetContextPathsState((previous) => {
+        if (!previous.length) {
+          return previous;
+        }
+
+        const availablePaths = new Set(sortedEntries.map((entry) => entry.path));
+        const prunedPaths = previous.filter((path) => availablePaths.has(path));
+
+        if (prunedPaths.length !== previous.length) {
+          setAssistantAssetContextPaths(projectId, prunedPaths);
+          return prunedPaths;
+        }
+
+        return previous;
+      });
     } catch (err) {
       console.error('Failed to load assets:', err);
       setAssets([]);
@@ -97,6 +118,15 @@ const AssetsTab = ({ project }) => {
   useEffect(() => {
     setSelectedAssetPath('');
     setOptimizeModalAssetPath('');
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) {
+      setAssistantAssetContextPathsState([]);
+      return;
+    }
+
+    setAssistantAssetContextPathsState(getAssistantAssetContextPaths(projectId));
   }, [projectId]);
 
   useEffect(() => {
@@ -176,6 +206,17 @@ const AssetsTab = ({ project }) => {
       if (selectedAssetPath === assetPath) {
         setSelectedAssetPath(nextPath);
       }
+      setAssistantAssetContextPathsState((previous) => {
+        const nextPaths = [...new Set(previous.map((path) => (path === assetPath ? nextPath : path)))]
+          .sort((left, right) => left.localeCompare(right));
+
+        if (nextPaths.length === previous.length && nextPaths.every((path, index) => path === previous[index])) {
+          return previous;
+        }
+
+        setAssistantAssetContextPaths(projectId, nextPaths);
+        return nextPaths;
+      });
       setOptimizeModalAssetPath('');
     } catch (err) {
       console.error('Failed to optimize asset:', err);
@@ -184,6 +225,18 @@ const AssetsTab = ({ project }) => {
       setOptimizingPath('');
     }
   }, [loadAssets, projectId, selectedAssetPath]);
+
+  const toggleAssistantAssetContextPath = useCallback((assetPath) => {
+    if (!projectId || !assetPath) {
+      return;
+    }
+
+    setAssistantAssetContextPathsState((previous) => {
+      const nextPaths = previous.includes(assetPath) ? [] : [assetPath];
+      setAssistantAssetContextPaths(projectId, nextPaths);
+      return nextPaths;
+    });
+  }, [projectId]);
 
   const cards = useMemo(() => {
     return assets.map((entry) => {
@@ -231,6 +284,8 @@ const AssetsTab = ({ project }) => {
   }, [cards, optimizeModalAssetPath]);
 
   const imageZoomPercent = Math.round(imageZoom * 100);
+  const selectedAssistantAssetCount = assistantAssetContextPaths.length;
+  const selectedAssistantAssetPath = assistantAssetContextPaths[0] || '';
 
   const handleAutoOptimize = useCallback(() => {
     if (!modalAsset?.path) {
@@ -304,6 +359,7 @@ const AssetsTab = ({ project }) => {
   if (AssetsTab.__testHooks?.handlers) {
     AssetsTab.__testHooks.handlers.deleteAsset = deleteAsset;
     AssetsTab.__testHooks.handlers.optimizeAsset = optimizeAsset;
+    AssetsTab.__testHooks.handlers.toggleAssistantAssetContextPath = toggleAssistantAssetContextPath;
     AssetsTab.__testHooks.handlers.handleAutoOptimize = handleAutoOptimize;
     AssetsTab.__testHooks.handlers.handleManualOptimize = handleManualOptimize;
   }
@@ -315,7 +371,10 @@ const AssetsTab = ({ project }) => {
   return (
     <div className="assets-tab" data-testid="assets-tab-content">
       <div className="assets-tab__header">
-        <h3>Assets</h3>
+        <div className="assets-tab__header-title">
+          <h3>Assets</h3>
+          <span className="assets-tab__assistant-count">AI context: {selectedAssistantAssetCount}</span>
+        </div>
         <button
           type="button"
           className="assets-tab__refresh"
@@ -395,11 +454,27 @@ const AssetsTab = ({ project }) => {
               {cards.map((asset) => (
                 <article
                   key={asset.path}
-                  className="assets-tab__card"
+                  className={`assets-tab__card ${selectedAssistantAssetPath && selectedAssistantAssetPath !== asset.path ? 'assets-tab__card--dimmed' : ''}`}
                   data-testid="asset-card"
                   onClick={() => setSelectedAssetPath(asset.path)}
                 >
                   <div className="assets-tab__preview">
+                    <label
+                      className={`assets-tab__context-overlay ${selectedAssistantAssetPath === asset.path ? 'assets-tab__context-overlay--selected' : ''}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label="Include in AI context"
+                        checked={selectedAssistantAssetPath === asset.path}
+                        disabled={Boolean(selectedAssistantAssetPath && selectedAssistantAssetPath !== asset.path)}
+                        onChange={() => {
+                          toggleAssistantAssetContextPath(asset.path);
+                        }}
+                      />
+                    </label>
                     {asset.isImage ? (
                       <img src={asset.assetUrl} alt={asset.name} loading="lazy" />
                     ) : asset.isVideo ? (
