@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios';
 import './AssetsTab.css';
 import AssetOptimizeModal from './AssetOptimizeModal';
+import AssetRenameModal from './AssetRenameModal';
 import {
   getAssistantAssetContextPaths,
   setAssistantAssetContextPaths
@@ -49,6 +50,59 @@ const formatSizeBytes = (value) => {
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 };
 
+const splitAssetFileName = (assetPath) => {
+  const sourcePath = String(assetPath || '').trim();
+  const sourceParts = sourcePath.split('/').filter(Boolean);
+  if (sourceParts.length === 0) {
+    return { parentParts: [], sourceName: '', baseName: '', extension: '' };
+  }
+
+  const sourceName = sourceParts[sourceParts.length - 1];
+  const dotIndex = sourceName.lastIndexOf('.');
+  const hasExtension = dotIndex > 0 && dotIndex < sourceName.length - 1;
+
+  return {
+    parentParts: sourceParts.slice(0, -1),
+    sourceName,
+    baseName: hasExtension ? sourceName.slice(0, dotIndex) : sourceName,
+    extension: hasExtension ? sourceName.slice(dotIndex + 1) : ''
+  };
+};
+
+const buildRenamedAssetPath = (assetPath, nextBaseName) => {
+  const sourcePath = String(assetPath || '').trim();
+  const requestedBaseName = String(nextBaseName || '').trim();
+
+  if (!sourcePath || !requestedBaseName) {
+    return { error: 'Rename cancelled or empty name.' };
+  }
+
+  if (requestedBaseName.includes('/') || requestedBaseName.includes('\\')) {
+    return { error: 'Name cannot include path separators.' };
+  }
+
+  if (requestedBaseName === '.' || requestedBaseName === '..') {
+    return { error: 'Name is invalid.' };
+  }
+
+  const { parentParts, sourceName, extension } = splitAssetFileName(sourcePath);
+  if (!sourceName) {
+    return { error: 'Asset path is invalid.' };
+  }
+
+  if (extension && requestedBaseName.includes('.')) {
+    return { error: 'Name cannot include an extension.' };
+  }
+
+  const requestedName = extension ? `${requestedBaseName}.${extension}` : requestedBaseName;
+  if (requestedName === sourceName) {
+    return { error: null, toPath: sourcePath, unchanged: true };
+  }
+
+  const toPath = [...parentParts, requestedName].join('/');
+  return { error: null, toPath, unchanged: false };
+};
+
 const sortAssets = (entries) => {
   return [...entries].sort((a, b) => a.path.localeCompare(b.path));
 };
@@ -62,6 +116,10 @@ const AssetsTab = ({ project }) => {
   const [optimizingPath, setOptimizingPath] = useState('');
   const [selectedAssetPath, setSelectedAssetPath] = useState('');
   const [optimizeModalAssetPath, setOptimizeModalAssetPath] = useState('');
+  const [renameModalAssetPath, setRenameModalAssetPath] = useState('');
+  const [renameInputValue, setRenameInputValue] = useState('');
+  const [renameErrorMessage, setRenameErrorMessage] = useState('');
+  const [renamingPath, setRenamingPath] = useState('');
   const [assistantAssetContextPaths, setAssistantAssetContextPathsState] = useState([]);
   const [imageZoom, setImageZoom] = useState(1);
   const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
@@ -118,6 +176,10 @@ const AssetsTab = ({ project }) => {
   useEffect(() => {
     setSelectedAssetPath('');
     setOptimizeModalAssetPath('');
+    setRenameModalAssetPath('');
+    setRenameInputValue('');
+    setRenameErrorMessage('');
+    setRenamingPath('');
   }, [projectId]);
 
   useEffect(() => {
@@ -180,6 +242,84 @@ const AssetsTab = ({ project }) => {
       setDeletingPath('');
     }
   }, [loadAssets, projectId]);
+
+  const applyAssetRename = useCallback(async ({ fromPath, toPath }) => {
+    if (!projectId || !fromPath || !toPath) {
+      return;
+    }
+
+    setRenamingPath(fromPath);
+    try {
+      const priorContextPaths = getAssistantAssetContextPaths(projectId);
+
+      const response = await axios.post(`/api/projects/${projectId}/files-ops/rename`, {
+        fromPath,
+        toPath
+      });
+      if (!response?.data?.success) {
+        throw new Error(response?.data?.error || 'Failed to rename asset');
+      }
+
+      await loadAssets();
+
+      if (selectedAssetPath === fromPath) {
+        setSelectedAssetPath(toPath);
+      }
+      if (optimizeModalAssetPath === fromPath) {
+        setOptimizeModalAssetPath(toPath);
+      }
+
+      const remappedContextPaths = [...new Set(priorContextPaths.map((path) => (path === fromPath ? toPath : path)))];
+      setAssistantAssetContextPaths(projectId, remappedContextPaths);
+      setAssistantAssetContextPathsState(remappedContextPaths);
+
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('lucidcoder:assets-updated', {
+          detail: { projectId }
+        }));
+      }
+
+      setRenameModalAssetPath('');
+      setRenameInputValue('');
+      setRenameErrorMessage('');
+    } catch (err) {
+      console.error('Failed to rename asset:', err);
+      setRenameErrorMessage(err?.response?.data?.error || err?.message || 'Failed to rename asset');
+    } finally {
+      setRenamingPath('');
+    }
+  }, [loadAssets, optimizeModalAssetPath, projectId, selectedAssetPath]);
+
+  const openRenameModal = useCallback((assetPath) => {
+    if (!projectId || !assetPath) {
+      return;
+    }
+
+    const { baseName } = splitAssetFileName(assetPath);
+    setRenameModalAssetPath(assetPath);
+    setRenameInputValue(baseName);
+    setRenameErrorMessage('');
+  }, [projectId]);
+
+  const submitRenameModal = useCallback(async () => {
+    if (!renameModalAssetPath) {
+      return;
+    }
+
+    const { error: validationError, toPath, unchanged } = buildRenamedAssetPath(renameModalAssetPath, renameInputValue);
+    if (validationError) {
+      setRenameErrorMessage(validationError);
+      return;
+    }
+    if (unchanged || !toPath) {
+      setRenameModalAssetPath('');
+      setRenameInputValue('');
+      setRenameErrorMessage('');
+      return;
+    }
+
+    await applyAssetRename({ fromPath: renameModalAssetPath, toPath });
+  }, [applyAssetRename, renameInputValue, renameModalAssetPath]);
 
   const optimizeAsset = useCallback(async (assetPath, payload = {}) => {
     if (!projectId || !assetPath) {
@@ -358,6 +498,10 @@ const AssetsTab = ({ project }) => {
 
   if (AssetsTab.__testHooks?.handlers) {
     AssetsTab.__testHooks.handlers.deleteAsset = deleteAsset;
+    AssetsTab.__testHooks.handlers.applyAssetRename = applyAssetRename;
+    AssetsTab.__testHooks.handlers.renameAsset = openRenameModal;
+    AssetsTab.__testHooks.handlers.openOptimizeModal = setOptimizeModalAssetPath;
+    AssetsTab.__testHooks.handlers.submitRenameModal = submitRenameModal;
     AssetsTab.__testHooks.handlers.optimizeAsset = optimizeAsset;
     AssetsTab.__testHooks.handlers.toggleAssistantAssetContextPath = toggleAssistantAssetContextPath;
     AssetsTab.__testHooks.handlers.handleAutoOptimize = handleAutoOptimize;
@@ -403,11 +547,18 @@ const AssetsTab = ({ project }) => {
                   ) : null}
                   <button
                     type="button"
+                    className="assets-tab__viewer-rename"
+                    onClick={() => openRenameModal(selectedAsset.path)}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
                     className="assets-tab__viewer-optimize"
-                      onClick={() => setOptimizeModalAssetPath(selectedAsset.path)}
+                    onClick={() => setOptimizeModalAssetPath(selectedAsset.path)}
                     disabled={optimizingPath === selectedAsset.path}
                   >
-                      Optimize
+                    Optimize
                   </button>
                   <button
                     type="button"
@@ -501,6 +652,16 @@ const AssetsTab = ({ project }) => {
                   <div className="assets-tab__actions">
                     <button
                       type="button"
+                      className="assets-tab__action assets-tab__action--rename"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openRenameModal(asset.path);
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
                       className="assets-tab__action assets-tab__action--optimize"
                       onClick={(event) => {
                         event.stopPropagation();
@@ -538,6 +699,31 @@ const AssetsTab = ({ project }) => {
         isAutoOptimizing={Boolean(modalAsset?.path && optimizingPath === modalAsset.path)}
         isManualOptimizing={Boolean(modalAsset?.path && optimizingPath === modalAsset.path)}
       />
+
+      <AssetRenameModal
+        isOpen={Boolean(renameModalAssetPath)}
+        assetPath={renameModalAssetPath}
+        fileName={splitAssetFileName(renameModalAssetPath).sourceName}
+        extension={splitAssetFileName(renameModalAssetPath).extension}
+        value={renameInputValue}
+        errorMessage={renameErrorMessage}
+        isSubmitting={Boolean(renamingPath)}
+        onClose={() => {
+          if (renamingPath) {
+            return;
+          }
+          setRenameModalAssetPath('');
+          setRenameInputValue('');
+          setRenameErrorMessage('');
+        }}
+        onChange={(nextValue) => {
+          setRenameInputValue(nextValue);
+          if (renameErrorMessage) {
+            setRenameErrorMessage('');
+          }
+        }}
+        onSubmit={submitRenameModal}
+      />
     </div>
   );
 };
@@ -550,6 +736,7 @@ Object.assign(AssetsTab.__testHooks, {
   helpers: {
     getFileExtension,
     formatSizeBytes,
-    encodeRepoPath
+    encodeRepoPath,
+    buildRenamedAssetPath
   }
 });

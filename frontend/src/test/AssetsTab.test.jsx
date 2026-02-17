@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import AssetsTab from '../components/AssetsTab';
+import * as assistantAssetContextModule from '../utils/assistantAssetContext';
 import {
   clearAssistantAssetContextPaths,
   getAssistantAssetContextPaths,
@@ -320,10 +321,315 @@ describe('AssetsTab', () => {
   });
 
   test('covers helper fallback branches for non-string extension and MB size formatting', () => {
+    expect(AssetsTab.__testHooks?.helpers?.buildRenamedAssetPath?.(null, 'hero')).toEqual({
+      error: 'Rename cancelled or empty name.'
+    });
     expect(AssetsTab.__testHooks?.helpers?.getFileExtension?.(null)).toBe('');
     expect(AssetsTab.__testHooks?.helpers?.getFileExtension?.('uploads/')).toBe('');
     expect(AssetsTab.__testHooks?.helpers?.formatSizeBytes?.(2 * 1024 * 1024)).toBe('2.0 MB');
     expect(AssetsTab.__testHooks?.helpers?.encodeRepoPath?.(null)).toBe('');
+    expect(AssetsTab.__testHooks?.helpers?.buildRenamedAssetPath?.('uploads/image.png', '')).toEqual({
+      error: 'Rename cancelled or empty name.'
+    });
+    expect(AssetsTab.__testHooks?.helpers?.buildRenamedAssetPath?.('uploads/image.png', 'next')).toEqual({
+      error: null,
+      toPath: 'uploads/next.png',
+      unchanged: false
+    });
+    expect(AssetsTab.__testHooks?.helpers?.buildRenamedAssetPath?.('uploads/readme', 'guide')).toEqual({
+      error: null,
+      toPath: 'uploads/guide',
+      unchanged: false
+    });
+    expect(AssetsTab.__testHooks?.helpers?.buildRenamedAssetPath?.('uploads/image.png', '.')).toEqual({
+      error: 'Name is invalid.'
+    });
+    expect(AssetsTab.__testHooks?.helpers?.buildRenamedAssetPath?.('/', 'hero')).toEqual({
+      error: 'Asset path is invalid.'
+    });
+  });
+
+  test('opens rename modal from viewer action button', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    await user.click(imageCard);
+
+    const viewerRename = await screen.findByRole('button', { name: 'Rename' });
+    await user.click(viewerRename);
+
+    expect(await screen.findByTestId('asset-rename-modal')).toBeInTheDocument();
+  });
+
+  test('renames asset and refreshes rendered asset path', async () => {
+    const user = userEvent.setup();
+    setAssistantAssetContextPaths(project.id, ['uploads/image.png', 'uploads/audio.mp3']);
+
+    mockAxios.get
+      .mockResolvedValueOnce(assetsResponse(sampleAssets))
+      .mockResolvedValueOnce(assetsResponse([
+        { ...sampleAssets[0], name: 'hero.png', path: 'uploads/hero.png' },
+        ...sampleAssets.slice(1)
+      ]))
+      .mockResolvedValueOnce(assetsResponse([
+        { ...sampleAssets[0], name: 'hero.png', path: 'uploads/hero.png' },
+        ...sampleAssets.slice(1)
+      ]));
+    mockAxios.post.mockResolvedValueOnce({ data: { success: true } });
+
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const renameButton = imageCard.querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'hero');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => {
+      expect(mockAxios.post).toHaveBeenCalledWith(`/api/projects/${project.id}/files-ops/rename`, {
+        fromPath: 'uploads/image.png',
+        toPath: 'uploads/hero.png'
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('uploads/hero.png')).toBeInTheDocument();
+      expect(dispatchSpy).toHaveBeenCalled();
+    });
+  });
+
+  test('shows validation error when rename includes path separators', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const renameButton = cards[0].querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'nested/hero');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    expect(mockAxios.post).not.toHaveBeenCalled();
+    expect(screen.getByTestId('asset-rename-error')).toHaveTextContent('Name cannot include path separators.');
+  });
+
+  test('shows validation error when name includes an extension suffix', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const renameButton = imageCard.querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    expect(await screen.findByTestId('asset-rename-extension')).toHaveTextContent('.png');
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'hero.jpg');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    expect(mockAxios.post).not.toHaveBeenCalled();
+    expect(screen.getByTestId('asset-rename-error')).toHaveTextContent('Name cannot include an extension.');
+  });
+
+  test('shows inline error when rename endpoint throws', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+    mockAxios.post.mockRejectedValueOnce(new Error('Rename failed hard'));
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const renameButton = cards[0].querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'hero');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('asset-rename-error')).toHaveTextContent('Rename failed hard');
+    });
+  });
+
+  test('uses rename fallback message when success=false has no backend error details', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+    mockAxios.post.mockResolvedValueOnce({ data: { success: false } });
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const renameButton = imageCard.querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'hero');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('asset-rename-error')).toHaveTextContent('Failed to rename asset');
+    });
+  });
+
+  test('uses backend response rename error details when request rejects with response payload', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+    mockAxios.post.mockRejectedValueOnce({
+      response: {
+        data: {
+          error: 'Rename rejected from backend'
+        }
+      }
+    });
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const renameButton = imageCard.querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'hero');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('asset-rename-error')).toHaveTextContent('Rename rejected from backend');
+    });
+  });
+
+  test('uses default rename error message when request rejects without message details', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+    mockAxios.post.mockRejectedValueOnce({});
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const renameButton = imageCard.querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'hero');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('asset-rename-error')).toHaveTextContent('Failed to rename asset');
+    });
+  });
+
+  test('keeps rename modal open while submitting and clears error when input changes', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    let resolveRename;
+    const renamePromise = new Promise((resolve) => {
+      resolveRename = resolve;
+    });
+    mockAxios.post.mockReturnValueOnce(renamePromise);
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const renameButton = cards[0].querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'hero');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    expect(await screen.findByRole('button', { name: 'Renaming…' })).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('asset-rename-close'));
+    expect(screen.getByTestId('asset-rename-modal')).toBeInTheDocument();
+
+    resolveRename({ data: { success: false, error: 'rename failed from backend' } });
+    expect(await screen.findByTestId('asset-rename-error')).toHaveTextContent('rename failed from backend');
+
+    await user.type(renameInput, 'x');
+    await waitFor(() => {
+      expect(screen.queryByTestId('asset-rename-error')).not.toBeInTheDocument();
+    });
+  });
+
+  test('closes rename modal without request when submitted name is unchanged', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const renameButton = imageCard.querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameModal = await screen.findByTestId('asset-rename-modal');
+    await user.click(within(renameModal).getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('asset-rename-modal')).not.toBeInTheDocument();
+    });
+    expect(mockAxios.post).not.toHaveBeenCalled();
+  });
+
+  test('closes rename modal via close button and clears validation error state', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const renameButton = imageCard.querySelector('.assets-tab__action--rename');
+    await user.click(renameButton);
+
+    const renameInput = await screen.findByRole('textbox', { name: /name/i });
+    await user.clear(renameInput);
+    await user.type(renameInput, 'nested/hero');
+    await user.click(within(screen.getByTestId('asset-rename-modal')).getByRole('button', { name: 'Rename' }));
+    expect(await screen.findByTestId('asset-rename-error')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('asset-rename-close'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('asset-rename-modal')).not.toBeInTheDocument();
+    });
+
+    await user.click(renameButton);
+    expect(await screen.findByRole('textbox', { name: /name/i })).toHaveValue('image');
+    expect(screen.queryByTestId('asset-rename-error')).not.toBeInTheDocument();
   });
 
   test('handles assets payload fallback branches and default load error message', async () => {
@@ -569,16 +875,65 @@ describe('AssetsTab', () => {
 
     const hooks = AssetsTab.__testHooks?.handlers;
     expect(typeof hooks?.deleteAsset).toBe('function');
+    expect(typeof hooks?.applyAssetRename).toBe('function');
+    expect(typeof hooks?.renameAsset).toBe('function');
+    expect(typeof hooks?.openOptimizeModal).toBe('function');
+    expect(typeof hooks?.submitRenameModal).toBe('function');
     expect(typeof hooks?.optimizeAsset).toBe('function');
     expect(typeof hooks?.handleAutoOptimize).toBe('function');
     expect(typeof hooks?.handleManualOptimize).toBe('function');
 
     await hooks.deleteAsset('');
+    await hooks.applyAssetRename({ fromPath: '', toPath: '' });
+    hooks.renameAsset('');
+    await hooks.submitRenameModal();
     await hooks.optimizeAsset('');
     hooks.handleAutoOptimize();
     hooks.handleManualOptimize({ quality: 70, scalePercent: 100, format: 'auto' });
 
     expect(mockAxios.post).not.toHaveBeenCalled();
+  });
+
+  test('renaming selected asset updates selected and optimize modal paths', async () => {
+    const user = userEvent.setup();
+    setAssistantAssetContextPaths(project.id, ['uploads/image.png', 'uploads/audio.mp3']);
+    const getContextSpy = vi.spyOn(assistantAssetContextModule, 'getAssistantAssetContextPaths')
+      .mockReturnValue(['uploads/image.png']);
+    const renamedAssets = [
+      { ...sampleAssets[0], name: 'hero.png', path: 'uploads/hero.png' },
+      ...sampleAssets.slice(1)
+    ];
+    mockAxios.get
+      .mockResolvedValueOnce(assetsResponse(sampleAssets))
+      .mockResolvedValueOnce(assetsResponse(renamedAssets));
+    mockAxios.post.mockResolvedValueOnce({ data: { success: true } });
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
+    const optimizeButton = imageCard.querySelector('.assets-tab__action--optimize');
+
+    await user.click(imageCard);
+    await user.click(optimizeButton);
+
+    const hooks = AssetsTab.__testHooks?.handlers;
+    hooks.openOptimizeModal('uploads/image.png');
+    await waitFor(() => {
+      expect(screen.getByTestId('asset-optimize-modal')).toBeInTheDocument();
+    });
+    await hooks.applyAssetRename({
+      fromPath: 'uploads/image.png',
+      toPath: 'uploads/hero.png'
+    });
+
+    await waitFor(() => {
+      expect(mockAxios.post).toHaveBeenCalledWith(`/api/projects/${project.id}/files-ops/rename`, {
+        fromPath: 'uploads/image.png',
+        toPath: 'uploads/hero.png'
+      });
+    });
+    getContextSpy.mockRestore();
   });
 
   test('deletes asset on confirmation and refreshes list', async () => {

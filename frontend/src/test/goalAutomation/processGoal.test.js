@@ -144,6 +144,35 @@ describe('processGoal instruction-only goals', () => {
     );
   });
 
+  test('skips automation work for verification-only prompts', async () => {
+    const args = defaultArgs();
+    const verifyGoal = {
+      ...goal,
+      prompt: 'Run the frontend dev server and verify visual integration with the new background'
+    };
+
+    const result = await processGoal(
+      verifyGoal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      baseOptions
+    );
+
+    expect(result).toEqual({ success: true, skippedReason: 'verification-only' });
+    expect(goalsApiMock.advanceGoalPhase).toHaveBeenCalledTimes(4);
+    expect(automationModuleMock.buildEditsPrompt).not.toHaveBeenCalled();
+    expect(args.createMessage).toHaveBeenCalledWith(
+      'assistant',
+      expect.stringContaining('Manual verification step acknowledged'),
+      { variant: 'status' }
+    );
+  });
+
   test('falls back to zero goal count when fetchGoals returns a non-array value', async () => {
     const args = defaultArgs();
     const branchGoal = { ...goal, prompt: 'Create a branch for documentation only' };
@@ -3011,6 +3040,7 @@ describe('__processGoalTestHooks helpers', () => {
 
     expect(classifyInstructionOnlyGoal('Please create a branch for me')).toBe('branch-only');
     expect(classifyInstructionOnlyGoal('stage the updated files')).toBe('stage-only');
+    expect(classifyInstructionOnlyGoal('Run the frontend dev server and verify visual integration')).toBe('verification-only');
     expect(classifyInstructionOnlyGoal('do regular automation')).toBeNull();
   });
 

@@ -2437,6 +2437,27 @@ describe('Projects routes coverage (projects.js)', () => {
       expect(response.body).toMatchObject({ success: false, error: 'Destination already exists' });
     });
 
+    test('returns 404 when source path does not exist', async () => {
+      const projectName = `rename-src-missing-${Date.now()}`;
+      const projectPath = path.join(projectsRoot, projectName);
+      await ensureEmptyDir(projectPath);
+
+      const projectRecord = await createProject({
+        name: projectName,
+        description: 'rename missing source coverage',
+        language: 'javascript',
+        framework: 'react',
+        path: projectPath
+      });
+
+      const response = await request(app)
+        .post(`/api/projects/${projectRecord.id}/files-ops/rename`)
+        .send({ fromPath: 'src/missing.txt', toPath: 'src/next.txt' });
+
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({ success: false, error: 'Source path not found' });
+    });
+
     test('returns 400 when fromPath is absolute (path.isAbsolute)', async () => {
       const projectName = `rename-absolute-src-${Date.now()}`;
       const projectPath = path.join(projectsRoot, projectName);
@@ -2524,6 +2545,48 @@ describe('Projects routes coverage (projects.js)', () => {
         ...realFs,
         rename: async () => {
           const err = new Error('rename failed');
+          err.code = 'EACCES';
+          throw err;
+        }
+      });
+
+      const response = await request(app)
+        .post(`/api/projects/${projectRecord.id}/files-ops/rename`)
+        .send({ fromPath: 'src/from.txt', toPath: 'src/to.txt' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toMatchObject({ success: false, error: 'Failed to rename path' });
+
+      __projectRoutesInternals.resetFsModuleOverride();
+    });
+
+    test('returns 500 when destination stat fails with non-ENOENT', async () => {
+      const projectName = `rename-dest-staterr-${Date.now()}`;
+      const projectPath = path.join(projectsRoot, projectName);
+      await ensureEmptyDir(projectPath);
+
+      const fromFile = path.join(projectPath, 'src', 'from.txt');
+      await fs.mkdir(path.dirname(fromFile), { recursive: true });
+      await fs.writeFile(fromFile, 'content');
+
+      const projectRecord = await createProject({
+        name: projectName,
+        description: 'rename destination stat error coverage',
+        language: 'javascript',
+        framework: 'react',
+        path: projectPath
+      });
+
+      const realFs = await import('fs/promises');
+      let statCalls = 0;
+      __projectRoutesInternals.setFsModuleOverride({
+        ...realFs,
+        stat: async (targetPath) => {
+          statCalls += 1;
+          if (statCalls === 1) {
+            return realFs.stat(targetPath);
+          }
+          const err = new Error('permission denied');
           err.code = 'EACCES';
           throw err;
         }

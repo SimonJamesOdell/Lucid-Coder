@@ -34,6 +34,33 @@ export function registerProjectFileRoutes(router) {
 
   const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif']);
 
+  const isUploadsRepoPath = (repoPath) => {
+    const normalized = normalizeRepoPath(repoPath);
+    return normalized === 'uploads' || normalized.startsWith('uploads/');
+  };
+
+  const stageUploadsPaths = async (projectId, repoPaths = []) => {
+    const repoPathList = [].concat(repoPaths);
+    const uniqueUploads = Array.from(new Set(
+      repoPathList
+        .map((candidate) => normalizeRepoPath(candidate))
+        .filter((candidate) => candidate && isUploadsRepoPath(candidate))
+    ));
+
+    if (uniqueUploads.length === 0) {
+      return;
+    }
+
+    const { stageWorkspaceChange } = await import('../../services/branchWorkflow.js');
+
+    for (const filePath of uniqueUploads) {
+      await stageWorkspaceChange(projectId, {
+        filePath,
+        source: 'editor'
+      });
+    }
+  };
+
   const flattenFileTree = (nodes, bucket = []) => {
     if (!Array.isArray(nodes)) {
       return bucket;
@@ -633,6 +660,7 @@ export function registerProjectFileRoutes(router) {
       }
 
       await fs.writeFile(fullPath, content, 'utf-8');
+      await stageUploadsPaths(id, [resolved.normalized]);
 
       const io = req.app?.get?.('io');
       if (io) {
@@ -798,6 +826,8 @@ export function registerProjectFileRoutes(router) {
         }
         throw error;
       }
+
+      await stageUploadsPaths(id, [normalized]);
 
       const io = req.app?.get?.('io');
       if (io && openInEditor) {
@@ -1082,6 +1112,8 @@ export function registerProjectFileRoutes(router) {
         await fs.unlink(resolved.fullPath).catch(() => {});
       }
 
+      await stageUploadsPaths(id, [resolved.normalized, destinationPath]);
+
       const analysis = analyzeTransmissionOptimization({
         filePath: destinationPath,
         sizeBytes: data.length,
@@ -1238,6 +1270,15 @@ export function registerProjectFileRoutes(router) {
       await assertNoSymlinkSegments(fs, project.path, fromResolved.resolvedPath);
       await assertNoSymlinkSegments(fs, project.path, path.dirname(toResolved.resolvedPath));
 
+      try {
+        await fs.stat(fromResolved.fullPath);
+      } catch (statError) {
+        if (statError?.code === 'ENOENT') {
+          return res.status(404).json({ success: false, error: 'Source path not found' });
+        }
+        throw statError;
+      }
+
       // Ensure destination parent exists
       await fs.mkdir(path.dirname(toResolved.fullPath), { recursive: true });
 
@@ -1252,6 +1293,7 @@ export function registerProjectFileRoutes(router) {
       }
 
       await fs.rename(fromResolved.fullPath, toResolved.fullPath);
+      await stageUploadsPaths(id, [fromResolved.normalized, toResolved.normalized]);
 
       return res.json({
         success: true,
@@ -1329,6 +1371,8 @@ export function registerProjectFileRoutes(router) {
         await fs.unlink(fullPath);
       }
 
+      await stageUploadsPaths(id, [normalized]);
+
       return res.json({ success: true, targetPath: normalized });
     } catch (error) {
       const status = error.statusCode || 500;
@@ -1397,6 +1441,7 @@ export function registerProjectFileRoutes(router) {
       }
 
       await fs.copyFile(src.fullPath, dest.fullPath);
+      await stageUploadsPaths(id, [src.normalized, dest.normalized]);
 
       return res.json({
         success: true,

@@ -42,11 +42,37 @@ export {
   tryParseLooseJson
 };
 
+export const AUTOMATION_LOG_EVENT = 'lucidcoder:automation-log';
+
+const buildAutomationBannerText = (label) => {
+  const normalizedLabel = typeof label === 'string' ? label.trim() : '';
+  if (!normalizedLabel) {
+    return '';
+  }
+  return normalizedLabel;
+};
+
 export const automationLog = (label, details) => {
+  const bannerText = buildAutomationBannerText(label);
+
   try {
     console.log(`[automation] ${label}`, details);
   } catch {
     // Ignore environments where console is restricted.
+  }
+
+  try {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent(AUTOMATION_LOG_EVENT, {
+        detail: {
+          label,
+          details,
+          bannerText
+        }
+      }));
+    }
+  } catch {
+    // Ignore environments where window/custom events are unavailable.
   }
 };
 

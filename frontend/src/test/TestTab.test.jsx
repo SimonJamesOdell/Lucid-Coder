@@ -4444,14 +4444,14 @@ describe('TestTab', () => {
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
     TestTab.__testHooks.setAutofixMaxAttemptsOverride(10);
 
-    const buildJobPair = ({ suffix, running, createdAt, completedAt }) => {
+    const buildJobPair = ({ suffix, token, running, createdAt, completedAt }) => {
       const front = {
         id: `front-auto-${suffix}`,
         type: 'frontend:test',
         command: 'npm',
         args: ['run', 'test'],
         cwd: '/tmp/project',
-        logs: running ? [] : [{ stream: 'stderr', message: `✗ front ${suffix}` }],
+        logs: running ? [] : [{ stream: 'stderr', message: `✗ front ${token}` }],
         createdAt
       };
       const back = {
@@ -4460,7 +4460,7 @@ describe('TestTab', () => {
         command: 'npm',
         args: ['run', 'test'],
         cwd: '/tmp/project',
-        logs: running ? [] : [{ stream: 'stderr', message: `✗ back ${suffix}` }],
+        logs: running ? [] : [{ stream: 'stderr', message: `✗ back ${token}` }],
         createdAt
       };
 
@@ -4490,38 +4490,38 @@ describe('TestTab', () => {
       // Failure cycle 1 (attempt becomes 1)
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: 'automation', updatedAt: t1 },
-        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 1, running: true, createdAt: t1 }))
+        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 1, token: 'alpha', running: true, createdAt: t1 }))
       }))
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: 'automation', updatedAt: t2 },
-        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 1, running: false, createdAt: t1, completedAt: t2 }))
+        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 1, token: 'alpha', running: false, createdAt: t1, completedAt: t2 }))
       }))
       // Failure cycle 2 (attempt becomes 2)
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: 'automation', updatedAt: t3 },
-        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 2, running: true, createdAt: t3 }))
+        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 2, token: 'beta', running: true, createdAt: t3 }))
       }))
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: 'automation', updatedAt: t4 },
-        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 2, running: false, createdAt: t3, completedAt: t4 }))
+        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 2, token: 'beta', running: false, createdAt: t3, completedAt: t4 }))
       }))
       // Failure cycle 3 (attempt becomes 3)
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: 'automation', updatedAt: t5 },
-        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 3, running: true, createdAt: t5 }))
+        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 3, token: 'gamma', running: true, createdAt: t5 }))
       }))
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: 'automation', updatedAt: t6 },
-        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 3, running: false, createdAt: t5, completedAt: t6 }))
+        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 3, token: 'gamma', running: false, createdAt: t5, completedAt: t6 }))
       }))
       // Failure cycle 4 triggers give-up modal
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: 'automation', updatedAt: t7 },
-        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 4, running: true, createdAt: t7 }))
+        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 4, token: 'delta', running: true, createdAt: t7 }))
       }))
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: 'automation', updatedAt: t8 },
-        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 4, running: false, createdAt: t7, completedAt: t8 }))
+        getJobsForProject: vi.fn().mockReturnValue(buildJobPair({ suffix: 4, token: 'delta', running: false, createdAt: t7, completedAt: t8 }))
       }));
 
     try {

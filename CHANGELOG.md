@@ -1,3 +1,9 @@
+## 0.7.5 (2026-02-17)
+- Add a dedicated asset rename modal flow and integrate it into Assets tab interactions, including validation, submission guards, and improved rename error handling.
+- Harden assistant asset-context behavior across Assets and Chat panels, including context remapping/cleanup when assets are renamed or optimized and clearer context-change synchronization.
+- Improve branch workflow and planning heuristics by tightening merge/changelog edge-path handling, expanding prompt heuristic extraction behavior, and covering additional agent-orchestrator goal metadata branches.
+- Expand backend and frontend coverage suites for branch workflow failures, project file routes, goal automation edit paths, TestTab helper fingerprints, and Assets/Chat runtime guard branches to keep strict coverage gates green.
+
 ## 0.7.4 (2026-02-17)
 - Replace direct CSS-only planning/edit-write gating with LLM-driven goal planning and reflection-guided style scoping, including optional `styleScope` parsing in automation reflection.
 - Improve branch workflow merge resilience by aborting failed merges and returning explicit `409` conflict errors with clearer merge-failure messages.

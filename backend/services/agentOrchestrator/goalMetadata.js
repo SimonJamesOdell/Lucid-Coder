@@ -60,6 +60,8 @@ const createRequestClarificationQuestions = ({ llmClient, extractJsonObject }) =
       'Ask short, specific questions only if a missing detail blocks implementation. ' +
       'Do not ask for acceptance criteria or vague confirmations. ' +
       'If reasonable defaults can be assumed (colors, spacing, generic labels), do so and return no questions. ' +
+      'If the user request includes a "Selected project assets:" list and references an image/file/asset, treat those listed assets as available context. ' +
+      'Do not ask for filename/path unless no suitable asset is listed or multiple listed assets require a deliberate choice. ' +
       'If the request is sufficiently specified, return {"needsClarification": false, "questions": []}. ' +
       'Examples: ' +
       '"Add a navigation bar along the top with Home, About, Contact and Products; Products has a dropdown with 3 generic categories." => {"needsClarification": false, "questions": []}. ' +

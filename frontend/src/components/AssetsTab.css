@@ -137,6 +137,15 @@
   cursor: not-allowed;
 }
 
+.assets-tab__viewer-rename {
+  border: 1px solid var(--border-color, #333);
+  background: transparent;
+  color: var(--text-primary, #fff);
+  border-radius: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  cursor: pointer;
+}
+
 .assets-tab__viewer-body {
   min-height: 0;
   display: flex;
@@ -352,6 +361,10 @@
 
 .assets-tab__action--optimize {
   color: var(--accent-color, #007acc);
+}
+
+.assets-tab__action--rename {
+  color: var(--text-secondary, #b3b3b3);
 }
 
 .assets-tab__action:disabled {

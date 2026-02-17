@@ -16,7 +16,7 @@ import { llmClient } from '../llm-client.js';
 import { ensureGitRepository, runGitCommand } from '../utils/git.js';
 import { getProject } from '../database.js';
 import { assertGoalTransition, isGoalState } from './goalLifecycle.js';
-import { isStyleOnlyPrompt } from './promptHeuristics.js';
+import { extractLatestRequest, extractSelectedProjectAssets, isStyleOnlyPrompt } from './promptHeuristics.js';
 import {
   extractJsonObject,
   extractFirstJsonObjectSubstring,
@@ -435,6 +435,20 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
     throw new Error('prompt is required');
   }
 
+  const plannerPrompt = (() => {
+    const extracted = extractLatestRequest(prompt);
+    const fallbackPrompt = prompt;
+    if (typeof extracted !== 'string') {
+      return fallbackPrompt;
+    }
+    const normalized = extracted.trim();
+    return normalized || fallbackPrompt;
+  })();
+  const selectedProjectAssets = extractSelectedProjectAssets(prompt);
+  const plannerPromptWithAssets = selectedProjectAssets.length > 0
+    ? `${plannerPrompt}\n\nSelected project assets:\n${selectedProjectAssets.map((assetPath) => `- ${assetPath}`).join('\n')}`
+    : plannerPrompt;
+
   if (goalId != null) {
     const parent = await getStoredGoal(goalId);
     if (!parent) {
@@ -512,7 +526,7 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
 
     const userMessage = {
       role: 'user',
-      content: `Plan work for this request: "${prompt}"`
+      content: `Plan work for this request: "${plannerPromptWithAssets}"`
     };
 
     return [systemMessage, userMessage];
@@ -564,7 +578,7 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
   };
 
   let plan = await requestPlannerResult(false);
-  if (isLowInformationPlan(prompt, plan.normalizedChildPlans)) {
+  if (isLowInformationPlan(plannerPrompt, plan.normalizedChildPlans)) {
     try {
       plan = await requestPlannerResult(true);
     } catch (retryError) {
@@ -572,7 +586,7 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
       plan = {
         parentTitle: plan.parentTitle || null,
         clarifyingQuestions: plan.clarifyingQuestions,
-        normalizedChildPlans: buildHeuristicChildPlans(prompt)
+        normalizedChildPlans: buildHeuristicChildPlans(plannerPrompt)
       };
     }
   }
@@ -580,7 +594,7 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
   const shouldRequestClarifications = process.env.NODE_ENV !== 'test';
   if (shouldRequestClarifications && (!plan.clarifyingQuestions || plan.clarifyingQuestions.length === 0)) {
     try {
-      plan.clarifyingQuestions = await requestClarificationQuestions(prompt, projectContext);
+      plan.clarifyingQuestions = await requestClarificationQuestions(plannerPromptWithAssets, projectContext);
     } catch (error) {
       console.warn('[WARN] Clarification question generation failed:', error?.message || error);
     }
@@ -591,7 +605,7 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
 
   const result = await createGoalTreeWithChildren({
     projectId,
-    prompt,
+    prompt: plannerPrompt,
     childPrompts: normalizedChildPlans,
     parentGoalId: goalId,
     parentTitle: plan.parentTitle || null,

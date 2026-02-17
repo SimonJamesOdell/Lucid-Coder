@@ -380,4 +380,112 @@ describe('commitsApi.mergeBranch error-path coverage', () => {
     const cmds = runProjectGit.mock.calls.map((call) => call[1].join(' '));
     expect(cmds).toContain('merge --abort');
   });
+
+  it('merges from main without checking out the feature branch first', async () => {
+    getProjectContext.mockResolvedValueOnce({ gitReady: true, projectPath: undefined });
+
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `show ${branchName}:CHANGELOG.md`) throw new Error('missing');
+
+      if (cmd === 'status --porcelain --untracked-files=no') return { stdout: '' };
+      if (cmd === 'rev-parse --abbrev-ref HEAD') return { stdout: 'main\n' };
+      if (cmd === `checkout ${branchName}`) {
+        throw new Error('The following untracked working tree files would be overwritten by checkout');
+      }
+      if (cmd === 'checkout main') return { stdout: '' };
+      if (cmd === 'rev-parse HEAD') return { stdout: 'preSha\n' };
+      if (cmd === `merge --no-ff ${branchName}`) return { stdout: '' };
+
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).resolves.toMatchObject({
+      mergedBranch: branchName,
+      current: 'main'
+    });
+
+    const cmds = runProjectGit.mock.calls.map((call) => call[1].join(' '));
+    expect(cmds).not.toContain(`checkout ${branchName}`);
+  });
+
+  it('returns 409 when an untracked file would be overwritten by merge', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `show ${branchName}:CHANGELOG.md`) throw new Error('missing');
+
+      if (cmd === 'status --porcelain --untracked-files=no') return { stdout: '' };
+      if (cmd === 'status --porcelain --untracked-files=all') return { stdout: '?? uploads/astronaut.webp\n' };
+      if (cmd === `diff --name-only main..${branchName}`) return { stdout: 'uploads/astronaut.webp\n' };
+
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('Untracked files would be overwritten by merge: uploads/astronaut.webp')
+    });
+
+    const cmds = runProjectGit.mock.calls.map((call) => call[1].join(' '));
+    expect(cmds).not.toContain(`merge --no-ff ${branchName}`);
+  });
+
+  it('returns 500 when untracked conflict preflight verification fails unexpectedly', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `show ${branchName}:CHANGELOG.md`) throw new Error('missing');
+
+      if (cmd === 'status --porcelain --untracked-files=no') return { stdout: '' };
+      if (cmd === 'status --porcelain --untracked-files=all') {
+        throw new Error('status failed');
+      }
+
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({
+      statusCode: 500,
+      message: 'Unable to verify untracked merge conflicts'
+    });
+  });
+
+  it('includes an ellipsis suffix when more than three untracked conflicts are detected', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `show ${branchName}:CHANGELOG.md`) throw new Error('missing');
+
+      if (cmd === 'status --porcelain --untracked-files=no') return { stdout: '' };
+      if (cmd === 'status --porcelain --untracked-files=all') {
+        return {
+          stdout: [
+            '?? uploads/a.webp',
+            '?? uploads/b.webp',
+            '?? uploads/c.webp',
+            '?? uploads/d.webp'
+          ].join('\n')
+        };
+      }
+      if (cmd === `diff --name-only main..${branchName}`) {
+        return {
+          stdout: [
+            'uploads/a.webp',
+            'uploads/b.webp',
+            'uploads/c.webp',
+            'uploads/d.webp'
+          ].join('\n')
+        };
+      }
+
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('Untracked files would be overwritten by merge: uploads/a.webp, uploads/b.webp, uploads/c.webp …')
+    });
+  });
 });

@@ -63,6 +63,129 @@ describe('TestTab coverage helpers', () => {
     expect(getAutofixMaxAttempts()).toBe(3);
   });
 
+  test('buildAutofixFailureFingerprint normalizes noisy failure details', () => {
+    const createFailedJob = (failureLine) => ({
+      status: 'failed',
+      logs: [
+        { message: 'FAIL frontend/src/components/App.test.jsx > renders header' },
+        { message: failureLine }
+      ],
+      summary: {}
+    });
+
+    const first = hooks.buildAutofixFailureFingerprint({
+      jobsByType: {
+        'frontend:test': createFailedJob('TypeError: cannot read properties at src/components/App.jsx:41:10')
+      },
+      visibleTestConfigs: [{ type: 'frontend:test' }]
+    });
+
+    const second = hooks.buildAutofixFailureFingerprint({
+      jobsByType: {
+        'frontend:test': createFailedJob('TypeError: cannot read properties at src/components/App.jsx:99:22')
+      },
+      visibleTestConfigs: [{ type: 'frontend:test' }]
+    });
+
+    expect(first).toBe(second);
+  });
+
+  test('buildAutofixFailureFingerprint normalizes Windows absolute paths', () => {
+    const jobsByType = {
+      'frontend:test': {
+        status: 'failed',
+        logs: [
+          {
+            message: [
+              'FAIL src/App.test.jsx > App > renders',
+              'TypeError: boom at C:\\Users\\simon\\lucidcoder\\frontend\\src\\App.jsx:41:10'
+            ].join('\n')
+          }
+        ],
+        summary: {}
+      }
+    };
+
+    const fingerprint = hooks.buildAutofixFailureFingerprint({
+      jobsByType,
+      visibleTestConfigs: [{ type: 'frontend:test' }]
+    });
+
+    expect(fingerprint).toContain('<path>');
+    expect(fingerprint).not.toContain('C:');
+  });
+
+  test('normalizeFailureFingerprintText replaces Windows and workspace paths directly', () => {
+    const normalized = hooks.normalizeFailureFingerprintText(
+      'Error at C:\\Users\\simon\\lucidcoder\\frontend\\src\\App.jsx:41:10 and frontend/src/main.jsx:12:3'
+    );
+
+    expect(normalized).toContain('<path>');
+    expect(normalized).toContain('<path>:#');
+    expect(normalized).not.toContain('C:');
+    expect(normalized).not.toContain('frontend/src/main.jsx');
+  });
+
+  test('normalizeFailureFingerprintText returns empty string for non-string input', () => {
+    expect(hooks.normalizeFailureFingerprintText(null)).toBe('');
+    expect(hooks.normalizeFailureFingerprintText(42)).toBe('');
+  });
+
+  test('buildAutofixFailureFingerprint returns null when no failed jobs are visible', () => {
+    const fingerprint = hooks.buildAutofixFailureFingerprint({
+      jobsByType: {
+        'frontend:test': {
+          status: 'passed',
+          logs: [{ message: 'PASS src/App.test.jsx' }],
+          summary: {}
+        }
+      },
+      visibleTestConfigs: [{ type: 'frontend:test' }]
+    });
+
+    expect(fingerprint).toBeNull();
+  });
+
+  test('buildAutofixFailureFingerprint uses fallback labels for missing error and non-string coverage file', () => {
+    const fingerprint = hooks.buildAutofixFailureFingerprint({
+      jobsByType: {
+        'frontend:test': {
+          status: 'failed',
+          logs: [],
+          summary: {
+            coverage: {
+              uncoveredLines: [
+                { workspace: 'frontend', file: 123 }
+              ]
+            }
+          }
+        }
+      },
+      visibleTestConfigs: [{ type: 'frontend:test' }]
+    });
+
+    expect(fingerprint).toContain('ids:none');
+    expect(fingerprint).toContain('report:none');
+    expect(fingerprint).toContain('error:none');
+    expect(fingerprint).toContain('coverage:frontend');
+  });
+
+  test('buildAutofixFailureFingerprint includes normalized error text when job error exists', () => {
+    const fingerprint = hooks.buildAutofixFailureFingerprint({
+      jobsByType: {
+        'frontend:test': {
+          status: 'failed',
+          error: 'TypeError at frontend/src/App.jsx:33:7',
+          logs: [{ message: 'FAIL src/App.test.jsx > App > renders' }],
+          summary: {}
+        }
+      },
+      visibleTestConfigs: [{ type: 'frontend:test' }]
+    });
+
+    expect(fingerprint).toContain('error:typeerror at <path>:#');
+  });
+
   test('formatUncoveredLineSummary adds a preview suffix when there are many lines', () => {
     const summary = formatUncoveredLineSummary([
       { workspace: 'frontend', file: 'src/App.jsx', lines: [1, 2, 3, 4, 5, 6, 7, 8, 9] }
