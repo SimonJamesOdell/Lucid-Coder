@@ -1,3 +1,10 @@
+## 0.7.4 (2026-02-17)
+- Replace direct CSS-only planning/edit-write gating with LLM-driven goal planning and reflection-guided style scoping, including optional `styleScope` parsing in automation reflection.
+- Improve branch workflow merge resilience by aborting failed merges and returning explicit `409` conflict errors with clearer merge-failure messages.
+- Add assistant asset context persistence and UI integration: asset selection in Assets tab, prompt/context injection in ChatPanel, and cross-component context-change event handling.
+- Improve branch naming prompt extraction by deriving branch context from nested `Current request` / `User answer` segments instead of full conversation noise.
+- Expand frontend/backend coverage suites for automation utilities, assistant asset context behavior, merge error paths, and planner behavior changes; bump version metadata to `0.7.4` across manifests, lockfiles, shared version exports, and docs.
+
 ## 0.7.3 (2026-02-16)
 - Add a full Assets management flow with image/video/audio/file previews, wheel zoom + pan, optimize controls, and a dedicated optimize modal.
 - Expand backend assets route coverage with a comprehensive `routes.files` assets test suite and close remaining edge branches.
