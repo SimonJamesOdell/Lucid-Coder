@@ -217,6 +217,95 @@ describe('parseScopeReflectionResponse', () => {
     expect(reflection.mustChange[0]).toBe('item-0');
     expect(reflection.mustChange[11]).toBe('item-11');
   });
+
+  it('omits styleScope when the mode is invalid', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'keep focused',
+          styleScope: {
+            mode: 'component',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['button']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection).toEqual({
+      reasoning: 'keep focused',
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: [],
+      testsNeeded: true
+    });
+  });
+
+  it('includes normalized styleScope for valid global mode with missing target hints', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'global style task',
+          styleScope: {
+            mode: 'global',
+            enforceTargetScoping: false,
+            forbidGlobalSelectors: false
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection).toEqual({
+      reasoning: 'global style task',
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: [],
+      testsNeeded: true,
+      styleScope: {
+        mode: 'global',
+        enforceTargetScoping: false,
+        forbidGlobalSelectors: false,
+        targetHints: []
+      }
+    });
+  });
+
+  it('includes normalized styleScope for valid targeted mode', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'targeted style task',
+          styleScope: {
+            mode: 'targeted',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['  button ', '', ' card '] 
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection).toEqual({
+      reasoning: 'targeted style task',
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: [],
+      testsNeeded: true,
+      styleScope: {
+        mode: 'targeted',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['button', 'card']
+      }
+    });
+  });
 });
 
 describe('formatScopeReflectionContext', () => {

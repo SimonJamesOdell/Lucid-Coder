@@ -98,34 +98,48 @@ describe('agentOrchestrator coverage (tests suite)', () => {
     expect(prompts).toHaveLength(3);
   });
 
-  it('plans CSS-only prompts with detected colors', async () => {
+  it('plans CSS-like prompts through the LLM planner path', async () => {
     const { llmClient } = await import('../llm-client.js');
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [
+          { prompt: 'Identify where app background styles are defined.' },
+          { prompt: 'Apply requested background styling update.' },
+          { prompt: 'Confirm resulting background appearance.' }
+        ]
+      })
+    );
 
     const result = await planGoalFromPrompt({
       projectId: 1204,
       prompt: 'Change the background color to bright green'
     });
 
-    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(llmClient.generateResponse).toHaveBeenCalled();
     const prompts = result.children.map((child) => child.prompt);
-    expect(prompts).toEqual([
-      'Create a branch for this change if needed.',
-      'Change the background color to bright green (CSS-only change; no tests required).',
-      'Stage the updated file(s).'
-    ]);
+    expect(prompts[0]).toContain('background');
   });
 
-  it('plans CSS-only prompts with a generic background description when color is missing', async () => {
+  it('plans CSS-like prompts through LLM when color is missing', async () => {
     const { llmClient } = await import('../llm-client.js');
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [
+          { prompt: 'Find app-wide background styling touchpoints.' },
+          { prompt: 'Implement the requested background styling change.' },
+          { prompt: 'Validate the final visual output.' }
+        ]
+      })
+    );
 
     const result = await planGoalFromPrompt({
       projectId: 1205,
       prompt: 'Tweak the background styling across the app'
     });
 
-    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(llmClient.generateResponse).toHaveBeenCalled();
     const prompts = result.children.map((child) => child.prompt);
-    expect(prompts[1]).toBe('Update the background color as requested (CSS-only change; no tests required).');
+    expect(prompts[0]).toContain('background');
   });
 
   it('falls back to heuristic plans with null parent title when strict retry fails', async () => {

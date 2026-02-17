@@ -5,10 +5,20 @@ import {
   isBranchNameRelevantToPrompt,
   requestBranchNameFromLLM
 } from './automationUtils';
+import { extractBranchPromptContext } from './automationUtils/branchNames.js';
+
+const deriveBranchPromptContext = (prompt) => {
+  return extractBranchPromptContext(prompt);
+};
 
 export async function ensureBranch(projectId, prompt, setPreviewPanelTab, createMessage, setMessages, options = {}) {
   try {
-    automationLog('ensureBranch:start', { projectId, prompt: String(prompt || '').slice(0, 200) });
+    const branchPrompt = deriveBranchPromptContext(prompt);
+    automationLog('ensureBranch:start', {
+      projectId,
+      prompt: String(prompt || '').slice(0, 200),
+      branchPrompt: String(branchPrompt || '').slice(0, 200)
+    });
     const branchesResponse = await axios.get(`/api/projects/${projectId}/branches`);
     const overview = branchesResponse.data;
     const workingBranches = Array.isArray(overview.workingBranches) ? overview.workingBranches : [];
@@ -16,9 +26,9 @@ export async function ensureBranch(projectId, prompt, setPreviewPanelTab, create
 
     if (!existingBranch) {
       const timeFallback = `feature-${Date.now()}`;
-      const fallbackName = buildFallbackBranchNameFromPrompt(prompt, timeFallback);
-      const generatedNameRaw = await requestBranchNameFromLLM({ prompt, fallbackName });
-      const generatedName = (generatedNameRaw && isBranchNameRelevantToPrompt(generatedNameRaw, prompt))
+      const fallbackName = buildFallbackBranchNameFromPrompt(branchPrompt, timeFallback);
+      const generatedNameRaw = await requestBranchNameFromLLM({ prompt: branchPrompt, fallbackName });
+      const generatedName = (generatedNameRaw && isBranchNameRelevantToPrompt(generatedNameRaw, branchPrompt))
         ? generatedNameRaw
         : fallbackName;
 
@@ -26,7 +36,7 @@ export async function ensureBranch(projectId, prompt, setPreviewPanelTab, create
 
       const createResponse = await axios.post(`/api/projects/${projectId}/branches`, {
         name: generatedName,
-        description: String(prompt || '').trim().slice(0, 200) || undefined
+        description: String(branchPrompt || '').trim().slice(0, 200) || undefined
       });
 
       const branchName = createResponse.data?.branch?.name || generatedName;

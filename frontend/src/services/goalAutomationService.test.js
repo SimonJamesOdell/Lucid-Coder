@@ -73,6 +73,41 @@ describe('goalAutomationService', () => {
       expect(mockCreateMessage).toHaveBeenCalledWith('assistant', 'Branch added-new-feature created', { variant: 'status' });
     });
 
+    test('uses current request segment for branch naming prompt', async () => {
+      axios.get.mockResolvedValue({ data: { workingBranches: [] } });
+
+      axios.post.mockImplementation((url, payload) => {
+        if (url === '/api/llm/generate') {
+          expect(payload?.messages?.[1]?.content).toContain('User request: "Set hero background image to sunset"');
+          expect(payload?.messages?.[1]?.content).not.toContain('conversation-context-user-navigation');
+          return Promise.resolve({ data: { content: 'changed-hero-background-image' } });
+        }
+        if (url === '/api/projects/42/branches') {
+          expect(payload).toEqual(expect.objectContaining({
+            name: 'changed-hero-background-image',
+            description: 'Set hero background image to sunset'
+          }));
+          return Promise.resolve({ data: { branch: { name: 'changed-hero-background-image' } } });
+        }
+      });
+
+      const result = await ensureBranch(
+        42,
+        [
+          'Conversation context:',
+          'User: add conversation context user navigation',
+          'Assistant: acknowledged',
+          '',
+          'Current request: Set hero background image to sunset'
+        ].join('\n'),
+        mockSetPreviewPanelTab,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      expect(result).toEqual({ name: 'changed-hero-background-image' });
+    });
+
     test('skips branch creation when working branch exists', async () => {
       axios.get.mockResolvedValue({
         data: {

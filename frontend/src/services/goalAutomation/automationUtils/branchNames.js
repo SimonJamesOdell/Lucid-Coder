@@ -44,6 +44,46 @@ export const parseBranchNameFromLLMText = (text) => {
   return trimmed;
 };
 
+export const extractBranchPromptContext = (prompt) => {
+  const raw = String(prompt || '').trim();
+  if (!raw) {
+    return '';
+  }
+
+  const extractMatch = (pattern) => {
+    const match = raw.match(pattern);
+    if (!match?.[1]) {
+      return '';
+    }
+    return String(match[1]).trim();
+  };
+
+  const directCurrentRequest = extractMatch(/(?:^|\n)\s*Current request:\s*([\s\S]+)$/i);
+  if (directCurrentRequest) {
+    return directCurrentRequest.split('\n').map((line) => line.trim()).find(Boolean);
+  }
+
+  const directUserAnswer = extractMatch(/(?:^|\n)\s*User answer:\s*([\s\S]+)$/i);
+  if (directUserAnswer) {
+    return directUserAnswer.split('\n').map((line) => line.trim()).find(Boolean);
+  }
+
+  const originalRequest = extractMatch(
+    /(?:^|\n)\s*Original request:\s*([\s\S]+?)(?:\n\s*Clarification questions:|$)/i
+  );
+  if (originalRequest) {
+    if (/\b(Current request|User answer):/i.test(originalRequest)) {
+      const nested = extractBranchPromptContext(originalRequest);
+      if (nested && nested !== originalRequest) {
+        return nested;
+      }
+    }
+    return originalRequest.split('\n').map((line) => line.trim()).find(Boolean);
+  }
+
+  return raw.split('\n').map((line) => line.trim()).find(Boolean);
+};
+
 export const isValidBranchName = (name) => {
   const trimmed = String(name).trim();
   if (trimmed === 'kebab-case') return false;

@@ -16,7 +16,7 @@ import { llmClient } from '../llm-client.js';
 import { ensureGitRepository, runGitCommand } from '../utils/git.js';
 import { getProject } from '../database.js';
 import { assertGoalTransition, isGoalState } from './goalLifecycle.js';
-import { isStyleOnlyPrompt, extractStyleColor } from './promptHeuristics.js';
+import { isStyleOnlyPrompt } from './promptHeuristics.js';
 import {
   extractJsonObject,
   extractFirstJsonObjectSubstring,
@@ -461,21 +461,6 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
     }
   }
 
-  if (isStyleOnlyPrompt(prompt)) {
-    const colorDescriptor = extractStyleColor(prompt);
-    const backgroundPrompt = colorDescriptor
-      ? `Change the background color to ${colorDescriptor} (CSS-only change; no tests required).`
-      : 'Update the background color as requested (CSS-only change; no tests required).';
-
-    const childPrompts = [
-      'Create a branch for this change if needed.',
-      backgroundPrompt,
-      'Stage the updated file(s).'
-    ];
-
-    return createMetaGoalWithChildren({ projectId, prompt, childPrompts, parentGoalId: goalId });
-  }
-
   const projectContext = await resolveProjectStackContext(projectId);
   const projectSnapshot = await buildPlannerProjectSnapshot(projectId);
 
@@ -495,6 +480,7 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
         'If any goal can be broken into subgoals, nest them under a "children" array. ' +
         'Do NOT include steps about running tests, running coverage, or re-running tests/coverage (those happen automatically). ' +
         'You MAY include steps that add/update tests as part of the work. ' +
+        'Avoid speculative negative assertions in goals (for example, "background is not green") unless the user explicitly asks for that comparison. ' +
         'If key details are missing, include a "questions" array with short clarifying questions. ' +
         'NEVER copy or paste the user request into any goal title or prompt. ' +
         'Avoid phrasing like "Implement the primary feature described in: <request>" or "Outline the main components needed for: <request>". ' +

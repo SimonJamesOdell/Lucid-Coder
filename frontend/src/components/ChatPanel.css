@@ -42,6 +42,18 @@
   border-left: 1px solid var(--border-color, #333);
 }
 
+.chat-context-indicator {
+  padding: 0.35rem 1rem;
+  border-top: 1px solid var(--border-color, #333);
+  background: var(--background-tertiary, #0f0f0f);
+  color: var(--text-secondary, #b3b3b3);
+  font-size: 0.75rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-header {
   height: 51px;
   padding: 0 1rem;

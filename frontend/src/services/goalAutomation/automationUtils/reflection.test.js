@@ -4,17 +4,10 @@ import { deriveStyleScopeContract, validateEditsAgainstReflection } from './refl
 const normalizeRepoPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
 
 describe('reflection style scope contract', () => {
-  test('derives targeted style scope for element-scoped prompt', () => {
+  test('does not derive style scope directly from prompt strings', () => {
     const contract = deriveStyleScopeContract('make the navigation bar have a black background with white text');
 
-    expect(contract).toEqual(
-      expect.objectContaining({
-        mode: 'targeted',
-        enforceTargetScoping: true,
-        forbidGlobalSelectors: true,
-        targetHints: expect.arrayContaining(['navbar', 'navigation', 'nav'])
-      })
-    );
+    expect(contract).toBeNull();
   });
 
   test('flags edits that touch global selectors for targeted style scope', () => {
@@ -122,10 +115,9 @@ describe('reflection style scope contract', () => {
     expect(violation).toBeNull();
   });
 
-  test('derives target hints for navigation bar requests', () => {
+  test('keeps deriveStyleScopeContract disabled for navigation prompts', () => {
     const contract = deriveStyleScopeContract('make the navigation bar have a black background with white text');
-    expect(contract?.mode).toBe('targeted');
-    expect(contract?.targetHints).toEqual(expect.arrayContaining(['navbar', 'navigation', 'nav']));
+    expect(contract).toBeNull();
   });
 
   test('allows global selector edits when prompt is explicitly global', () => {
@@ -154,15 +146,16 @@ describe('reflection style scope contract', () => {
     expect(violation).toBeNull();
   });
 
-  test('derives global style scope when prompt explicitly requests app-wide changes', () => {
+  test('keeps deriveStyleScopeContract disabled for app-wide style prompts', () => {
     const contract = deriveStyleScopeContract('apply a global theme across the entire app');
 
-    expect(contract).toEqual({
-      mode: 'global',
-      enforceTargetScoping: false,
-      forbidGlobalSelectors: false,
-      targetHints: []
-    });
+    expect(contract).toBeNull();
+  });
+
+  test('keeps deriveStyleScopeContract disabled for site background prompts', () => {
+    const contract = deriveStyleScopeContract('use the image as the site background');
+
+    expect(contract).toBeNull();
   });
 
   test('ignores unsupported edit types for global selector checks', () => {
@@ -196,12 +189,10 @@ describe('reflection style scope contract', () => {
     );
   });
 
-  test('filters stop words from extracted target hints', () => {
+  test('keeps deriveStyleScopeContract disabled for color-word prompts', () => {
     const contract = deriveStyleScopeContract('make the white card have blue text');
 
-    expect(contract?.mode).toBe('targeted');
-    expect(contract?.targetHints).toContain('card');
-    expect(contract?.targetHints).not.toContain('white');
+    expect(contract).toBeNull();
   });
 
   test('flags upsert edits in global stylesheet when target hints are missing', () => {

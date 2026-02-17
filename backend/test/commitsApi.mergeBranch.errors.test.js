@@ -272,7 +272,7 @@ describe('commitsApi.mergeBranch error-path coverage', () => {
     });
 
     const { mergeBranch } = api();
-    await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({ statusCode: 500 });
+    await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it('attempts reset when post-merge bump fails and reset succeeds', async () => {
@@ -311,7 +311,7 @@ describe('commitsApi.mergeBranch error-path coverage', () => {
     expect(cmds).toContain('reset --hard preSha');
   });
 
-  it('wraps a raw git merge failure as statusCode 500', async () => {
+  it('wraps a raw git merge failure as statusCode 409', async () => {
     runProjectGit.mockImplementation(async (_ctx, args) => {
       const cmd = args.join(' ');
       if (cmd === `show ${branchName}:CHANGELOG.md`) throw new Error('missing');
@@ -328,8 +328,56 @@ describe('commitsApi.mergeBranch error-path coverage', () => {
 
     const { mergeBranch } = api();
     await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({
-      statusCode: 500,
-      message: expect.stringMatching(/Git merge failed/i)
+      statusCode: 409,
+      message: expect.stringMatching(/Git merge could not be completed automatically/i)
     });
+  });
+
+  it('uses unknown merge failure fallback when merge throws without a message', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `show ${branchName}:CHANGELOG.md`) throw new Error('missing');
+
+      if (cmd === 'status --porcelain') return { stdout: '' };
+      if (cmd === 'rev-parse --abbrev-ref HEAD') return { stdout: 'main\n' };
+      if (cmd === `checkout ${branchName}`) return { stdout: '' };
+      if (cmd === 'checkout main') return { stdout: '' };
+      if (cmd === 'rev-parse HEAD') throw new Error('no sha');
+      if (cmd === `merge --no-ff ${branchName}`) throw {};
+
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('unknown merge failure')
+    });
+  });
+
+  it('keeps merge conflict response when merge abort also fails', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `show ${branchName}:CHANGELOG.md`) throw new Error('missing');
+
+      if (cmd === 'status --porcelain') return { stdout: '' };
+      if (cmd === 'rev-parse --abbrev-ref HEAD') return { stdout: 'main\n' };
+      if (cmd === `checkout ${branchName}`) return { stdout: '' };
+      if (cmd === 'checkout main') return { stdout: '' };
+      if (cmd === 'rev-parse HEAD') throw new Error('no sha');
+      if (cmd === `merge --no-ff ${branchName}`) throw new Error('merge conflict');
+      if (cmd === 'merge --abort') throw new Error('abort failed');
+
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/Git merge could not be completed automatically/i)
+    });
+
+    const cmds = runProjectGit.mock.calls.map((call) => call[1].join(' '));
+    expect(cmds).toContain('merge --abort');
   });
 });

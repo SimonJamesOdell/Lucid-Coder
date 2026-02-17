@@ -33,6 +33,10 @@ import {
 } from './chatPanel/agentUtils.js';
 import { buildAutopilotJobLogLines } from './chatPanel/jobLogs.js';
 import { updateChatPanelTestHooks } from './chatPanel/testHooks.js';
+import {
+  ASSISTANT_ASSET_CONTEXT_CHANGED_EVENT,
+  getAssistantAssetContextPaths
+} from '../utils/assistantAssetContext';
 
 export { formatAgentStepMessage };
 
@@ -556,6 +560,50 @@ const ChatPanel = ({
     ? (autopilotCanResume ? 'Resume autopilot' : 'Pause autopilot')
     : (autoFixHalted ? 'Resume automated test fixing' : 'Stop automated test fixing');
   const assistantToggleDisabled = autopilotIsActive && !autopilotCanPause && !autopilotCanResume;
+  const [selectedAssistantAssetPaths, setSelectedAssistantAssetPaths] = useState([]);
+  const selectedAssistantAssetPath = selectedAssistantAssetPaths[0] || '';
+
+  useEffect(() => {
+    if (!currentProject?.id) {
+      setSelectedAssistantAssetPaths([]);
+      return;
+    }
+
+    setSelectedAssistantAssetPaths(getAssistantAssetContextPaths(currentProject.id));
+  }, [currentProject?.id]);
+
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      typeof window.addEventListener !== 'function' ||
+      typeof window.removeEventListener !== 'function'
+    ) {
+      return undefined;
+    }
+
+    const handleAssistantAssetContextChanged = (event) => {
+      if (!currentProject?.id) {
+        setSelectedAssistantAssetPaths([]);
+        return;
+      }
+
+      const detailProjectId = event?.detail?.projectId;
+      if (detailProjectId && String(detailProjectId) !== String(currentProject.id)) {
+        return;
+      }
+
+      const detailPaths = Array.isArray(event?.detail?.paths)
+        ? event.detail.paths.filter((path) => typeof path === 'string' && path.trim())
+        : getAssistantAssetContextPaths(currentProject.id);
+
+      setSelectedAssistantAssetPaths(detailPaths);
+    };
+
+    window.addEventListener(ASSISTANT_ASSET_CONTEXT_CHANGED_EVENT, handleAssistantAssetContextChanged);
+    return () => {
+      window.removeEventListener(ASSISTANT_ASSET_CONTEXT_CHANGED_EVENT, handleAssistantAssetContextChanged);
+    };
+  }, [currentProject?.id]);
 
   const handleAssistantToggle = async () => {
     if (autopilotIsActive) {
@@ -719,7 +767,7 @@ const ChatPanel = ({
       const execution = await handleRegularFeature(
         currentProject.id,
         currentProject,
-        resolvedPrompt,
+        prompt,
         result,
         setPreviewPanelTab,
         setGoalCount,
@@ -732,7 +780,7 @@ const ChatPanel = ({
         if (execution?.clarifyingQuestions?.length) {
           setPendingClarification({
             projectId: currentProject.id,
-            prompt: resolvedPrompt,
+            prompt,
             questions: execution.clarifyingQuestions
           });
         }
@@ -899,12 +947,35 @@ const ChatPanel = ({
 
         const resolvedPrompt = pendingClarification
           ? [
-            `Original request: ${pendingClarification.prompt}`,
+            (() => {
+              const originalRequest = typeof pendingClarification.prompt === 'string'
+                ? pendingClarification.prompt.trim()
+                : '';
+              const originalRequestLine = originalRequest.startsWith('Current request:')
+                ? originalRequest
+                : `Current request: ${originalRequest}`;
+              return `Original request: ${originalRequestLine}`;
+            })(),
             'Clarification questions:',
             ...pendingClarification.questions.map((question) => `- ${question}`),
+            ...(() => {
+              const selectedAssetPaths = getAssistantAssetContextPaths(currentProject.id);
+              return selectedAssetPaths.length
+                ? ['Selected project assets:', ...selectedAssetPaths.map((path) => `- ${path}`)]
+                : [];
+            })(),
             `User answer: ${trimmed}`
           ].join('\n')
-          : [buildConversationContext(), `Current request: ${trimmed}`]
+          : [
+            buildConversationContext(),
+            (() => {
+              const selectedAssetPaths = getAssistantAssetContextPaths(currentProject.id);
+              return selectedAssetPaths.length
+                ? `Selected project assets:\n${selectedAssetPaths.map((path) => `- ${path}`).join('\n')}`
+                : '';
+            })(),
+            `Current request: ${trimmed}`
+          ]
             .filter(Boolean)
             .join('\n\n');
 
@@ -1553,6 +1624,12 @@ const ChatPanel = ({
               {autopilotStatusNote}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {selectedAssistantAssetPath ? (
+        <div className="chat-context-indicator" data-testid="chat-context-indicator">
+          Included in context: {selectedAssistantAssetPath}
         </div>
       ) : null}
 

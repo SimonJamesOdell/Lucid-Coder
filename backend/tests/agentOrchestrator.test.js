@@ -1740,27 +1740,41 @@ describe('agentOrchestrator', () => {
     ]);
   });
 
-  it('plans CSS/style-only prompts without LLM or verification steps', async () => {
+  it('plans CSS/style-only prompts through LLM planning', async () => {
     llmClient.generateResponse.mockClear();
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [
+          { prompt: 'Identify where background styles are defined.' },
+          { prompt: 'Apply the requested background styling update.' },
+          { prompt: 'Verify the visual result matches the request.' }
+        ]
+      })
+    );
 
     const { parent, children } = await planGoalFromPrompt({
       projectId: 77,
       prompt: 'Turn the background blue (CSS only)'
     });
 
-    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(llmClient.generateResponse).toHaveBeenCalled();
     expect(parent).toMatchObject({ projectId: 77, prompt: 'Turn the background blue (CSS only)' });
 
     const prompts = children.map((c) => c.prompt);
-    expect(prompts).toEqual([
-      'Create a branch for this change if needed.',
-      'Change the background color to blue (CSS-only change; no tests required).',
-      'Stage the updated file(s).'
-    ]);
+    expect(prompts[0]).toContain('background');
   });
 
-  it('propagates the requested color when planning style-only prompts', async () => {
+  it('does not force color-only wording when planning style-only prompts', async () => {
     llmClient.generateResponse.mockClear();
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        childGoals: [
+          { prompt: 'Use the selected image asset as the site background in the relevant UI shell.' },
+          { prompt: 'Adjust background fit and positioning for readability.' },
+          { prompt: 'Verify the background image is applied across the intended area.' }
+        ]
+      })
+    );
 
     const { children } = await planGoalFromPrompt({
       projectId: 78,
@@ -1768,7 +1782,7 @@ describe('agentOrchestrator', () => {
     });
 
     const prompts = children.map((c) => c.prompt);
-    expect(prompts[1]).toBe('Change the background color to bright green (CSS-only change; no tests required).');
+    expect(prompts.join(' ').toLowerCase()).not.toContain('change the background color to bright green (css-only change; no tests required)');
   });
 
   it('does not use CSS-only shortcut for targeted navbar styling prompts', async () => {
