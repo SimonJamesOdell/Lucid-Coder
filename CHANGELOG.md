@@ -1,3 +1,10 @@
+## 0.7.6 (2026-02-18)
+- Add an approval-and-framework decision flow in the frontend, including `ApprovalPanel`, generated navbar wiring, project decision/profile artifacts, and orchestration utilities for clarification + framework planning.
+- Strengthen ChatPanel and goal-automation flows with clarification deduplication/tracking, additional automation guard paths, and expanded framework/preflight diagnostics integration.
+- Expand asset and chat coverage significantly (including upload/rename/clarification edge branches) and add focused coverage suites for approval flow, framework orchestrator, and ClarificationTracker utilities.
+- Introduce new repo tools for approval application, decision orchestration, diagnostics/preflight checks, and codemod support, with accompanying docs for roadmap/integration/verification and improvement analysis.
+- Update release/version metadata to `0.7.6` across root/frontend/backend package manifests, lockfiles, shared version exports, and versioning docs.
+
 ## 0.7.5 (2026-02-17)
 - Add a dedicated asset rename modal flow and integrate it into Assets tab interactions, including validation, submission guards, and improved rename error handling.
 - Harden assistant asset-context behavior across Assets and Chat panels, including context remapping/cleanup when assets are renamed or optimized and clearer context-change synchronization.
