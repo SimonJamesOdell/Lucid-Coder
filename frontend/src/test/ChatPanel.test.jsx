@@ -2879,6 +2879,37 @@ describe('ChatPanel', () => {
       expect(goalsApi.agentRequest).not.toHaveBeenCalled();
     });
 
+    it('uses default clarification category when pending clarification has no project id', async () => {
+      goalsApi.agentRequest.mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const instance = ChatPanel.__testHooks?.getLatestInstance?.();
+      expect(instance?.setPendingClarification).toBeInstanceOf(Function);
+
+      await act(async () => {
+        instance.setPendingClarification({
+          prompt: 'Need follow-up',
+          questions: [null]
+        });
+      });
+
+      const handleClarificationSubmit = ChatPanel.__testHooks?.handlers?.handleClarificationSubmit;
+      expect(handleClarificationSubmit).toBeInstanceOf(Function);
+
+      await act(async () => {
+        await handleClarificationSubmit();
+      });
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(1);
+      });
+
+      const clarifiedPrompt = goalsApi.agentRequest.mock.calls[0][0]?.prompt;
+      expect(clarifiedPrompt).toContain('Q: ');
+      expect(clarifiedPrompt).toContain('A: (no answer provided)');
+    });
+
     it('uses the non-string fallback when a clarification answer is not text', async () => {
       goalsApi.agentRequest
         .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
@@ -3019,6 +3050,120 @@ describe('ChatPanel', () => {
       expect(within(clarification).getByRole('button', { name: 'Close for now' })).toBeInTheDocument();
       expect(within(clarification).getByRole('button', { name: 'Submit answers' })).toBeInTheDocument();
       expect(clarification.querySelectorAll('.chat-clarification__option')).toHaveLength(0);
+    });
+
+    it('handles null clarifying questions without crashing and keeps submission flow working', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      goalAutomationService.handleRegularFeature.mockResolvedValueOnce({
+        needsClarification: true,
+        clarifyingQuestions: [null]
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await screen.findByTestId('chat-clarification-modal');
+
+      const handleClarificationSubmit = ChatPanel.__testHooks?.handlers?.handleClarificationSubmit;
+      expect(handleClarificationSubmit).toBeInstanceOf(Function);
+
+      await act(async () => {
+        await handleClarificationSubmit();
+      });
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
+      });
+
+      const clarifiedPrompt = goalsApi.agentRequest.mock.calls[1][0]?.prompt;
+      expect(clarifiedPrompt).toContain('Q: ');
+      expect(clarifiedPrompt).toContain('A: (no answer provided)');
+    });
+
+    it('submits clarification prompts with normalized non-string question text', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] });
+
+      goalAutomationService.handleRegularFeature.mockResolvedValueOnce({
+        needsClarification: true,
+        clarifyingQuestions: [42]
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await screen.findByTestId('chat-clarification-modal');
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('chat-status')).not.toBeInTheDocument();
+      });
+
+      const handleClarificationSubmit = ChatPanel.__testHooks?.handlers?.handleClarificationSubmit;
+      expect(handleClarificationSubmit).toBeInstanceOf(Function);
+      await act(async () => {
+        await handleClarificationSubmit();
+      });
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
+      });
+
+      const clarifiedPrompt = goalsApi.agentRequest.mock.calls[1][0]?.prompt;
+      expect(clarifiedPrompt).toContain('Q: 42');
+      expect(clarifiedPrompt).toContain('A: (no answer provided)');
+    });
+
+    it('auto-submits cached clarification answers without reopening the modal', async () => {
+      goalsApi.agentRequest
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Ok', steps: [] })
+        .mockResolvedValueOnce({ kind: 'feature', planOnly: false })
+        .mockResolvedValueOnce({ kind: 'question', answer: 'Cached', steps: [] });
+
+      goalAutomationService.handleRegularFeature
+        .mockResolvedValueOnce({
+          needsClarification: true,
+          clarifyingQuestions: ['Should we use routing?']
+        })
+        .mockResolvedValueOnce({
+          needsClarification: true,
+          clarifyingQuestions: ['Should we use routing?']
+        });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'First request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      const answerField = await screen.findByLabelText('Your answer');
+      await userEvent.type(answerField, 'yes');
+      await userEvent.click(await screen.findByRole('button', { name: 'Submit answers' }));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(2);
+      });
+
+      await userEvent.clear(screen.getByTestId('chat-input'));
+      await userEvent.type(screen.getByTestId('chat-input'), 'Second request');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalledTimes(4);
+      });
+
+      expect(screen.queryByTestId('chat-clarification-modal')).not.toBeInTheDocument();
+
+      const cachedPrompt = goalsApi.agentRequest.mock.calls[3][0]?.prompt;
+      expect(cachedPrompt).toContain('Q: Should we use routing?');
+      expect(cachedPrompt).toContain('A: yes');
     });
 
     it('closes the clarification modal via the SettingsModal close control', async () => {

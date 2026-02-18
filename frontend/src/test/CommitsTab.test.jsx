@@ -1331,7 +1331,8 @@ describe('CommitsTab', () => {
     const user = userEvent.setup();
     await renderCommitsTab();
 
-    await user.type(screen.getByTestId('branch-commit-subject'), 'fix: handle edge case');
+    const subjectInput = await screen.findByTestId('branch-commit-subject');
+    await user.type(subjectInput, 'fix: handle edge case');
     await user.click(screen.getByTestId('branch-commit-submit'));
 
     await waitFor(() => {
@@ -1358,7 +1359,8 @@ describe('CommitsTab', () => {
     const user = userEvent.setup();
     await renderCommitsTab();
 
-    await user.type(screen.getByTestId('branch-commit-subject'), 'fix: handle network edge case');
+    const subjectInput = await screen.findByTestId('branch-commit-subject');
+    await user.type(subjectInput, 'fix: handle network edge case');
     await user.click(screen.getByTestId('branch-commit-submit'));
 
     await waitFor(() => {

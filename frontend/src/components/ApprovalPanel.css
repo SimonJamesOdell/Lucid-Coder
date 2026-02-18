@@ -1,0 +1,79 @@
+.approval-modal__backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1099;
+}
+
+.approval-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+  z-index: 1100;
+  max-width: 480px;
+  width: 90%;
+}
+
+.approval-modal__content {
+  padding: 24px;
+}
+
+.approval-modal__title {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a202c;
+}
+
+.approval-modal__message {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #2d3748;
+  line-height: 1.5;
+}
+
+.approval-modal__rationale {
+  margin: 8px 0 16px;
+  font-size: 13px;
+  color: #718096;
+  line-height: 1.4;
+}
+
+.approval-modal__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.approval-modal__btn {
+  padding: 8px 16px;
+  border: 1px solid #cbd5e0;
+  background: #f7fafc;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.approval-modal__btn:hover {
+  background: #edf2f7;
+  border-color: #a0aec0;
+}
+
+.approval-modal__btn--primary {
+  background: #4299e1;
+  color: #fff;
+  border-color: #3182ce;
+}
+
+.approval-modal__btn--primary:hover {
+  background: #3182ce;
+  border-color: #2c5aa0;
+}

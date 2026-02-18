@@ -435,4 +435,71 @@ describe('App coverage branches', () => {
 
     vi.useRealTimers()
   })
+
+  test('shows approval modal for medium-confidence decision and allows dismiss', async () => {
+    render(<App />)
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('processGoal:decision', {
+        detail: {
+          decision: 'suggest_router_with_approval',
+          normalized: 0.55,
+          recommendation: 'Use router with approval',
+          rationale: 'Medium confidence'
+        }
+      }))
+    })
+
+    expect(await screen.findByTestId('approval-modal')).toBeInTheDocument()
+
+    await act(async () => {
+      screen.getByTestId('dismiss-recommendation').click()
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('approval-modal')).not.toBeInTheDocument()
+    })
+  })
+
+  test('ignores framework decision events that do not require approval modal', async () => {
+    render(<App />)
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('processGoal:decision', {
+        detail: {
+          decision: 'auto_apply_router_api',
+          normalized: 0.95,
+          recommendation: 'Auto apply',
+          rationale: 'High confidence'
+        }
+      }))
+    })
+
+    expect(screen.queryByTestId('approval-modal')).not.toBeInTheDocument()
+  })
+
+  test('handles apply-recommendation event and closes approval modal', async () => {
+    render(<App />)
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('processGoal:decision', {
+        detail: {
+          decision: 'suggest_router_with_approval',
+          normalized: 0.5,
+          recommendation: 'Use router with approval',
+          rationale: 'Medium confidence'
+        }
+      }))
+    })
+
+    expect(await screen.findByTestId('approval-modal')).toBeInTheDocument()
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('lucidcoder:apply-recommendation'))
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('approval-modal')).not.toBeInTheDocument()
+    })
+  })
 })

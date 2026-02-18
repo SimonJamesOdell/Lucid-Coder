@@ -1,7 +1,7 @@
 {
   "name": "lucidcoder-fullstack",
   "_versionWarning": "DO NOT EDIT VERSION MANUALLY — use npm run release",
-  "version": "0.7.4",
+  "version": "0.7.6",
   "description": "A fullstack React + Vite / Node.js + Express application",
   "scripts": {
     "install-all": "npm install && npm --prefix backend install && npm --prefix frontend install",
@@ -48,5 +48,11 @@
     "express"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@babel/generator": "^7.29.1",
+    "@babel/parser": "^7.29.0",
+    "@babel/traverse": "^7.29.0",
+    "@babel/types": "^7.29.0"
+  }
 }

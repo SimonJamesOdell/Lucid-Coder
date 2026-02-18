@@ -1,0 +1,15 @@
+{
+  "intent": "Add a navbar component",
+  "score": 12,
+  "normalized": 1,
+  "reasons": [
+    "framework=react",
+    "router dependency present",
+    "router imports/strings found",
+    "5 anchor(s) detected"
+  ],
+  "decision": "auto_apply_router_api",
+  "rationale": "High confidence: router present and used across project.",
+  "recommendation": "Convert internal anchors to router Link components and add tests.",
+  "commands": []
+}

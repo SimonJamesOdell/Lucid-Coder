@@ -13,6 +13,7 @@ import {
   agentAutopilot,
   deleteGoal
 } from '../utils/goalsApi';
+import { ClarificationTracker } from '../utils/ClarificationTracker';
 import AutopilotTimeline from './AutopilotTimeline.jsx';
 import SettingsModal from './SettingsModal';
 import { handlePlanOnlyFeature, handleRegularFeature, processGoals } from '../services/goalAutomationService';
@@ -68,6 +69,7 @@ const ChatPanel = ({
     return window.__lucidcoderAutofixHalted === true;
   });
   const autoFixHaltedRef = useRef(autoFixHalted);
+  const clarificationTrackerRef = useRef(new ClarificationTracker());
   const {
     currentProject,
     stageAiChange,
@@ -826,10 +828,44 @@ const ChatPanel = ({
 
       if (execution?.needsClarification) {
         if (execution?.clarifyingQuestions?.length) {
+          // [FAILURE PREVENTION] Check for duplicate clarifications
+          const tracker = clarificationTrackerRef.current;
+          const category = `goal_${currentProject.id}`;
+          
+          const questionsToAsk = [];
+          const answersToUse = [];
+          
+          for (const question of execution.clarifyingQuestions) {
+            const questionText = typeof question === 'string' ? question : String(question ?? '');
+            if (tracker.hasAsked(category, questionText)) {
+              // This question was already asked - use cached answer
+              const cachedAnswer = tracker.getAnswer(category, questionText);
+              answersToUse.push(cachedAnswer);
+              console.log('[Clarification] Using cached answer for:', questionText.slice(0, 50));
+            } else {
+              // New question - need to ask
+              questionsToAsk.push(questionText);
+            }
+          }
+          
+          if (questionsToAsk.length === 0 && answersToUse.length > 0) {
+            // All questions have cached answers - use them automatically
+            console.log('[Clarification] All questions have cached answers - auto-submitting');
+            const answerText = execution.clarifyingQuestions
+              .map((question, index) => {
+                const answer = answersToUse[index];
+                return `Q: ${question}\nA: ${answer}`;
+              })
+              .join('\n\n');
+            await submitPrompt(answerText, { origin: 'clarification-cached' });
+            return;
+          }
+          
+          // Show modal with questions (new + any we still need to confirm)
           setPendingClarification({
             projectId: currentProject.id,
             prompt,
-            questions: execution.clarifyingQuestions
+            questions: questionsToAsk
           });
         }
         return;
@@ -1360,12 +1396,23 @@ const ChatPanel = ({
     if (!pendingClarification) {
       return;
     }
+    
+    // [FAILURE PREVENTION] Record answers for deduplication
+    const tracker = clarificationTrackerRef.current;
+    
     const answerText = pendingClarification.questions
       .map((question, index) => {
+        const questionText = typeof question === 'string' ? question : String(question ?? '');
         const answer = typeof clarificationAnswers[index] === 'string'
           ? clarificationAnswers[index].trim()
           : '';
-        return `Q: ${question}\nA: ${answer || '(no answer provided)'}`;
+        
+        // Track that we asked this question and record the answer
+        const category = `goal_${pendingClarification.projectId || 'default'}`;
+        const intent = questionText;
+        tracker.record(category, intent, questionText, answer || '(no answer provided)');
+        
+        return `Q: ${questionText}\nA: ${answer || '(no answer provided)'}`;
       })
       .join('\n\n');
 

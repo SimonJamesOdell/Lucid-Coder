@@ -132,6 +132,261 @@ describe('AssetsTab', () => {
     });
   });
 
+  test('uploads files from assets header and reloads assets', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+    mockAxios.post.mockResolvedValue({ data: { success: true } });
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    const file = new File(['abc'], 'my image.png', { type: 'image/png' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockAxios.post).toHaveBeenCalledWith(
+        `/api/projects/${project.id}/files-ops/create-file`,
+        expect.objectContaining({
+          filePath: 'uploads/my_image.png',
+          contentBase64: 'YWJj',
+          encoding: 'base64',
+          openInEditor: false
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockAxios.get.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  test('sanitizes uploaded file names with separators, trimming, and invalid characters', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+    mockAxios.post.mockResolvedValue({ data: { success: true } });
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    const file = {
+      name: '  nested\\path/ weird?.png  ',
+      arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]).buffer)
+    };
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockAxios.post).toHaveBeenCalledWith(
+        `/api/projects/${project.id}/files-ops/create-file`,
+        expect.objectContaining({
+          filePath: 'uploads/nested-path-_weird_.png'
+        })
+      );
+    });
+  });
+
+  test('falls back to default file name when uploaded object has no name property', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+    mockAxios.post.mockResolvedValue({ data: { success: true } });
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    const file = {
+      arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([7, 8, 9]).buffer)
+    };
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockAxios.post).toHaveBeenCalledWith(
+        `/api/projects/${project.id}/files-ops/create-file`,
+        expect.objectContaining({ filePath: 'uploads/file' })
+      );
+    });
+  });
+
+  test('falls back to default file name when uploaded name is whitespace-only', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+    mockAxios.post.mockResolvedValue({ data: { success: true } });
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    const file = {
+      name: '   ',
+      arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([10]).buffer)
+    };
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockAxios.post).toHaveBeenCalledWith(
+        `/api/projects/${project.id}/files-ops/create-file`,
+        expect.objectContaining({ filePath: 'uploads/file' })
+      );
+    });
+  });
+
+  test('clicking Upload triggers the hidden file picker click handler', async () => {
+    const user = userEvent.setup();
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+
+    render(<AssetsTab project={project} />);
+
+    const uploadButton = await screen.findByRole('button', { name: 'Upload' });
+    await user.click(uploadButton);
+
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    clickSpy.mockRestore();
+  });
+
+  test('clears file picker and exits when upload selection is empty', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    fireEvent.change(input, { target: { files: [] } });
+
+    expect(input.value).toBe('');
+    expect(mockAxios.post).not.toHaveBeenCalled();
+  });
+
+  test('handles upload selection event when target.files is missing', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    fireEvent.change(input, { target: {} });
+
+    expect(input.value).toBe('');
+    expect(mockAxios.post).not.toHaveBeenCalled();
+  });
+
+  test('handles upload selection event when target.files is null', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    fireEvent.change(input, { target: { files: null } });
+
+    expect(input.value).toBe('');
+    expect(mockAxios.post).not.toHaveBeenCalled();
+  });
+
+  test('shows upload error when create-file request fails with non-409 status', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+    mockAxios.post.mockRejectedValueOnce({ response: { status: 500, data: { error: 'Upload denied' } } });
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    const file = new File(['abc'], 'bad.png', { type: 'image/png' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Upload denied')).toBeInTheDocument();
+    });
+  });
+
+  test('falls back to upload error.message when response payload is unavailable', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+    mockAxios.post.mockRejectedValueOnce(new Error('Upload exploded'));
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    const file = new File(['abc'], 'bad.png', { type: 'image/png' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Upload exploded')).toBeInTheDocument();
+    });
+  });
+
+  test('falls back to default upload error message when payload has no error details', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+    mockAxios.post.mockRejectedValueOnce({ response: { data: {} } });
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    const file = new File(['abc'], 'bad.png', { type: 'image/png' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to upload assets')).toBeInTheDocument();
+    });
+  });
+
+  test('retries upload with incremented path when create-file returns 409 conflict', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+    mockAxios.post
+      .mockRejectedValueOnce({ response: { status: 409 } })
+      .mockResolvedValueOnce({ data: { success: true } });
+
+    render(<AssetsTab project={project} />);
+
+    await screen.findByRole('button', { name: 'Upload' });
+
+    const input = document.querySelector('.assets-tab__file-picker');
+    const file = new File(['abc'], 'README', { type: 'text/plain' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockAxios.post).toHaveBeenCalledTimes(2);
+    });
+
+    expect(mockAxios.post).toHaveBeenNthCalledWith(
+      1,
+      `/api/projects/${project.id}/files-ops/create-file`,
+      expect.objectContaining({ filePath: 'uploads/README' })
+    );
+    expect(mockAxios.post).toHaveBeenNthCalledWith(
+      2,
+      `/api/projects/${project.id}/files-ops/create-file`,
+      expect.objectContaining({ filePath: 'uploads/README-1' })
+    );
+  });
+
+  test('clears file picker and exits when project id is missing', async () => {
+    mockAxios.get.mockResolvedValue(assetsResponse([]));
+
+    render(<AssetsTab project={{ id: '', name: 'No Id' }} />);
+
+    expect(screen.queryByRole('button', { name: 'Upload' })).not.toBeInTheDocument();
+    expect(mockAxios.post).not.toHaveBeenCalled();
+    expect(mockAxios.get).not.toHaveBeenCalled();
+  });
+
   test('opens image viewer and supports wheel zoom + close', async () => {
     const user = userEvent.setup();
     mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));

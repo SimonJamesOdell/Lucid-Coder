@@ -3032,6 +3032,38 @@ describe('processGoal guard coverage', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/no repo edits were applied/i);
   });
+
+  test('removes approval listener in finally when processing fails', async () => {
+    const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
+    const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener');
+
+    goalsApiMock.advanceGoalPhase.mockImplementation((_, phase) => {
+      if (phase === 'testing') {
+        return Promise.reject(new Error('phase failure'));
+      }
+      return Promise.resolve();
+    });
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(addEventListenerSpy).toHaveBeenCalledWith('approval:decision', expect.any(Function));
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('approval:decision', expect.any(Function));
+
+    addEventListenerSpy.mockRestore();
+    removeEventListenerSpy.mockRestore();
+  });
 });
 
 describe('__processGoalTestHooks helpers', () => {

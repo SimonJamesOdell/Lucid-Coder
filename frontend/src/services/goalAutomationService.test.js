@@ -10,6 +10,7 @@ import {
   __testOnly
 } from './goalAutomationService';
 import * as automationUtils from './goalAutomation/automationUtils';
+import * as frameworkOrchestrator from '../utils/frameworkOrchestrator';
 
 vi.mock('../utils/goalsApi');
 
@@ -834,6 +835,37 @@ describe('goalAutomationService', () => {
       expect(systemContent).toContain('Do NOT change global selectors (body, html, :root, *, or app-wide wrappers)');
     });
 
+    test('buildEditsPrompt includes framework safeguard guidance for router safe/unsafe paths', () => {
+      const unsafePrompt = __testOnly.buildEditsPrompt({
+        projectInfo: 'Project Foo',
+        fileTreeContext: '',
+        goalPrompt: 'Add nav links',
+        stage: 'implementation',
+        frameworkProfile: { detected: { framework: 'react', routerDependency: false } },
+        frameworkDecision: { decision: 'suggest_router_with_approval', normalized: 0.5, recommendation: 'Ask user' },
+        frameworkSafeguards: { safeToGenerate: { withRouter: false } }
+      });
+
+      const unsafeContent = unsafePrompt.messages[1].content;
+      expect(unsafeContent).toContain('FRAMEWORK CONTEXT (REACT)');
+      expect(unsafeContent).toContain('Router Library Available: NO - do NOT use router imports');
+      expect(unsafeContent).toContain('CRITICAL: Router dependency not installed');
+
+      const safePrompt = __testOnly.buildEditsPrompt({
+        projectInfo: 'Project Foo',
+        fileTreeContext: '',
+        goalPrompt: 'Add nav links',
+        stage: 'implementation',
+        frameworkProfile: { detected: { framework: 'react', routerDependency: true } },
+        frameworkDecision: { decision: 'auto_apply_router_api', normalized: 1, recommendation: 'Use router' },
+        frameworkSafeguards: { safeToGenerate: { withRouter: true } }
+      });
+
+      const safeContent = safePrompt.messages[1].content;
+      expect(safeContent).toContain('Router Library Available: YES (react-router-dom installed)');
+      expect(safeContent).toContain('Safe to use router API');
+    });
+
     test('applyEdits uses fallback rewrite error message when caught error loses its message', async () => {
       axios.get.mockImplementation((url) => {
         if (url === '/api/projects/42/files/frontend/src/app.js') {
@@ -1494,6 +1526,229 @@ describe('goalAutomationService', () => {
       expect(mockSetPreviewPanelTab).toHaveBeenCalledWith('files', { source: 'automation' });
       expect(mockSetPreviewPanelTab).toHaveBeenCalledWith('goals', { source: 'automation' });
       expect(mockCreateMessage).toHaveBeenCalledWith('assistant', 'Completed: Create test component', { variant: 'status' });
+    });
+
+    test('continues when framework analysis returns success=false', async () => {
+      fetchGoals.mockResolvedValue([{ id: 1, phase: 'ready' }]);
+      advanceGoalPhase.mockResolvedValue({});
+
+      vi.spyOn(frameworkOrchestrator, 'analyzeProject').mockResolvedValueOnce({
+        success: false,
+        error: 'analysis unavailable'
+      });
+
+      let llmCall = 0;
+      axios.post.mockImplementation((url) => {
+        if (url === '/api/llm/generate') {
+          llmCall += 1;
+          if (llmCall === 1) {
+            return Promise.resolve({ data: { content: JSON.stringify({ edits: [] }) } });
+          }
+          return Promise.resolve({
+            data: {
+              content: JSON.stringify({
+                edits: [{ type: 'upsert', path: 'src/Test.jsx', content: 'const Test = () => null;' }]
+              })
+            }
+          });
+        }
+        if (url === '/api/projects/42/branches/stage') {
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: { success: true } });
+      });
+
+      const goal = { id: 1, prompt: 'Create test component' };
+      const projectInfo = 'Project: Test\nFramework: react\nLanguage: javascript\nPath: /test';
+
+      const result = await processGoal(
+        goal,
+        42,
+        '/test',
+        projectInfo,
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      expect(result).toEqual({ success: true });
+    });
+
+    test('continues when framework decision event dispatch throws', async () => {
+      fetchGoals.mockResolvedValue([{ id: 1, phase: 'ready' }]);
+      advanceGoalPhase.mockResolvedValue({});
+
+      vi.spyOn(frameworkOrchestrator, 'analyzeProject').mockResolvedValueOnce({
+        success: true,
+        profile: { detected: { framework: 'react', routerDependency: false } },
+        decision: {
+          decision: 'suggest_router_with_approval',
+          normalized: 0.5,
+          recommendation: 'Ask for approval'
+        }
+      });
+
+      const originalDispatch = window.dispatchEvent;
+      const dispatchSpy = vi.spyOn(window, 'dispatchEvent').mockImplementation((event) => {
+        if (event?.type === 'processGoal:decision') {
+          throw new Error('dispatch failed');
+        }
+        return originalDispatch.call(window, event);
+      });
+
+      let llmCall = 0;
+      axios.post.mockImplementation((url) => {
+        if (url === '/api/llm/generate') {
+          llmCall += 1;
+          if (llmCall === 1) {
+            return Promise.resolve({ data: { content: JSON.stringify({ edits: [] }) } });
+          }
+          return Promise.resolve({
+            data: {
+              content: JSON.stringify({
+                edits: [{ type: 'upsert', path: 'src/Test.jsx', content: 'const Test = () => null;' }]
+              })
+            }
+          });
+        }
+        if (url === '/api/projects/42/branches/stage') {
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: { success: true } });
+      });
+
+      const goal = { id: 1, prompt: 'Create test component' };
+      const projectInfo = 'Project: Test\nFramework: react\nLanguage: javascript\nPath: /test';
+
+      const result = await processGoal(
+        goal,
+        42,
+        '/test',
+        projectInfo,
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      expect(result).toEqual({ success: true });
+      dispatchSpy.mockRestore();
+    });
+
+    test('continues when framework analysis throws', async () => {
+      fetchGoals.mockResolvedValue([{ id: 1, phase: 'ready' }]);
+      advanceGoalPhase.mockResolvedValue({});
+
+      vi.spyOn(frameworkOrchestrator, 'analyzeProject').mockRejectedValueOnce(new Error('analysis crashed'));
+
+      let llmCall = 0;
+      axios.post.mockImplementation((url) => {
+        if (url === '/api/llm/generate') {
+          llmCall += 1;
+          if (llmCall === 1) {
+            return Promise.resolve({ data: { content: JSON.stringify({ edits: [] }) } });
+          }
+          return Promise.resolve({
+            data: {
+              content: JSON.stringify({
+                edits: [{ type: 'upsert', path: 'src/Test.jsx', content: 'const Test = () => null;' }]
+              })
+            }
+          });
+        }
+        if (url === '/api/projects/42/branches/stage') {
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: { success: true } });
+      });
+
+      const result = await processGoal(
+        { id: 1, prompt: 'Create test component' },
+        42,
+        '/test',
+        'Project: Test\nFramework: react\nLanguage: javascript\nPath: /test',
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      expect(result).toEqual({ success: true });
+    });
+
+    test('records approval decision events while processing', async () => {
+      fetchGoals.mockResolvedValue([{ id: 1, phase: 'ready' }]);
+      advanceGoalPhase.mockResolvedValue({});
+
+      const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
+
+      vi.spyOn(frameworkOrchestrator, 'analyzeProject').mockResolvedValueOnce({
+        success: true,
+        profile: { detected: { framework: 'react', routerDependency: false } },
+        decision: {
+          decision: 'suggest_router_with_approval',
+          normalized: 0.5,
+          recommendation: 'Ask for approval'
+        }
+      });
+
+      let llmCall = 0;
+      axios.post.mockImplementation((url) => {
+        if (url === '/api/llm/generate') {
+          llmCall += 1;
+          if (llmCall === 1) {
+            return Promise.resolve({ data: { content: JSON.stringify({ edits: [] }) } });
+          }
+          return Promise.resolve({
+            data: {
+              content: JSON.stringify({
+                edits: [{ type: 'upsert', path: 'src/Test.jsx', content: 'const Test = () => null;' }]
+              })
+            }
+          });
+        }
+        if (url === '/api/projects/42/branches/stage') {
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: { success: true } });
+      });
+
+      const promise = processGoal(
+        { id: 1, prompt: 'Create test component' },
+        42,
+        '/test',
+        'Project: Test\nFramework: react\nLanguage: javascript\nPath: /test',
+        mockSetPreviewPanelTab,
+        mockSetGoalCount,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (
+          addEventListenerSpy.mock.calls.some(
+            ([eventName]) => eventName === 'approval:decision'
+          )
+        ) {
+          break;
+        }
+        await Promise.resolve();
+      }
+      expect(addEventListenerSpy).toHaveBeenCalledWith('approval:decision', expect.any(Function));
+
+      const approvalHandler = addEventListenerSpy.mock.calls.find(
+        ([eventName]) => eventName === 'approval:decision'
+      )?.[1];
+      expect(typeof approvalHandler).toBe('function');
+      approvalHandler({ detail: { approved: true } });
+
+      const result = await promise;
+      expect(result).toEqual({ success: true });
+      addEventListenerSpy.mockRestore();
     });
 
     test('requests editor focus when an edit is applied and requestEditorFocus is provided', async () => {

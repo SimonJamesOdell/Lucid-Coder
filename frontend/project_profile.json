@@ -1,0 +1,100 @@
+{
+  "project": "frontend",
+  "detected": {
+    "package": {
+      "name": "lucidcoder-frontend",
+      "version": "0.7.6"
+    },
+    "dependencies": [
+      "@monaco-editor/react",
+      "@testing-library/jest-dom",
+      "@testing-library/react",
+      "@testing-library/user-event",
+      "@types/react",
+      "@types/react-dom",
+      "@vitejs/plugin-react",
+      "@vitest/coverage-v8",
+      "@vitest/ui",
+      "axios",
+      "concurrently",
+      "eslint",
+      "eslint-plugin-react",
+      "eslint-plugin-react-hooks",
+      "eslint-plugin-react-refresh",
+      "happy-dom",
+      "jsdom",
+      "lucidcoder-fullstack",
+      "react",
+      "react-dom",
+      "react-markdown",
+      "react-router-dom",
+      "react-test-renderer",
+      "remark-gfm",
+      "socket.io-client",
+      "vite",
+      "vitest"
+    ],
+    "framework": "react",
+    "routerDependency": true,
+    "sourceFileCount": 235,
+    "routerImportsFound": true
+  },
+  "anchors": [
+    {
+      "file": "frontend/src/components/AssetsTab.jsx",
+      "line": 700,
+      "snippet": "<a href={selectedAsset.assetUrl} className=\"assets-tab__viewer-download\" download>",
+      "href": "selectedAsset.assetUrl",
+      "isExternal": false,
+      "download": true,
+      "targetBlank": false,
+      "internal": false
+    },
+    {
+      "file": "frontend/src/components/create-project/CreateProjectProgressPanel.jsx",
+      "line": 44,
+      "snippet": "<p>Frontend running on: <a href={`http://localhost:${processes.frontend.port}`} target=\"_blank\" rel=\"noopener noreferrer\">http://localhost:{processes.frontend.port}</a></p>",
+      "href": "http://localhost:${processes.frontend.port}`",
+      "isExternal": true,
+      "download": false,
+      "targetBlank": true,
+      "internal": false
+    },
+    {
+      "file": "frontend/src/components/create-project/CreateProjectProgressPanel.jsx",
+      "line": 45,
+      "snippet": "<p>Backend running on: <a href={`http://localhost:${processes.backend.port}`} target=\"_blank\" rel=\"noopener noreferrer\">http://localhost:{processes.backend.port}</a></p>",
+      "href": "http://localhost:${processes.backend.port}`",
+      "isExternal": true,
+      "download": false,
+      "targetBlank": true,
+      "internal": false
+    },
+    {
+      "file": "frontend/src/components/GitSettingsModal.jsx",
+      "line": 139,
+      "snippet": "Docs: <a href={guideUrl} target=\"_blank\" rel=\"noreferrer\">{guideUrl}</a>",
+      "href": "guideUrl",
+      "isExternal": false,
+      "download": false,
+      "targetBlank": true,
+      "internal": false
+    },
+    {
+      "file": "frontend/src/components/GitTab.jsx",
+      "line": 797,
+      "snippet": "<a href={formState.remoteUrl} target=\"_blank\" rel=\"noreferrer\">",
+      "href": "formState.remoteUrl",
+      "isExternal": false,
+      "download": false,
+      "targetBlank": true,
+      "internal": false
+    }
+  ],
+  "summary": {
+    "framework": "react",
+    "routerDependency": true,
+    "routerImportsFound": true,
+    "anchorCount": 5
+  }
+}
