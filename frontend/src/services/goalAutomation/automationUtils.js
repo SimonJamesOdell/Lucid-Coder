@@ -778,7 +778,11 @@ export const buildEditsPrompt = ({
   attempt = 1,
   retryContext = null,
   testFailureContext = null,
-  scopeReflection = null
+  scopeReflection = null,
+  // [FAILURE PREVENTION] Framework context for informed code generation
+  frameworkProfile = null,
+  frameworkDecision = null,
+  frameworkSafeguards = null
 }) => {
   const stageLabel = stage === 'tests' ? 'tests' : 'implementation';
   const focusInstructions =
@@ -825,6 +829,37 @@ export const buildEditsPrompt = ({
   const failureContextBlock = formatTestFailureContext(testFailureContext);
   const reflectionBlock = formatScopeReflectionContext(scopeReflection);
 
+  // [FAILURE PREVENTION] Build framework guidance for LLM
+  const buildFrameworkContextBlock = (profile, decision, safeguards) => {
+    if (!profile) {
+      return '';
+    }
+    
+    const framework = profile.detected?.framework || 'unknown';
+    const hasRouter = profile.detected?.routerDependency;
+    const confidence = decision?.normalized || 0;
+    const decisionType = decision?.decision || 'unknown';
+    
+    let block = `\n\n## FRAMEWORK CONTEXT (${framework.toUpperCase()})\n`;
+    block += `Framework: ${framework}\n`;
+    block += `Router Library Available: ${hasRouter ? 'YES (react-router-dom installed)' : 'NO - do NOT use router imports'}\n`;
+    block += `Decision Confidence: ${(confidence * 100).toFixed(0)}%\n`;
+    block += `Generation Guidance: ${decision?.recommendation || 'Follow standard practices'}\n`;
+    
+    if (safeguards) {
+      const safeToGenerateWithRouter = safeguards?.safeToGenerate?.withRouter;
+      if (safeToGenerateWithRouter === false && hasRouter === false) {
+        block += `\n⚠️ CRITICAL: Router dependency not installed. Use standard HTML navigation (<a> tags), not react-router-dom imports.\n`;
+      } else if (safeToGenerateWithRouter === true) {
+        block += `✓ Safe to use router API (react-router-dom Link, useNavigate, etc.) for internal navigation.\n`;
+      }
+    }
+    
+    return block;
+  };
+
+  const frameworkBlock = buildFrameworkContextBlock(frameworkProfile, frameworkDecision, frameworkSafeguards);
+
   let userContent = `${projectInfo}${fileTreeContext}\n\nTask: ${goalPrompt}\n\nStage: ${stageLabel}. ${focusInstructions} ` +
     'Honor layout/placement constraints in the task (e.g., top of page, full-width).';
   if (testRunnerGuidance) {
@@ -835,6 +870,9 @@ export const buildEditsPrompt = ({
   }
   if (failureContextBlock) {
     userContent += failureContextBlock;
+  }
+  if (frameworkBlock) {
+    userContent += frameworkBlock;
   }
   userContent += '\n\nReturn edits JSON only.';
   userContent += retryNotice;

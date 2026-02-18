@@ -19,6 +19,7 @@ import projectRoutes, {
 import db, { initializeDatabase, closeDatabase, createProject, getProjectGitSettings } from '../database.js';
 import { resolveProjectPath } from '../utils/projectPaths.js';
 import * as cleanup from '../routes/projects/cleanup.js';
+import { stageWorkspaceChange } from '../services/branchWorkflow.js';
 
 vi.mock('../services/projectScaffolding.js', () => ({
   createProjectWithFiles: vi.fn(),
@@ -49,6 +50,10 @@ vi.mock('../services/jobRunner.js', () => ({
 
 vi.mock('../services/projectScaffolding/generate.js', () => ({
   generateBackendFiles: vi.fn()
+}));
+
+vi.mock('../services/branchWorkflow.js', () => ({
+  stageWorkspaceChange: vi.fn()
 }));
 
 vi.mock('../services/remoteRepoService.js', () => {
@@ -119,6 +124,8 @@ describe('Projects routes coverage (projects.js)', () => {
   beforeEach(async () => {
     await cleanDatabase();
     __projectRoutesInternals.resetFsModuleOverride();
+    stageWorkspaceChange.mockReset();
+    stageWorkspaceChange.mockResolvedValue(undefined);
   });
 
   describe('clone URL helpers', () => {
@@ -2679,6 +2686,42 @@ describe('Projects routes coverage (projects.js)', () => {
       expect(response.body).toMatchObject({ success: false, error: 'Failed to rename path' });
 
       __projectRoutesInternals.resetFsModuleOverride();
+    });
+
+    test('returns 200 when upload staging fails after rename', async () => {
+      const projectName = `rename-stage-fail-${Date.now()}`;
+      const projectPath = path.join(projectsRoot, projectName);
+      await ensureEmptyDir(projectPath);
+
+      const fromFile = path.join(projectPath, 'uploads', 'from.txt');
+      await fs.mkdir(path.dirname(fromFile), { recursive: true });
+      await fs.writeFile(fromFile, 'content');
+
+      const projectRecord = await createProject({
+        name: projectName,
+        description: 'rename staging failure coverage',
+        language: 'javascript',
+        framework: 'react',
+        path: projectPath
+      });
+
+      stageWorkspaceChange.mockRejectedValueOnce(new Error('stage failed'));
+
+      const response = await request(app)
+        .post(`/api/projects/${projectRecord.id}/files-ops/rename`)
+        .send({ fromPath: 'uploads/from.txt', toPath: 'uploads/to.txt' });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        success: true,
+        fromPath: 'uploads/from.txt',
+        toPath: 'uploads/to.txt'
+      });
+
+      expect(stageWorkspaceChange).toHaveBeenCalledWith(expect.anything(), {
+        filePath: 'uploads/to.txt',
+        source: 'editor'
+      });
     });
   });
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { AppStateProvider, useAppState } from './context/AppStateContext'
 import Navigation from './components/Navigation'
+import ApprovalModal from './components/ApprovalPanel'
 import CleanupResumeCoordinator from './components/CleanupResumeCoordinator.jsx'
 import GettingStarted from './components/StatusPanel' // This file contains GettingStarted component now
 import ProjectSelector from './components/ProjectSelector'
@@ -45,6 +46,54 @@ function AppContent() {
   }, [backendCheck]);
 
   const [backendVersionLabel, setBackendVersionLabel] = useState(null);
+
+  // [FAILURE PREVENTION] Framework decision for approval gating
+  const [frameworkDecision, setFrameworkDecision] = useState(null);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+
+  // Listen for framework decisions from processGoal
+  useEffect(() => {
+    const handleFrameworkDecision = (event) => {
+      const decision = event.detail;
+      if (decision) {
+        console.log('[App] Framework decision:', {
+          decision: decision.decision,
+          confidence: decision.normalized
+        });
+        setFrameworkDecision(decision);
+        
+        // Show approval modal for medium-confidence decisions
+        if (decision.decision === 'suggest_router_with_approval') {
+          console.log('[App] Showing approval modal for medium-confidence decision');
+          setShowApprovalModal(true);
+        }
+      }
+    };
+
+    const handleRecommendationApproved = (event) => {
+      console.log('[App] User approved recommendation');
+      handleApprovalDecision(true);
+    };
+
+    window.addEventListener('processGoal:decision', handleFrameworkDecision);
+    window.addEventListener('lucidcoder:apply-recommendation', handleRecommendationApproved);
+    
+    return () => {
+      window.removeEventListener('processGoal:decision', handleFrameworkDecision);
+      window.removeEventListener('lucidcoder:apply-recommendation', handleRecommendationApproved);
+    };
+  }, []);
+
+  const handleApprovalDecision = (approved) => {
+    if (frameworkDecision) {
+      const event = new CustomEvent('approval:decision', {
+        detail: { approved, decision: frameworkDecision }
+      });
+      window.dispatchEvent(event);
+      console.log('[App] Dispatched approval:decision event:', { approved });
+    }
+    setShowApprovalModal(false);
+  };
 
   const checkBackendNow = useCallback(async () => {
     const controller = new AbortController();
@@ -280,6 +329,12 @@ function AppContent() {
   return (
     <div className="App">
       <Navigation versionLabel={backendVersionLabel} />
+      {showApprovalModal && (
+        <ApprovalModal 
+          decision={frameworkDecision} 
+          onClose={() => handleApprovalDecision(false)}
+        />
+      )}
       <CleanupResumeCoordinator />
       {showBackendOfflineBanner && (
         <div className="backend-offline-overlay" role="alert" aria-live="assertive" data-testid="backend-offline-overlay">

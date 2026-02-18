@@ -1,6 +1,7 @@
 import { describe, test, expect, vi } from 'vitest';
 import {
   automationLog,
+  buildEditsPrompt,
   buildFallbackBranchNameFromPrompt,
   extractBranchPromptContext,
   isBranchNameRelevantToPrompt
@@ -104,5 +105,35 @@ describe('automationUtils coverage helpers', () => {
       writable: true,
       value: originalDispatch
     });
+  });
+
+  test('buildEditsPrompt includes critical router warning when safeguards forbid router generation', () => {
+    const prompt = buildEditsPrompt({
+      projectInfo: 'Project: Test',
+      fileTreeContext: '\nFiles: src/App.jsx',
+      goalPrompt: 'Add navigation links',
+      stage: 'implementation',
+      frameworkProfile: { detected: { framework: 'react', routerDependency: false } },
+      frameworkDecision: { normalized: 0.9, recommendation: 'Avoid router imports' },
+      frameworkSafeguards: { safeToGenerate: { withRouter: false } }
+    });
+
+    expect(prompt.messages[1].content).toContain('CRITICAL: Router dependency not installed');
+    expect(prompt.messages[1].content).toContain('not react-router-dom imports');
+  });
+
+  test('buildEditsPrompt includes safe-router guidance when safeguards allow router generation', () => {
+    const prompt = buildEditsPrompt({
+      projectInfo: 'Project: Test',
+      fileTreeContext: '\nFiles: src/App.jsx',
+      goalPrompt: 'Add internal link navigation',
+      stage: 'implementation',
+      frameworkProfile: { detected: { framework: 'react', routerDependency: true } },
+      frameworkDecision: { normalized: 0.8, recommendation: 'Use router APIs' },
+      frameworkSafeguards: { safeToGenerate: { withRouter: true } }
+    });
+
+    expect(prompt.messages[1].content).toContain('Safe to use router API');
+    expect(prompt.messages[1].content).toContain('Router Library Available: YES');
   });
 });

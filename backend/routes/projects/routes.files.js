@@ -1292,8 +1292,28 @@ export function registerProjectFileRoutes(router) {
         }
       }
 
-      await fs.rename(fromResolved.fullPath, toResolved.fullPath);
-      await stageUploadsPaths(id, [fromResolved.normalized, toResolved.normalized]);
+      try {
+        await fs.rename(fromResolved.fullPath, toResolved.fullPath);
+      } catch (renameError) {
+        console.error('[routes.files] fs.rename failed:', {
+          from: fromResolved.fullPath,
+          to: toResolved.fullPath,
+          code: renameError?.code,
+          message: renameError?.message
+        });
+        throw renameError;
+      }
+
+      try {
+        // Only stage the new path (old path no longer exists after rename)
+        await stageUploadsPaths(id, [toResolved.normalized]);
+      } catch (stageError) {
+        console.error('[routes.files] stageUploadsPaths failed:', {
+          path: toResolved.normalized,
+          message: stageError?.message
+        });
+        // Don't re-throw staging errors - the file rename succeeded, staging is secondary
+      }
 
       return res.json({
         success: true,
@@ -1302,7 +1322,13 @@ export function registerProjectFileRoutes(router) {
       });
     } catch (error) {
       const status = error.statusCode || 500;
-      res.status(status).json({ success: false, error: status === 500 ? 'Failed to rename path' : error.message });
+      const errorMessage = status === 500 ? 'Failed to rename path' : error.message;
+      console.error('[routes.files] rename endpoint error:', {
+        status,
+        message: error?.message,
+        code: error?.code
+      });
+      res.status(status).json({ success: false, error: errorMessage });
     }
   });
 

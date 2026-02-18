@@ -124,7 +124,9 @@ const AssetsTab = ({ project }) => {
   const [imageZoom, setImageZoom] = useState(1);
   const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
   const [isImagePanning, setIsImagePanning] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const panStartRef = useRef({ startX: 0, startY: 0, offsetX: 0, offsetY: 0 });
+  const filePickerRef = useRef(null);
 
   const loadAssets = useCallback(async () => {
     if (!projectId) {
@@ -209,6 +211,91 @@ const AssetsTab = ({ project }) => {
       window.removeEventListener('lucidcoder:assets-updated', handleAssetsUpdated);
     };
   }, [loadAssets, projectId]);
+
+  const toBase64 = useCallback(async (file) => {
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      const chunk = bytes.subarray(index, index + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+
+    return btoa(binary);
+  }, []);
+
+  const sanitizeUploadFileName = useCallback((name) => {
+    const normalized = String(name || 'file').replace(/[\\/]+/g, '-').trim();
+    const fallback = normalized || 'file';
+    return fallback.replace(/[^a-zA-Z0-9._-]/g, '_');
+  }, []);
+
+  const buildUniqueUploadPath = useCallback((fileName, attempt = 0) => {
+    const safeName = sanitizeUploadFileName(fileName);
+    const dotIndex = safeName.lastIndexOf('.');
+    const hasExtension = dotIndex > 0;
+    const stem = hasExtension ? safeName.slice(0, dotIndex) : safeName;
+    const extension = hasExtension ? safeName.slice(dotIndex) : '';
+    const suffix = attempt > 0 ? `-${attempt}` : '';
+    return `uploads/${stem}${suffix}${extension}`;
+  }, [sanitizeUploadFileName]);
+
+  const createProjectFileFromUpload = useCallback(async (file, attempt = 0) => {
+    const filePath = buildUniqueUploadPath(file.name, attempt);
+    const contentBase64 = await toBase64(file);
+
+    try {
+      await axios.post(`/api/projects/${projectId}/files-ops/create-file`, {
+        filePath,
+        contentBase64,
+        encoding: 'base64',
+        openInEditor: false
+      });
+      return filePath;
+    } catch (uploadError) {
+      if (uploadError?.response?.status === 409) {
+        return createProjectFileFromUpload(file, attempt + 1);
+      }
+      throw uploadError;
+    }
+  }, [buildUniqueUploadPath, projectId, toBase64]);
+
+  const handleUploadClick = useCallback(() => {
+    filePickerRef.current?.click?.();
+  }, []);
+
+  const handleUploadSelected = useCallback(async (event) => {
+    const selected = Array.from(event?.target?.files || []);
+    if (!selected.length || !projectId) {
+      if (event?.target) {
+        event.target.value = '';
+      }
+      return;
+    }
+
+    setUploading(true);
+    setError('');
+
+    try {
+      const uploadedPaths = await Promise.all(selected.map((file) => createProjectFileFromUpload(file)));
+      await loadAssets();
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('lucidcoder:assets-updated', {
+          detail: { projectId, paths: uploadedPaths }
+        }));
+      }
+    } catch (uploadError) {
+      console.error('Failed to upload assets:', uploadError);
+      setError(uploadError?.response?.data?.error || uploadError?.message || 'Failed to upload assets');
+    } finally {
+      setUploading(false);
+      if (event?.target) {
+        event.target.value = '';
+      }
+    }
+  }, [createProjectFileFromUpload, loadAssets, projectId]);
 
   const deleteAsset = useCallback(async (assetPath) => {
     if (!projectId || !assetPath) {
@@ -519,14 +606,31 @@ const AssetsTab = ({ project }) => {
           <h3>Assets</h3>
           <span className="assets-tab__assistant-count">AI context: {selectedAssistantAssetCount}</span>
         </div>
-        <button
-          type="button"
-          className="assets-tab__refresh"
-          onClick={loadAssets}
-          disabled={loading}
-        >
-          Refresh
-        </button>
+        <div className="assets-tab__header-actions">
+          <button
+            type="button"
+            className="assets-tab__refresh assets-tab__upload"
+            onClick={handleUploadClick}
+            disabled={loading || uploading}
+          >
+            {uploading ? 'Uploading…' : 'Upload'}
+          </button>
+          <button
+            type="button"
+            className="assets-tab__refresh"
+            onClick={loadAssets}
+            disabled={loading || uploading}
+          >
+            Refresh
+          </button>
+          <input
+            ref={filePickerRef}
+            type="file"
+            multiple
+            className="assets-tab__file-picker"
+            onChange={handleUploadSelected}
+          />
+        </div>
       </div>
 
       {loading && <div className="assets-tab__status">Loading assets…</div>}

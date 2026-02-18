@@ -698,4 +698,23 @@ describe('buildEditsPrompt', () => {
     expect(userContent).toContain('the replacement snippet did not match the current file');
     expect(userContent).toContain('Problematic search snippet: const retry = true;');
   });
+
+  it('includes default framework guidance when decision details are missing', () => {
+    const prompt = buildEditsPrompt({
+      projectInfo: 'Project: Demo',
+      fileTreeContext: '',
+      goalPrompt: 'Build a navbar',
+      stage: 'implementation',
+      frameworkProfile: { detected: {} },
+      frameworkDecision: undefined,
+      frameworkSafeguards: {}
+    });
+
+    const userContent = prompt.messages.find((msg) => msg.role === 'user')?.content || '';
+
+    expect(userContent).toContain('## FRAMEWORK CONTEXT (UNKNOWN)');
+    expect(userContent).toContain('Framework: unknown');
+    expect(userContent).toContain('Decision Confidence: 0%');
+    expect(userContent).toContain('Generation Guidance: Follow standard practices');
+  });
 });

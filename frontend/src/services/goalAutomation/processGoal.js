@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { fetchGoals, advanceGoalPhase } from '../../utils/goalsApi';
+import * as orchestrator from '../../utils/frameworkOrchestrator';
 import {
   automationLog,
   resolveAttemptSequence,
@@ -174,6 +175,7 @@ export async function processGoal(
   setMessages,
   options = {}
 ) {
+  let cleanupApprovalListener = null;
   try {
     const scopeReflectionGloballyDisabled =
       typeof globalThis !== 'undefined' && globalThis.__LUCIDCODER_DISABLE_SCOPE_REFLECTION === true;
@@ -197,6 +199,68 @@ export async function processGoal(
       goalId: goal?.id,
       prompt: String(goal?.prompt || '').slice(0, 240)
     });
+
+    // [FAILURE PREVENTION: Framework Analysis]
+    // Early project profiling to prevent dependency confusion and inform code generation
+    let frameworkAnalysis = null;
+    try {
+      frameworkAnalysis = await orchestrator.analyzeProject(goal?.prompt || '');
+      if (frameworkAnalysis.success) {
+        automationLog('processGoal:framework', {
+          projectId,
+          goalId: goal?.id,
+          framework: frameworkAnalysis.profile?.detected?.framework,
+          hasRouter: frameworkAnalysis.profile?.detected?.routerDependency,
+          decision: frameworkAnalysis.decision?.decision,
+          confidence: frameworkAnalysis.decision?.normalized
+        });
+      } else {
+        automationLog('processGoal:framework:failed', {
+          projectId,
+          goalId: goal?.id,
+          error: frameworkAnalysis.error
+        });
+      }
+    } catch (error) {
+      console.warn('[processGoal] Framework analysis error:', error?.message);
+      automationLog('processGoal:framework:exception', {
+        projectId,
+        goalId: goal?.id,
+        message: error?.message
+      });
+    }
+
+    // [FAILURE PREVENTION] Emit framework decision to UI for approval gating
+    if (frameworkAnalysis?.success && frameworkAnalysis?.decision) {
+      try {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('processGoal:decision', {
+            detail: frameworkAnalysis.decision
+          }));
+          console.log('[processGoal] Emitted decision event:', frameworkAnalysis.decision.decision);
+        }
+      } catch (error) {
+        console.warn('[processGoal] Failed to emit decision event:', error?.message);
+      }
+    }
+
+    // [FAILURE PREVENTION] Setup approval decision handler
+    let approvalDecision = null;
+    const handleApprovalDecision = (event) => {
+      approvalDecision = event.detail?.approved;
+      console.log('[processGoal] User approval decision:', approvalDecision);
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('approval:decision', handleApprovalDecision);
+    }
+
+    // Cleanup handler for when processGoal completes
+    cleanupApprovalListener = () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('approval:decision', handleApprovalDecision);
+      }
+    };
 
     const requestEditorFocus = typeof options?.requestEditorFocus === 'function' ? options.requestEditorFocus : null;
     const syncBranchOverview = typeof options?.syncBranchOverview === 'function' ? options.syncBranchOverview : null;
@@ -525,7 +589,13 @@ export async function processGoal(
             attempt,
             retryContext: testsRetryContext,
             testFailureContext,
-            scopeReflection
+            scopeReflection,
+            // [FAILURE PREVENTION] Inject framework context to inform LLM
+            frameworkProfile: frameworkAnalysis?.profile,
+            frameworkDecision: frameworkAnalysis?.decision,
+            frameworkSafeguards: frameworkAnalysis?.success 
+              ? orchestrator.validateGenerationSafety(frameworkAnalysis.profile, frameworkAnalysis.decision)
+              : null
           })
         );
         automationLog('processGoal:llm:tests:response', {
@@ -707,7 +777,13 @@ export async function processGoal(
           attempt,
           retryContext: implRetryContext,
           testFailureContext,
-          scopeReflection
+          scopeReflection,
+          // [FAILURE PREVENTION] Inject framework context to inform LLM
+          frameworkProfile: frameworkAnalysis?.profile,
+          frameworkDecision: frameworkAnalysis?.decision,
+          frameworkSafeguards: frameworkAnalysis?.success 
+            ? orchestrator.validateGenerationSafety(frameworkAnalysis.profile, frameworkAnalysis.decision)
+            : null
         })
       );
       automationLog('processGoal:llm:impl:response', {
@@ -906,6 +982,10 @@ export async function processGoal(
       createMessage('assistant', `Error processing goal: ${errorMsg}`, { variant: 'error' })
     ]);
     return { success: false, error: errorMsg };
+    /* c8 ignore next */
+  } finally {
+    // [FAILURE PREVENTION] Cleanup approval listener
+    cleanupApprovalListener?.();
   }
 }
 
