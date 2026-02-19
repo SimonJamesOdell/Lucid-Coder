@@ -268,6 +268,7 @@ describe('parseScopeReflectionResponse', () => {
       testsNeeded: true,
       styleScope: {
         mode: 'global',
+        targetLevel: 'global',
         enforceTargetScoping: false,
         forbidGlobalSelectors: false,
         targetHints: []
@@ -300,10 +301,125 @@ describe('parseScopeReflectionResponse', () => {
       testsNeeded: true,
       styleScope: {
         mode: 'targeted',
+        targetLevel: 'component',
         enforceTargetScoping: true,
         forbidGlobalSelectors: true,
         targetHints: ['button', 'card']
       }
+    });
+  });
+
+  it('does not coerce styleScope from prompt text and uses structured response only', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'style task',
+          styleScope: {
+            mode: 'targeted',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['navbar']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection).toEqual({
+      reasoning: 'style task',
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: [],
+      testsNeeded: true,
+      styleScope: {
+        mode: 'targeted',
+        targetLevel: 'component',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['navbar']
+      }
+    });
+  });
+
+  it('guardrail: ignores global-style wording in reasoning when structured scope is targeted', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'Use the selected image as the site background across the whole app',
+          styleScope: {
+            mode: 'targeted',
+            targetLevel: 'component',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['hero', 'banner']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection.styleScope).toEqual({
+      mode: 'targeted',
+      targetLevel: 'component',
+      enforceTargetScoping: true,
+      forbidGlobalSelectors: true,
+      targetHints: ['hero', 'banner']
+    });
+  });
+
+  it('normalizes structured global target level even when mode is targeted', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'page shell background update',
+          styleScope: {
+            mode: 'targeted',
+            targetLevel: 'global',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['shell']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection.styleScope).toEqual({
+      mode: 'global',
+      targetLevel: 'global',
+      enforceTargetScoping: false,
+      forbidGlobalSelectors: false,
+      targetHints: ['shell']
+    });
+  });
+
+  it('preserves structured element target level for targeted style scope', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'button-only style update',
+          styleScope: {
+            mode: 'targeted',
+            targetLevel: 'element',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['button']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection.styleScope).toEqual({
+      mode: 'targeted',
+      targetLevel: 'element',
+      enforceTargetScoping: true,
+      forbidGlobalSelectors: true,
+      targetHints: ['button']
     });
   });
 });
