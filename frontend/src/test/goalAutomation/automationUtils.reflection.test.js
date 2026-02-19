@@ -516,6 +516,69 @@ describe('validateEditsAgainstReflection', () => {
 
     expect(validateEditsAgainstReflection(edits, reflection)).toBeNull();
   });
+
+  it('rejects style-scoped edits when required selected assets are not referenced', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      requiredAssetPaths: ['uploads/background.png'],
+      styleScope: {
+        mode: 'global',
+        targetLevel: 'global',
+        enforceTargetScoping: false,
+        forbidGlobalSelectors: false,
+        targetHints: []
+      }
+    };
+    const edits = [
+      {
+        type: 'modify',
+        path: 'frontend/src/components/App.jsx',
+        replacements: [
+          {
+            search: '<main className="app-shell">',
+            replace: '<main className="app-shell app-shell--updated">'
+          }
+        ]
+      }
+    ];
+
+    const result = validateEditsAgainstReflection(edits, reflection);
+
+    expect(result).toMatchObject({
+      type: 'required-asset-reference-missing',
+      rule: 'selected-asset-required'
+    });
+  });
+
+  it('accepts style-scoped edits when a required selected asset path is referenced', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      requiredAssetPaths: ['uploads/background.png'],
+      styleScope: {
+        mode: 'global',
+        targetLevel: 'global',
+        enforceTargetScoping: false,
+        forbidGlobalSelectors: false,
+        targetHints: []
+      }
+    };
+    const edits = [
+      {
+        type: 'modify',
+        path: 'frontend/src/index.css',
+        replacements: [
+          {
+            search: 'body { margin: 0; }',
+            replace: "body { margin: 0; background-image: url('/uploads/background.png'); }"
+          }
+        ]
+      }
+    ];
+
+    expect(validateEditsAgainstReflection(edits, reflection)).toBeNull();
+  });
 });
 
 describe('buildEditsPrompt', () => {

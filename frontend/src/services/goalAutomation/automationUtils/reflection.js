@@ -32,6 +32,30 @@ const editMentionsTargetHints = (edit = {}, targetHints = []) => {
   return targetHints.some((hint) => path.includes(hint) || text.includes(hint));
 };
 
+const normalizeAssetPathForMatch = (value) => {
+  return String(value || '').trim().replace(/^\/+/, '').toLowerCase();
+};
+
+const editMentionsRequiredAssetPaths = (edit = {}, requiredAssetPaths = []) => {
+  if (!Array.isArray(requiredAssetPaths) || requiredAssetPaths.length === 0) {
+    return false;
+  }
+
+  const text = readEditText(edit);
+  const path = String(edit?.path || '').toLowerCase();
+  return requiredAssetPaths.some((assetPath) => {
+    const normalizedAssetPath = normalizeAssetPathForMatch(assetPath);
+    if (!normalizedAssetPath) {
+      return false;
+    }
+    return (
+      text.includes(normalizedAssetPath)
+      || text.includes(`/${normalizedAssetPath}`)
+      || path.includes(normalizedAssetPath)
+    );
+  });
+};
+
 export const deriveStyleScopeContract = (_goalPrompt) => {
   return null;
 };
@@ -243,11 +267,17 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
   const styleScope = reflection?.styleScope && typeof reflection.styleScope === 'object'
     ? reflection.styleScope
     : null;
+  const requiredAssetPaths = normalizeReflectionList(reflection?.requiredAssetPaths || []);
+  let hasRequiredAssetReference = requiredAssetPaths.length === 0;
 
   for (const edit of edits) {
     const normalizedPath = normalizeRepoPath(edit?.path);
     if (!normalizedPath) {
       continue;
+    }
+
+    if (!hasRequiredAssetReference && editMentionsRequiredAssetPaths(edit, requiredAssetPaths)) {
+      hasRequiredAssetReference = true;
     }
 
     if (reflection.testsNeeded === false && isTestFilePath(normalizedPath)) {
@@ -288,6 +318,15 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
         message: `Edit to ${normalizedPath} conflicts with scope guidance to avoid ${violatingPrefix}.`
       };
     }
+  }
+
+  if (styleScope && requiredAssetPaths.length > 0 && !hasRequiredAssetReference) {
+    return {
+      type: 'required-asset-reference-missing',
+      path: requiredAssetPaths[0],
+      rule: 'selected-asset-required',
+      message: 'Selected project asset was not referenced in proposed edits. Ensure the requested selected image path is applied in code/CSS (for example /uploads/<file>).'
+    };
   }
 
   return null;

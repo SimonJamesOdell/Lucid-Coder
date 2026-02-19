@@ -164,6 +164,43 @@ const formatGoalLabel = (value) => {
   return cleaned.length > 140 ? `${cleaned.slice(0, 137)}...` : cleaned;
 };
 
+const extractSelectedProjectAssets = (value) => {
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  const lines = value.split(/\r?\n/);
+  const headerIndex = lines.findIndex((line) => line.trim().toLowerCase() === 'selected project assets:');
+  if (headerIndex < 0) {
+    return [];
+  }
+
+  const results = [];
+  for (let index = headerIndex + 1; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) {
+      if (results.length > 0) {
+        break;
+      }
+      continue;
+    }
+
+    if (!trimmed.startsWith('- ')) {
+      if (results.length > 0) {
+        break;
+      }
+      continue;
+    }
+
+    const assetPath = trimmed.slice(2).trim();
+    if (assetPath) {
+      results.push(assetPath);
+    }
+  }
+
+  return Array.from(new Set(results));
+};
+
 export async function processGoal(
   goal,
   projectId,
@@ -451,6 +488,10 @@ export async function processGoal(
           buildScopeReflectionPrompt({ projectInfo, goalPrompt: goal?.prompt })
         );
         scopeReflection = cloneScopeReflection(parseScopeReflectionResponse(reflectionResponse));
+        const selectedAssetPaths = extractSelectedProjectAssets(goal?.prompt);
+        if (scopeReflection && selectedAssetPaths.length > 0) {
+          scopeReflection.requiredAssetPaths = selectedAssetPaths;
+        }
         const normalizedPrompt = typeof goal?.prompt === 'string' ? goal.prompt.toLowerCase() : '';
         const isTestFixGoal = /fix\s+failing\s+test|failing\s+test|test\s+failure/.test(normalizedPrompt);
         if (scopeReflection && (testFailureContext || isTestFixGoal)) {
@@ -460,7 +501,8 @@ export async function processGoal(
           goalId: goal?.id,
           testsNeeded: scopeReflection?.testsNeeded !== false,
           mustChange: scopeReflection?.mustChange,
-          mustAvoid: scopeReflection?.mustAvoid
+          mustAvoid: scopeReflection?.mustAvoid,
+          requiredAssetPaths: scopeReflection?.requiredAssetPaths
         });
       } catch (error) {
         automationLog('processGoal:scopeReflection:error', { message: error?.message });

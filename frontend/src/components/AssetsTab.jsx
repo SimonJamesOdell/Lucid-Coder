@@ -147,21 +147,18 @@ const AssetsTab = ({ project }) => {
       const entries = Array.isArray(response.data.assets) ? response.data.assets : [];
       const sortedEntries = sortAssets(entries);
       setAssets(sortedEntries);
-      setAssistantAssetContextPathsState((previous) => {
-        if (!previous.length) {
-          return previous;
-        }
-
+      const storedContextPaths = getAssistantAssetContextPaths(projectId);
+      if (storedContextPaths.length > 0) {
         const availablePaths = new Set(sortedEntries.map((entry) => entry.path));
-        const prunedPaths = previous.filter((path) => availablePaths.has(path));
+        const prunedPaths = storedContextPaths.filter((path) => availablePaths.has(path));
 
-        if (prunedPaths.length !== previous.length) {
+        if (prunedPaths.length !== storedContextPaths.length) {
           setAssistantAssetContextPaths(projectId, prunedPaths);
-          return prunedPaths;
+          setAssistantAssetContextPathsState(prunedPaths);
+        } else {
+          setAssistantAssetContextPathsState(storedContextPaths);
         }
-
-        return previous;
-      });
+      }
     } catch (err) {
       console.error('Failed to load assets:', err);
       setAssets([]);
