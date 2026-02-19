@@ -1,4 +1,7 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
+import path from 'path';
+import os from 'os';
+import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 
 const getRunningProcessEntryMock = vi.hoisted(() => vi.fn());
 const getStoredProjectPortsMock = vi.hoisted(() => vi.fn());
@@ -592,6 +595,42 @@ describe('previewProxy', () => {
     expect(__testOnly.parsePreviewPath('/preview//about')).toBe(null);
   });
 
+  test('parseUploadForwardPath returns null for non-string inputs', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    expect(__testOnly.parseUploadForwardPath(null)).toBe(null);
+  });
+
+  test('parseUploadForwardPath returns null when decoded path does not preserve uploads prefix', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+    const decodeSpy = vi.spyOn(globalThis, 'decodeURIComponent').mockReturnValue('/assets/image.png');
+
+    try {
+      expect(__testOnly.parseUploadForwardPath('/uploads/image.png')).toBe(null);
+    } finally {
+      decodeSpy.mockRestore();
+    }
+  });
+
+  test('parseUploadForwardPath returns null for uploads root path without a file segment', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    expect(__testOnly.parseUploadForwardPath('/uploads/')).toBe(null);
+  });
+
+  test('parseUploadForwardPath returns null for query-only paths', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    expect(__testOnly.parseUploadForwardPath('?cache=1')).toBe(null);
+  });
+
+  test('resolveUploadContentType falls back for falsy and unknown extensions', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    expect(__testOnly.resolveUploadContentType(null)).toBe('application/octet-stream');
+    expect(__testOnly.resolveUploadContentType('/tmp/file.unknown')).toBe('application/octet-stream');
+  });
+
   test('buildPreviewBridgeScript falls back when previewPrefix is not a string', async () => {
     const { __testOnly } = await import('../routes/previewProxy.js');
     const script = __testOnly.buildPreviewBridgeScript({ previewPrefix: null });
@@ -998,6 +1037,288 @@ describe('previewProxy', () => {
     expect(next).not.toHaveBeenCalled();
     expect(proxyStub.web).toHaveBeenCalledTimes(1);
     expect(proxiedUrl).toBe('/');
+  });
+
+  test('middleware serves project uploads directly when preview cookie is present', async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'preview-proxy-uploads-'));
+    try {
+      const uploadsDir = path.join(tmpDir, 'uploads');
+      const imagePath = path.join(uploadsDir, 'hero.png');
+      await mkdir(uploadsDir, { recursive: true });
+      await writeFile(imagePath, Buffer.from('png-binary'));
+
+      getProjectMock.mockResolvedValue({ id: 99, path: tmpDir });
+
+      const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+      const instance = createPreviewProxy({ logger: null });
+
+      const req = createReq('/uploads/hero.png', {
+        cookie: `${__testOnly.COOKIE_NAME}=99`
+      });
+      const res = createRes();
+      const next = vi.fn();
+
+      await instance.middleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(proxyStub.web).not.toHaveBeenCalled();
+      expect(res.writeHead).toHaveBeenCalledWith(200, expect.objectContaining({
+        'Content-Type': 'image/png'
+      }));
+      expect(res.end).toHaveBeenCalledWith(expect.any(Buffer));
+
+      const reqStarted = createReq('/uploads/hero.png', {
+        cookie: `${__testOnly.COOKIE_NAME}=99`
+      });
+      const resStarted = createRes();
+      resStarted.headersSent = true;
+      const nextStarted = vi.fn();
+
+      await instance.middleware(reqStarted, resStarted, nextStarted);
+
+      expect(nextStarted).not.toHaveBeenCalled();
+      expect(proxyStub.web).not.toHaveBeenCalled();
+      expect(resStarted.writeHead).not.toHaveBeenCalled();
+      expect(resStarted.end).toHaveBeenCalledWith(expect.any(Buffer));
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('middleware falls back to proxy for malformed upload path encoding', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 6100 } },
+      state: 'running'
+    });
+
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    const req = createReq('/uploads/%E0%A4%A', {
+      cookie: `${__testOnly.COOKIE_NAME}=99`
+    });
+    const res = createRes();
+    const next = vi.fn();
+
+    await instance.middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(proxyStub.web).toHaveBeenCalledTimes(1);
+  });
+
+  test('middleware falls back to proxy when upload project path is unavailable', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 6100 } },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 99, path: null });
+
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    const req = createReq('/uploads/hero.png', {
+      cookie: `${__testOnly.COOKIE_NAME}=99`
+    });
+    const res = createRes();
+    const next = vi.fn();
+
+    await instance.middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(proxyStub.web).toHaveBeenCalledTimes(1);
+  });
+
+  test('middleware falls back to proxy when upload project path is an empty string', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 6100 } },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 99, path: '' });
+
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    const req = createReq('/uploads/hero.png', {
+      cookie: `${__testOnly.COOKIE_NAME}=99`
+    });
+    const res = createRes();
+    const next = vi.fn();
+
+    await instance.middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(proxyStub.web).toHaveBeenCalledTimes(1);
+  });
+
+  test('middleware falls back to proxy for upload path traversal attempts', async () => {
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 6100 } },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 99, path: 'C:/tmp/project-root' });
+
+    const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+    const instance = createPreviewProxy({ logger: null });
+
+    const req = createReq('/uploads/../secret.txt', {
+      cookie: `${__testOnly.COOKIE_NAME}=99`
+    });
+    const res = createRes();
+    const next = vi.fn();
+
+    await instance.middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(proxyStub.web).toHaveBeenCalledTimes(1);
+  });
+
+  test('middleware falls back to proxy when upload file is missing', async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'preview-proxy-uploads-missing-'));
+    try {
+      getRunningProcessEntryMock.mockReturnValue({
+        processes: { frontend: { port: 6100 } },
+        state: 'running'
+      });
+      getProjectMock.mockResolvedValue({ id: 99, path: tmpDir });
+
+      const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+      const instance = createPreviewProxy({ logger: null });
+
+      const req = createReq('/uploads/missing.png', {
+        cookie: `${__testOnly.COOKIE_NAME}=99`
+      });
+      const res = createRes();
+      const next = vi.fn();
+
+      await instance.middleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(proxyStub.web).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('middleware logs upload read failures and falls back to proxy', async () => {
+    vi.doMock('fs/promises', async () => {
+      const actual = await vi.importActual('fs/promises');
+      return {
+        ...actual,
+        readFile: vi.fn(async () => {
+          throw new Error('boom');
+        })
+      };
+    });
+
+    try {
+      getRunningProcessEntryMock.mockReturnValue({
+        processes: { frontend: { port: 6100 } },
+        state: 'running'
+      });
+      getProjectMock.mockResolvedValue({ id: 99, path: 'C:/tmp/project-root' });
+
+      const warn = vi.fn();
+      const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+      const instance = createPreviewProxy({ logger: { warn } });
+
+      const req = createReq('/uploads/hero.png', {
+        cookie: `${__testOnly.COOKIE_NAME}=99`
+      });
+      const res = createRes();
+      const next = vi.fn();
+
+      await instance.middleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        '[preview-proxy] failed to serve project upload',
+        expect.objectContaining({ projectId: '99', path: 'uploads/hero.png' })
+      );
+      expect(proxyStub.web).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unmock('fs/promises');
+      vi.resetModules();
+    }
+  });
+
+  test('middleware logs upload read failures with raw error when message is blank', async () => {
+    const thrown = { code: 'EACCES', message: '' };
+    vi.doMock('fs/promises', async () => {
+      const actual = await vi.importActual('fs/promises');
+      return {
+        ...actual,
+        readFile: vi.fn(async () => {
+          throw thrown;
+        })
+      };
+    });
+
+    try {
+      getRunningProcessEntryMock.mockReturnValue({
+        processes: { frontend: { port: 6100 } },
+        state: 'running'
+      });
+      getProjectMock.mockResolvedValue({ id: 99, path: 'C:/tmp/project-root' });
+
+      const warn = vi.fn();
+      const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+      const instance = createPreviewProxy({ logger: { warn } });
+
+      const req = createReq('/uploads/hero.png', {
+        cookie: `${__testOnly.COOKIE_NAME}=99`
+      });
+      const res = createRes();
+      const next = vi.fn();
+
+      await instance.middleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        '[preview-proxy] failed to serve project upload',
+        expect.objectContaining({ projectId: '99', path: 'uploads/hero.png', error: thrown })
+      );
+      expect(proxyStub.web).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unmock('fs/promises');
+      vi.resetModules();
+    }
+  });
+
+  test('middleware falls back to proxy when upload read fails and logger is missing', async () => {
+    vi.doMock('fs/promises', async () => {
+      const actual = await vi.importActual('fs/promises');
+      return {
+        ...actual,
+        readFile: vi.fn(async () => {
+          throw new Error('boom');
+        })
+      };
+    });
+
+    try {
+      getRunningProcessEntryMock.mockReturnValue({
+        processes: { frontend: { port: 6100 } },
+        state: 'running'
+      });
+      getProjectMock.mockResolvedValue({ id: 99, path: 'C:/tmp/project-root' });
+
+      const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+      const instance = createPreviewProxy({ logger: null });
+
+      const req = createReq('/uploads/hero.png', {
+        cookie: `${__testOnly.COOKIE_NAME}=99`
+      });
+      const res = createRes();
+      const next = vi.fn();
+
+      await instance.middleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(proxyStub.web).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unmock('fs/promises');
+      vi.resetModules();
+    }
   });
 
   test('middleware proxies Vite dev asset requests when cookie is present even without referer', async () => {

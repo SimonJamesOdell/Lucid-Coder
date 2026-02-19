@@ -487,6 +487,106 @@ describe('processGoal pause and cancel paths', () => {
 });
 
 describe('processGoal retries and context handling', () => {
+  test('uses object touchTracker option and marks touched suites from applied files', async () => {
+    const args = defaultArgs();
+    const touchTracker = { frontend: false, backend: false, __observed: false };
+
+    automationModuleMock.applyEdits.mockImplementation(async ({ onFileApplied, stage }) => {
+      if (typeof onFileApplied === 'function' && stage === 'implementation') {
+        await onFileApplied('shared/version.mjs');
+      }
+      return { applied: 1, skipped: 0 };
+    });
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        testsAttemptSequence: [1],
+        implementationAttemptSequence: [1],
+        touchTracker
+      }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(touchTracker).toEqual({ frontend: true, backend: true, __observed: true });
+  });
+
+  test('normalizes requiredAssetPaths entries for implementation retry messaging', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      requiredAssetPaths: [' uploads/hero.png ', null, '', 'uploads/banner.jpg']
+    });
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'frontend/src/App.jsx',
+          replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+        }
+      ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const retryContext = automationModuleMock.buildEditsPrompt.mock.calls[1][0].retryContext;
+    expect(retryContext.message).toContain('uploads/hero.png, uploads/banner.jpg');
+    expect(retryContext.message).not.toContain('null');
+  });
+
+  test('uses required-asset retry guidance when implementation returns zero edits before last attempt', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      requiredAssetPaths: ['uploads/background.png']
+    });
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'frontend/src/App.jsx',
+          replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+        }
+      ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const retryContext = automationModuleMock.buildEditsPrompt.mock.calls[1][0].retryContext;
+    expect(retryContext.message).toMatch(/selected asset paths/i);
+    expect(retryContext.message).toContain('uploads/background.png');
+  });
+
   test('retries tests stage after file operation failures', async () => {
     const args = defaultArgs();
     automationModuleMock.parseScopeReflectionResponse.mockReturnValueOnce({ testsNeeded: true });
@@ -2938,6 +3038,32 @@ describe('processGoal final-attempt failures', () => {
     expect(result.error).toMatch(/implementation stage/i);
     expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
   });
+
+  test('does not allow implementation empty-edits fallback when selected assets are required', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      requiredAssetPaths: ['uploads/background.png']
+    });
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/implementation stage/i);
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
 });
 
 describe('processGoal guard coverage', () => {
@@ -3033,6 +3159,68 @@ describe('processGoal guard coverage', () => {
     expect(result.error).toMatch(/no repo edits were applied/i);
   });
 
+  test('reports selected-asset specific error when no edits are applied for asset-backed style goals', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: true,
+      requiredAssetPaths: ['uploads/background.png']
+    });
+    automationModuleMock.applyEdits.mockResolvedValue({ applied: 0, skipped: 1 });
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/selected asset paths/i);
+    expect(result.error).toContain('uploads/background.png');
+  });
+
+  test('injects selected project assets from goal prompt into scope reflection when present', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: true,
+      mustChange: [],
+      mustAvoid: []
+    });
+
+    const args = defaultArgs();
+    const assetGoal = {
+      ...args.goal,
+      prompt: [
+        'Update the site background image.',
+        '',
+        'Selected project assets:',
+        '- uploads/hero-background.png',
+        '- uploads/hero-background.png',
+        '',
+        'Current request: apply it to the main layout'
+      ].join('\n')
+    };
+
+    await processGoal(
+      assetGoal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    );
+
+    const implementationPayload = getStagePromptPayloads('implementation')[0];
+    expect(implementationPayload.scopeReflection.requiredAssetPaths).toEqual(['uploads/hero-background.png']);
+  });
+
   test('removes approval listener in finally when processing fails', async () => {
     const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
     const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener');
@@ -3108,5 +3296,59 @@ describe('__processGoalTestHooks helpers', () => {
 
     expect(error.message).toMatch(/tests stage/i);
     expect(isEmptyEditsError(error)).toBe(true);
+  });
+
+  test('extractSelectedProjectAssets returns unique selected asset paths from prompt blocks', () => {
+    const { extractSelectedProjectAssets } = __processGoalTestHooks;
+    const prompt = [
+      'Make the background match the selected image.',
+      'Selected project assets:',
+      '- uploads/background-one.png',
+      '- uploads/background-one.png',
+      '- uploads/background-two.jpg',
+      '',
+      'Current request: apply to shell'
+    ].join('\n');
+
+    expect(extractSelectedProjectAssets(prompt)).toEqual([
+      'uploads/background-one.png',
+      'uploads/background-two.jpg'
+    ]);
+    expect(extractSelectedProjectAssets(null)).toEqual([]);
+  });
+
+  test('extractSelectedProjectAssets skips pre-list noise and stops after the first completed list block', () => {
+    const { extractSelectedProjectAssets } = __processGoalTestHooks;
+    const prompt = [
+      'Selected project assets:',
+      '',
+      'notes before the list should be ignored',
+      '- uploads/hero.png',
+      'end of list marker',
+      '- uploads/ignored.png'
+    ].join('\n');
+
+    expect(extractSelectedProjectAssets(prompt)).toEqual(['uploads/hero.png']);
+  });
+
+  test('markTouchTrackerForPath marks frontend/backend/shared paths and ignores invalid values', () => {
+    const { markTouchTrackerForPath } = __processGoalTestHooks;
+
+    const tracker = { frontend: false, backend: false, __observed: false };
+    markTouchTrackerForPath(tracker, 'frontend/src/App.jsx');
+    expect(tracker).toEqual({ frontend: true, backend: false, __observed: true });
+
+    markTouchTrackerForPath(tracker, 'backend/server.js');
+    expect(tracker).toEqual({ frontend: true, backend: true, __observed: true });
+
+    const sharedTracker = { frontend: false, backend: false, __observed: false };
+    markTouchTrackerForPath(sharedTracker, 'shared/version.mjs');
+    expect(sharedTracker).toEqual({ frontend: true, backend: true, __observed: true });
+
+    const unchangedTracker = { frontend: false, backend: false, __observed: false };
+    markTouchTrackerForPath(unchangedTracker, null);
+    markTouchTrackerForPath(unchangedTracker, '');
+    markTouchTrackerForPath(unchangedTracker, 'docs/README.md');
+    expect(unchangedTracker).toEqual({ frontend: false, backend: false, __observed: false });
   });
 });

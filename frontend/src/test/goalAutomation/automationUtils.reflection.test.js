@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as automationUtils from '../../services/goalAutomation/automationUtils.js';
+import { __reflectionTestHooks } from '../../services/goalAutomation/automationUtils/reflection.js';
 
 const {
   tryParseLooseJson,
@@ -268,6 +269,7 @@ describe('parseScopeReflectionResponse', () => {
       testsNeeded: true,
       styleScope: {
         mode: 'global',
+        targetLevel: 'global',
         enforceTargetScoping: false,
         forbidGlobalSelectors: false,
         targetHints: []
@@ -300,10 +302,125 @@ describe('parseScopeReflectionResponse', () => {
       testsNeeded: true,
       styleScope: {
         mode: 'targeted',
+        targetLevel: 'component',
         enforceTargetScoping: true,
         forbidGlobalSelectors: true,
         targetHints: ['button', 'card']
       }
+    });
+  });
+
+  it('does not coerce styleScope from prompt text and uses structured response only', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'style task',
+          styleScope: {
+            mode: 'targeted',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['navbar']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection).toEqual({
+      reasoning: 'style task',
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: [],
+      testsNeeded: true,
+      styleScope: {
+        mode: 'targeted',
+        targetLevel: 'component',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: ['navbar']
+      }
+    });
+  });
+
+  it('guardrail: ignores global-style wording in reasoning when structured scope is targeted', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'Use the selected image as the site background across the whole app',
+          styleScope: {
+            mode: 'targeted',
+            targetLevel: 'component',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['hero', 'banner']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection.styleScope).toEqual({
+      mode: 'targeted',
+      targetLevel: 'component',
+      enforceTargetScoping: true,
+      forbidGlobalSelectors: true,
+      targetHints: ['hero', 'banner']
+    });
+  });
+
+  it('normalizes structured global target level even when mode is targeted', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'page shell background update',
+          styleScope: {
+            mode: 'targeted',
+            targetLevel: 'global',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['shell']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection.styleScope).toEqual({
+      mode: 'global',
+      targetLevel: 'global',
+      enforceTargetScoping: false,
+      forbidGlobalSelectors: false,
+      targetHints: ['shell']
+    });
+  });
+
+  it('preserves structured element target level for targeted style scope', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'button-only style update',
+          styleScope: {
+            mode: 'targeted',
+            targetLevel: 'element',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: ['button']
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection.styleScope).toEqual({
+      mode: 'targeted',
+      targetLevel: 'element',
+      enforceTargetScoping: true,
+      forbidGlobalSelectors: true,
+      targetHints: ['button']
     });
   });
 });
@@ -399,6 +516,132 @@ describe('validateEditsAgainstReflection', () => {
     const edits = [{ path: 'frontend/src/components/App.jsx' }];
 
     expect(validateEditsAgainstReflection(edits, reflection)).toBeNull();
+  });
+
+  it('rejects style-scoped edits when required selected assets are not referenced', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      requiredAssetPaths: ['uploads/background.png'],
+      styleScope: {
+        mode: 'global',
+        targetLevel: 'global',
+        enforceTargetScoping: false,
+        forbidGlobalSelectors: false,
+        targetHints: []
+      }
+    };
+    const edits = [
+      {
+        type: 'modify',
+        path: 'frontend/src/components/App.jsx',
+        replacements: [
+          {
+            search: '<main className="app-shell">',
+            replace: '<main className="app-shell app-shell--updated">'
+          }
+        ]
+      }
+    ];
+
+    const result = validateEditsAgainstReflection(edits, reflection);
+
+    expect(result).toMatchObject({
+      type: 'required-asset-reference-missing',
+      rule: 'selected-asset-required'
+    });
+  });
+
+  it('accepts style-scoped edits when a required selected asset path is referenced', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      requiredAssetPaths: ['uploads/background.png'],
+      styleScope: {
+        mode: 'global',
+        targetLevel: 'global',
+        enforceTargetScoping: false,
+        forbidGlobalSelectors: false,
+        targetHints: []
+      }
+    };
+    const edits = [
+      {
+        type: 'modify',
+        path: 'frontend/src/index.css',
+        replacements: [
+          {
+            search: 'body { margin: 0; }',
+            replace: "body { margin: 0; background-image: url('/uploads/background.png'); }"
+          }
+        ]
+      }
+    ];
+
+    expect(validateEditsAgainstReflection(edits, reflection)).toBeNull();
+  });
+
+  it('matches required selected assets when path is normalized with leading slash', () => {
+    const { editMentionsRequiredAssetPaths } = __reflectionTestHooks;
+
+    const result = editMentionsRequiredAssetPaths(
+      {
+        type: 'modify',
+        path: 'frontend/src/components/Background.jsx',
+        replacements: [
+          {
+            search: 'const image = null;',
+            replace: "const image = '/uploads/background.png';"
+          }
+        ]
+      },
+      ['/uploads/background.png']
+    );
+
+    expect(result).toBe(true);
+  });
+
+  it('ignores blank required asset paths in direct matcher helper', () => {
+    const { editMentionsRequiredAssetPaths } = __reflectionTestHooks;
+
+    const result = editMentionsRequiredAssetPaths(
+      {
+        type: 'modify',
+        path: 'frontend/src/components/Background.jsx',
+        replacements: [{ search: 'x', replace: 'y' }]
+      },
+      ['   ']
+    );
+
+    expect(result).toBe(false);
+  });
+
+  it('returns false when required asset paths are missing or empty in direct matcher helper', () => {
+    const { editMentionsRequiredAssetPaths } = __reflectionTestHooks;
+
+    expect(editMentionsRequiredAssetPaths({ type: 'modify', path: 'frontend/src/App.jsx' }, null)).toBe(false);
+    expect(editMentionsRequiredAssetPaths({ type: 'modify', path: 'frontend/src/App.jsx' }, [])).toBe(false);
+  });
+
+  it('normalizes asset paths in helper hooks for truthy and falsy inputs', () => {
+    const { normalizeAssetPathForMatch } = __reflectionTestHooks;
+
+    expect(normalizeAssetPathForMatch('/Uploads/Hero.PNG')).toBe('uploads/hero.png');
+    expect(normalizeAssetPathForMatch(undefined)).toBe('');
+  });
+
+  it('matches required asset paths even when edit.path is missing', () => {
+    const { editMentionsRequiredAssetPaths } = __reflectionTestHooks;
+
+    const result = editMentionsRequiredAssetPaths(
+      {
+        type: 'upsert',
+        content: "const image = '/uploads/banner.png';"
+      },
+      ['uploads/banner.png']
+    );
+
+    expect(result).toBe(true);
   });
 });
 

@@ -1,3 +1,9 @@
+## 0.7.7 (2026-02-19)
+- Harden preview upload path handling in the backend preview proxy (`parseUploadForwardPath`) and expose focused test hooks used to validate edge-path behavior without changing runtime routing semantics.
+- Expand `previewProxy` coverage with targeted upload-serving/parse/error-path tests (including malformed encoding, root uploads guards, missing logger branches, and headers-sent serving), closing remaining line-level gaps.
+- Extend ChatPanel suite helper and auto-fix rerun coverage for path-classification, staged-diff normalization, backend-only status messaging, and user-origin no-rerun commit routing paths.
+- Expand goal-automation coverage around reflection asset matching and process-goal retry/touch-tracker edge branches, including required-asset retry guidance normalization and helper-level matcher guards.
+
 ## 0.7.6 (2026-02-18)
 - Add an approval-and-framework decision flow in the frontend, including `ApprovalPanel`, generated navbar wiring, project decision/profile artifacts, and orchestration utilities for clarification + framework planning.
 - Strengthen ChatPanel and goal-automation flows with clarification deduplication/tracking, additional automation guard paths, and expanded framework/preflight diagnostics integration.

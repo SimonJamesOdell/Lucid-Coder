@@ -32,6 +32,30 @@ const editMentionsTargetHints = (edit = {}, targetHints = []) => {
   return targetHints.some((hint) => path.includes(hint) || text.includes(hint));
 };
 
+const normalizeAssetPathForMatch = (value) => {
+  return String(value || '').trim().replace(/^\/+/, '').toLowerCase();
+};
+
+const editMentionsRequiredAssetPaths = (edit = {}, requiredAssetPaths = []) => {
+  if (!Array.isArray(requiredAssetPaths) || requiredAssetPaths.length === 0) {
+    return false;
+  }
+
+  const text = readEditText(edit);
+  const path = String(edit?.path || '').toLowerCase();
+  return requiredAssetPaths.some((assetPath) => {
+    const normalizedAssetPath = normalizeAssetPathForMatch(assetPath);
+    if (!normalizedAssetPath) {
+      return false;
+    }
+    return (
+      text.includes(normalizedAssetPath)
+      || text.includes(`/${normalizedAssetPath}`)
+      || path.includes(normalizedAssetPath)
+    );
+  });
+};
+
 export const deriveStyleScopeContract = (_goalPrompt) => {
   return null;
 };
@@ -110,7 +134,7 @@ export const buildScopeReflectionPrompt = ({ projectInfo, goalPrompt }) => {
           'Return ONLY valid JSON with keys: reasoning (string), mustChange (array of repo paths or areas that must change), ' +
           'mustAvoid (array of paths/areas that should remain untouched), mustHave (array of required behaviors or UI outcomes), ' +
           'testsNeeded (boolean), and optional styleScope (object or null). ' +
-          'If styleScope is provided, use shape: { "mode": "targeted"|"global", "enforceTargetScoping": boolean, "forbidGlobalSelectors": boolean, "targetHints": string[] }. ' +
+          'If styleScope is provided, use shape: { "mode": "targeted"|"global", "targetLevel": "global"|"page"|"component"|"element", "enforceTargetScoping": boolean, "forbidGlobalSelectors": boolean, "targetHints": string[] }. ' +
           'Only set styleScope when you are confident the goal is primarily style-related; otherwise set styleScope to null. ' +
           'For style requests targeting specific elements/components, include global selectors (body/html/:root/*/app-wide wrappers) in mustAvoid unless the user explicitly asks for global/page-wide theming. ' +
           'Mention only work that is strictly required to satisfy the request. Leave arrays empty when uncertain.'
@@ -142,11 +166,21 @@ export const parseScopeReflectionResponse = ({
     if (!mode) {
       return null;
     }
+    const targetLevel =
+      value.targetLevel === 'global'
+      || value.targetLevel === 'page'
+      || value.targetLevel === 'component'
+      || value.targetLevel === 'element'
+        ? value.targetLevel
+        : (mode === 'global' ? 'global' : 'component');
+
+    const isGlobalLevel = targetLevel === 'global';
     const targetHints = normalizeReflectionList(value.targetHints || []);
     return {
-      mode,
-      enforceTargetScoping: value.enforceTargetScoping === true,
-      forbidGlobalSelectors: value.forbidGlobalSelectors === true,
+      mode: isGlobalLevel ? 'global' : mode,
+      targetLevel,
+      enforceTargetScoping: isGlobalLevel ? false : value.enforceTargetScoping === true,
+      forbidGlobalSelectors: isGlobalLevel ? false : value.forbidGlobalSelectors === true,
       targetHints
     };
   };
@@ -233,11 +267,17 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
   const styleScope = reflection?.styleScope && typeof reflection.styleScope === 'object'
     ? reflection.styleScope
     : null;
+  const requiredAssetPaths = normalizeReflectionList(reflection?.requiredAssetPaths || []);
+  let hasRequiredAssetReference = requiredAssetPaths.length === 0;
 
   for (const edit of edits) {
     const normalizedPath = normalizeRepoPath(edit?.path);
     if (!normalizedPath) {
       continue;
+    }
+
+    if (!hasRequiredAssetReference && editMentionsRequiredAssetPaths(edit, requiredAssetPaths)) {
+      hasRequiredAssetReference = true;
     }
 
     if (reflection.testsNeeded === false && isTestFilePath(normalizedPath)) {
@@ -280,5 +320,19 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
     }
   }
 
+  if (styleScope && requiredAssetPaths.length > 0 && !hasRequiredAssetReference) {
+    return {
+      type: 'required-asset-reference-missing',
+      path: requiredAssetPaths[0],
+      rule: 'selected-asset-required',
+      message: 'Selected project asset was not referenced in proposed edits. Ensure the requested selected image path is applied in code/CSS (for example /uploads/<file>).'
+    };
+  }
+
   return null;
+};
+
+export const __reflectionTestHooks = {
+  normalizeAssetPathForMatch,
+  editMentionsRequiredAssetPaths
 };

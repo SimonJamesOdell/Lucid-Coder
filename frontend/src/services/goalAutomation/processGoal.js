@@ -164,6 +164,72 @@ const formatGoalLabel = (value) => {
   return cleaned.length > 140 ? `${cleaned.slice(0, 137)}...` : cleaned;
 };
 
+const extractSelectedProjectAssets = (value) => {
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  const lines = value.split(/\r?\n/);
+  const headerIndex = lines.findIndex((line) => line.trim().toLowerCase() === 'selected project assets:');
+  if (headerIndex < 0) {
+    return [];
+  }
+
+  const results = [];
+  for (let index = headerIndex + 1; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) {
+      if (results.length > 0) {
+        break;
+      }
+      continue;
+    }
+
+    if (!trimmed.startsWith('- ')) {
+      if (results.length > 0) {
+        break;
+      }
+      continue;
+    }
+
+    const assetPath = trimmed.slice(2).trim();
+    if (assetPath) {
+      results.push(assetPath);
+    }
+  }
+
+  return Array.from(new Set(results));
+};
+
+const markTouchTrackerForPath = (touchTracker, filePath) => {
+  if (!touchTracker || typeof touchTracker !== 'object' || typeof filePath !== 'string') {
+    return;
+  }
+
+  const normalizedPath = normalizeRepoPath(filePath);
+  if (!normalizedPath) {
+    return;
+  }
+
+  if (normalizedPath.startsWith('frontend/')) {
+    touchTracker.frontend = true;
+    touchTracker.__observed = true;
+    return;
+  }
+
+  if (normalizedPath.startsWith('backend/')) {
+    touchTracker.backend = true;
+    touchTracker.__observed = true;
+    return;
+  }
+
+  if (normalizedPath.startsWith('shared/')) {
+    touchTracker.frontend = true;
+    touchTracker.backend = true;
+    touchTracker.__observed = true;
+  }
+};
+
 export async function processGoal(
   goal,
   projectId,
@@ -264,6 +330,9 @@ export async function processGoal(
 
     const requestEditorFocus = typeof options?.requestEditorFocus === 'function' ? options.requestEditorFocus : null;
     const syncBranchOverview = typeof options?.syncBranchOverview === 'function' ? options.syncBranchOverview : null;
+    const touchTracker = options?.touchTracker && typeof options.touchTracker === 'object'
+      ? options.touchTracker
+      : null;
     const testFailureContext = options?.testFailureContext || goal?.metadata?.testFailureContext || null;
     const testsAttemptSequence = resolveAttemptSequence(options?.testsAttemptSequence);
     const implementationAttemptSequence = resolveAttemptSequence(options?.implementationAttemptSequence);
@@ -451,6 +520,10 @@ export async function processGoal(
           buildScopeReflectionPrompt({ projectInfo, goalPrompt: goal?.prompt })
         );
         scopeReflection = cloneScopeReflection(parseScopeReflectionResponse(reflectionResponse));
+        const selectedAssetPaths = extractSelectedProjectAssets(goal?.prompt);
+        if (scopeReflection && selectedAssetPaths.length > 0) {
+          scopeReflection.requiredAssetPaths = selectedAssetPaths;
+        }
         const normalizedPrompt = typeof goal?.prompt === 'string' ? goal.prompt.toLowerCase() : '';
         const isTestFixGoal = /fix\s+failing\s+test|failing\s+test|test\s+failure/.test(normalizedPrompt);
         if (scopeReflection && (testFailureContext || isTestFixGoal)) {
@@ -460,7 +533,8 @@ export async function processGoal(
           goalId: goal?.id,
           testsNeeded: scopeReflection?.testsNeeded !== false,
           mustChange: scopeReflection?.mustChange,
-          mustAvoid: scopeReflection?.mustAvoid
+          mustAvoid: scopeReflection?.mustAvoid,
+          requiredAssetPaths: scopeReflection?.requiredAssetPaths
         });
       } catch (error) {
         automationLog('processGoal:scopeReflection:error', { message: error?.message });
@@ -468,6 +542,12 @@ export async function processGoal(
     }
 
     const testsStageEnabled = scopeReflection?.testsNeeded !== false;
+    const requiredAssetPaths = Array.isArray(scopeReflection?.requiredAssetPaths)
+      ? scopeReflection.requiredAssetPaths
+          .map((path) => (typeof path === 'string' ? path.trim() : ''))
+          .filter(Boolean)
+      : [];
+    const hasRequiredAssetPaths = requiredAssetPaths.length > 0;
 
     if (!(await waitWhilePaused())) {
       return { success: false, cancelled: true };
@@ -485,6 +565,7 @@ export async function processGoal(
 
     let lastFocusedPath = '';
     const onFileApplied = async (filePath) => {
+      markTouchTrackerForPath(touchTracker, filePath);
       if (!requestEditorFocus || !filePath || filePath === lastFocusedPath) {
         return;
       }
@@ -809,7 +890,7 @@ export async function processGoal(
             preview: typeof raw === 'string' ? raw.slice(0, 500) : ''
           });
           const mustChange = Array.isArray(scopeReflection?.mustChange) ? scopeReflection.mustChange : [];
-          if (allowEmptyStageEdits || (attempt === lastImplAttempt && mustChange.length === 0)) {
+          if (allowEmptyStageEdits || (attempt === lastImplAttempt && mustChange.length === 0 && !hasRequiredAssetPaths)) {
             implAttemptSucceeded = true;
             implRetryContext = null;
             setMessages((prev) => [
@@ -910,8 +991,9 @@ export async function processGoal(
             throw error;
           }
           implRetryContext = {
-            message:
-              'Previous attempt returned zero edits. Provide the exact modifications needed to complete the feature request.',
+            message: hasRequiredAssetPaths
+              ? `Previous attempt returned zero edits. Provide at least one implementation edit that references one of the selected asset paths: ${requiredAssetPaths.join(', ')} (for example /uploads/<filename>).`
+              : 'Previous attempt returned zero edits. Provide the exact modifications needed to complete the feature request.',
             path: implRetryContext?.path || null,
             scopeWarning: implRetryContext?.scopeWarning || null
           };
@@ -933,6 +1015,11 @@ export async function processGoal(
     });
 
     if (projectId && totalEditsApplied === 0) {
+      if (hasRequiredAssetPaths) {
+        throw new Error(
+          `No repo edits were applied and none referenced the selected asset paths (${requiredAssetPaths.join(', ')}). Ensure implementation edits apply one of these assets in UI code/CSS (for example /uploads/<filename>).`
+        );
+      }
       throw new Error(
         'No repo edits were applied for this goal. The LLM likely returned no usable edits (or edits were skipped). Check the browser console for [automation] logs.'
       );
@@ -997,5 +1084,7 @@ export const __processGoalTestHooks = {
   buildEmptyEditsError,
   isEmptyEditsError,
   buildFileOpRetryContext,
-  buildCoverageScope
+  buildCoverageScope,
+  extractSelectedProjectAssets,
+  markTouchTrackerForPath
 };
