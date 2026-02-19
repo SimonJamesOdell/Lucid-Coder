@@ -591,7 +591,7 @@ const parseUploadForwardPath = (forwardPath = '') => {
   }
 
   const relativePath = decoded.replace(/^\/+/, '');
-  if (!relativePath || relativePath === 'uploads') {
+  if (!relativePath || /^uploads\/?$/i.test(relativePath)) {
     return null;
   }
 
@@ -1023,6 +1023,8 @@ export const __testOnly = {
   COOKIE_NAME,
   PREVIEW_ROUTE_PREFIX,
   normalizeProjectKey,
+  parseUploadForwardPath,
+  resolveUploadContentType,
   shouldAttemptAutoRestart,
   markAutoRestartAttempted,
   attemptAutoRestart,

@@ -1084,5 +1084,7 @@ export const __processGoalTestHooks = {
   buildEmptyEditsError,
   isEmptyEditsError,
   buildFileOpRetryContext,
-  buildCoverageScope
+  buildCoverageScope,
+  extractSelectedProjectAssets,
+  markTouchTrackerForPath
 };

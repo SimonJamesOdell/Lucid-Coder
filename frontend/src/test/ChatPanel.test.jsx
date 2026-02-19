@@ -183,7 +183,114 @@ describe('ChatPanel', () => {
     });
   });
 
+  describe('suite helper coverage', () => {
+    it('classifies empty, frontend, and shared paths correctly', () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      expect(helpers.classifyPathSuites(null, { hasBackend: true })).toEqual({ frontend: false, backend: false });
+      expect(helpers.classifyPathSuites('frontend/src/App.jsx', { hasBackend: true })).toEqual({ frontend: true, backend: false });
+      expect(helpers.classifyPathSuites('shared/version.mjs', { hasBackend: true })).toEqual({ frontend: true, backend: true });
+      expect(helpers.classifyPathSuites('shared/version.mjs', { hasBackend: false })).toEqual({ frontend: true, backend: false });
+    });
+
+    it('classifies root-level package/version/changelog paths as automation-impacting', () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      expect(helpers.classifyPathSuites('package.json', { hasBackend: true })).toEqual({ frontend: true, backend: true });
+      expect(helpers.classifyPathSuites('version', { hasBackend: false })).toEqual({ frontend: true, backend: false });
+      expect(helpers.classifyPathSuites('CHANGELOG.md', { hasBackend: true })).toEqual({ frontend: true, backend: true });
+    });
+
+    it('derives backend touches when staged files are removed from the previous snapshot', () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      const touched = helpers.deriveSuitesFromStagedDiff(
+        new Set(['backend/server.js']),
+        new Set(),
+        { hasBackend: true }
+      );
+
+      expect(touched).toEqual({ frontend: false, backend: true });
+    });
+
+    it('derives suite touches when previous/current inputs are not Set instances', () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      const touched = helpers.deriveSuitesFromStagedDiff(
+        ['frontend/src/App.jsx'],
+        null,
+        { hasBackend: true }
+      );
+
+      expect(touched).toEqual({ frontend: false, backend: false });
+    });
+
+    it('formats backend-only automation run messages for start and rerun phases', () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      expect(
+        helpers.formatAutomationRunMessage('start', { frontend: false, backend: true }, true)
+      ).toBe('Starting backend test runs…');
+
+      expect(
+        helpers.formatAutomationRunMessage('rerun', { frontend: false, backend: true }, true)
+      ).toBe('Re-running backend tests…');
+    });
+
+    it('extracts failing suites from metadata and child prompt text', () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      expect(
+        helpers.extractFailingSuitesFromFixPayload(
+          {
+            childPromptMetadata: {
+              front: { testFailure: { kind: 'frontend' } },
+              back: { testFailure: { kind: 'backend' } }
+            }
+          },
+          { hasBackend: true }
+        )
+      ).toEqual({ frontend: true, backend: true });
+
+      expect(
+        helpers.extractFailingSuitesFromFixPayload(
+          {
+            childPrompts: ['Fix frontend tests now', 'Fix backend tests now']
+          },
+          { hasBackend: true }
+        )
+      ).toEqual({ frontend: true, backend: true });
+    });
+  });
+
   describe('Basic Rendering', () => {
+    it('renders when staged files include non-string paths', () => {
+      useAppState.mockReturnValue({
+        currentProject: { id: 123, name: 'Test Project' },
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        setPreviewPanelTab: mockSetPreviewPanelTab,
+        startAutomationJob: mockStartAutomationJob,
+        markTestRunIntent: mockMarkTestRunIntent,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        workingBranches: {
+          123: {
+            name: 'feature/test-branch',
+            stagedFiles: [{ path: 123 }, { path: null }, {}]
+          }
+        }
+      });
+
+      expect(() => render(<ChatPanel width={320} side="left" />)).not.toThrow();
+    });
+
     it('renders safely when test hooks are unavailable', () => {
       const originalHooks = ChatPanel.__testHooks;
       ChatPanel.__testHooks = null;
@@ -441,6 +548,54 @@ describe('ChatPanel', () => {
   });
 
   describe('Auto-fix failing tests', () => {
+    it('uses user source when no rerun suites are selected for user-origin auto-fix', async () => {
+      const localSetPreviewPanelTab = vi.fn();
+      const localStartAutomationJob = vi.fn();
+
+      useAppState.mockReturnValue({
+        currentProject: { id: 123, name: 'Test Project' },
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        setPreviewPanelTab: localSetPreviewPanelTab,
+        startAutomationJob: localStartAutomationJob,
+        markTestRunIntent: mockMarkTestRunIntent,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        workingBranches: {
+          123: {
+            name: 'feature/test-branch',
+            stagedFiles: []
+          }
+        }
+      });
+
+      goalAutomationService.processGoals.mockImplementationOnce(async (...args) => {
+        const options = args[7];
+        options.touchTracker.__observed = true;
+        options.touchTracker.frontend = false;
+        options.touchTracker.backend = false;
+        return { success: true, processed: 1 };
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests',
+            origin: 'user'
+          }
+        })
+      );
+
+      await waitFor(() => {
+        expect(localSetPreviewPanelTab).toHaveBeenCalledWith('commits', { source: 'user' });
+      });
+
+      expect(localStartAutomationJob).not.toHaveBeenCalled();
+      expect(screen.getByText('No frontend/backend files changed since the last passing suite. Skipping test rerun.')).toBeInTheDocument();
+    });
+
     it('creates a new goal and re-runs tests when lucidcoder:autofix-tests is dispatched', async () => {
       render(<ChatPanel width={320} side="left" />);
 
@@ -1301,9 +1456,126 @@ describe('ChatPanel', () => {
         expect(mockStartAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: 123 });
       });
     });
+
+    it('re-runs only backend tests when execution touch tracking marks backend changes', async () => {
+      const localStartAutomationJob = vi.fn().mockResolvedValue({ id: 'job-backend' });
+      useAppState.mockReturnValue({
+        currentProject: { id: 123, name: 'Test Project' },
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        setPreviewPanelTab: mockSetPreviewPanelTab,
+        startAutomationJob: localStartAutomationJob,
+        markTestRunIntent: mockMarkTestRunIntent,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        workingBranches: {
+          123: {
+            name: 'feature/test-branch',
+            stagedFiles: [{ path: 'src/App.jsx' }]
+          }
+        }
+      });
+
+      goalAutomationService.processGoals.mockImplementationOnce(async (...args) => {
+        const options = args[7];
+        options.touchTracker.backend = true;
+        options.touchTracker.__observed = true;
+        return { success: true, processed: 1 };
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests',
+            origin: 'automation'
+          }
+        })
+      );
+
+      await waitFor(() => {
+        expect(mockSetPreviewPanelTab).toHaveBeenCalledWith('tests', { source: 'automation' });
+      });
+
+      expect(screen.getByText('Re-running backend tests…')).toBeInTheDocument();
+      expect(localStartAutomationJob).toHaveBeenCalledTimes(1);
+      expect(localStartAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: 123 });
+    });
+
+    it('skips auto-fix reruns when only backend paths changed in a frontend-only project', async () => {
+      const localWorkingBranches = {
+        123: {
+          name: 'feature/test-branch',
+          stagedFiles: []
+        }
+      };
+      const localSetPreviewPanelTab = vi.fn();
+      const localStartAutomationJob = vi.fn().mockResolvedValue({ id: 'job-any' });
+
+      useAppState.mockReturnValue({
+        currentProject: { id: 123, name: 'Frontend Only', backend: { exists: false } },
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        setPreviewPanelTab: localSetPreviewPanelTab,
+        startAutomationJob: localStartAutomationJob,
+        markTestRunIntent: mockMarkTestRunIntent,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        projectProcesses: { capabilities: { backend: { exists: false } } },
+        workingBranches: localWorkingBranches
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      localWorkingBranches[123].stagedFiles = [{ path: 'backend/server.js' }];
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests',
+            origin: 'automation'
+          }
+        })
+      );
+
+      await waitFor(() => {
+        expect(localSetPreviewPanelTab).toHaveBeenCalledWith('commits', { source: 'automation' });
+      });
+
+      expect(screen.getByText('No frontend/backend files changed since the last passing suite. Skipping test rerun.')).toBeInTheDocument();
+      expect(localStartAutomationJob).not.toHaveBeenCalled();
+    });
   });
 
   describe('Coverage branches', () => {
+    it('uses execution touch tracker suites after regular feature success', async () => {
+      goalAutomationService.handleRegularFeature.mockImplementationOnce(async (...args) => {
+        const options = args[8] || {};
+        if (options.touchTracker) {
+          options.touchTracker.__observed = true;
+          options.touchTracker.frontend = true;
+          options.touchTracker.backend = false;
+        }
+        return { success: true };
+      });
+
+      goalsApi.agentRequest.mockResolvedValueOnce({ kind: 'feature', planOnly: false });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Implement feature');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(mockSetPreviewPanelTab).toHaveBeenCalledWith('tests', { source: 'automation' });
+      });
+
+      expect(screen.getByText('Starting frontend tests…')).toBeInTheDocument();
+      expect(mockStartAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: 123 });
+      expect(mockStartAutomationJob).not.toHaveBeenCalledWith('backend:test', expect.anything());
+    });
+
     it('ignores empty prompts when submit is triggered via Enter key', async () => {
       render(<ChatPanel width={320} side="left" />);
 
@@ -2228,6 +2500,47 @@ describe('ChatPanel', () => {
 
       expect(mockStartAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: 123 });
       expect(mockStartAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: 123 });
+    });
+
+    it('skips regular-feature test runs when only backend paths changed in a frontend-only project', async () => {
+      const localWorkingBranches = {
+        123: {
+          name: 'feature/test-branch',
+          stagedFiles: []
+        }
+      };
+      const localSetPreviewPanelTab = vi.fn();
+      const localStartAutomationJob = vi.fn();
+
+      useAppState.mockReturnValue({
+        currentProject: { id: 123, name: 'Frontend Only', backend: { exists: false } },
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        setPreviewPanelTab: localSetPreviewPanelTab,
+        startAutomationJob: localStartAutomationJob,
+        markTestRunIntent: vi.fn(),
+        workingBranches: localWorkingBranches,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        projectProcesses: { capabilities: { backend: { exists: false } } }
+      });
+
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'feature', planOnly: false });
+      goalAutomationService.handleRegularFeature.mockResolvedValue({ success: true });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      localWorkingBranches[123].stagedFiles = [{ path: 'backend/server.js' }];
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Run the feature');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(localSetPreviewPanelTab).toHaveBeenCalledWith('commits', { source: 'automation' });
+      });
+
+      expect(screen.getByText('No frontend/backend files changed since the last passing run. Skipping automated tests.')).toBeInTheDocument();
+      expect(localStartAutomationJob).not.toHaveBeenCalled();
     });
 
     it('uses a fallback error message when automation startup rejects without a message', async () => {

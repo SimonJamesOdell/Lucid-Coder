@@ -331,3 +331,8 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
 
   return null;
 };
+
+export const __reflectionTestHooks = {
+  normalizeAssetPathForMatch,
+  editMentionsRequiredAssetPaths
+};

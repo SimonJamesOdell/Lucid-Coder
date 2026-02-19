@@ -2043,6 +2043,13 @@ Object.assign(ChatPanel.__testHooks, {
   getLatestInstance: () => ChatPanel.__testHooks.latestInstance || null,
   clearLatestInstance: () => {
     delete ChatPanel.__testHooks.latestInstance;
+  },
+  suiteHelpers: {
+    classifyPathSuites,
+    deriveSuitesFromStagedDiff,
+    extractFailingSuitesFromFixPayload,
+    resolveSuitesToRun,
+    formatAutomationRunMessage
   }
 });
 
