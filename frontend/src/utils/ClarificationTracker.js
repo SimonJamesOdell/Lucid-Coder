@@ -172,7 +172,9 @@ export class ClarificationTracker {
 
 /* c8 ignore start */
 // Example usage
-if (import.meta.url.endsWith(process.argv[1])) {
+const isNodeRuntime = typeof process !== 'undefined' && !!process?.argv;
+const nodeEntryArg = isNodeRuntime ? process.argv[1] : '';
+if (isNodeRuntime && nodeEntryArg && import.meta.url.endsWith(nodeEntryArg)) {
   const tracker = new ClarificationTracker();
 
   // Simulate first question
