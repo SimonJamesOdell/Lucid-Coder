@@ -110,7 +110,7 @@ export const buildScopeReflectionPrompt = ({ projectInfo, goalPrompt }) => {
           'Return ONLY valid JSON with keys: reasoning (string), mustChange (array of repo paths or areas that must change), ' +
           'mustAvoid (array of paths/areas that should remain untouched), mustHave (array of required behaviors or UI outcomes), ' +
           'testsNeeded (boolean), and optional styleScope (object or null). ' +
-          'If styleScope is provided, use shape: { "mode": "targeted"|"global", "enforceTargetScoping": boolean, "forbidGlobalSelectors": boolean, "targetHints": string[] }. ' +
+          'If styleScope is provided, use shape: { "mode": "targeted"|"global", "targetLevel": "global"|"page"|"component"|"element", "enforceTargetScoping": boolean, "forbidGlobalSelectors": boolean, "targetHints": string[] }. ' +
           'Only set styleScope when you are confident the goal is primarily style-related; otherwise set styleScope to null. ' +
           'For style requests targeting specific elements/components, include global selectors (body/html/:root/*/app-wide wrappers) in mustAvoid unless the user explicitly asks for global/page-wide theming. ' +
           'Mention only work that is strictly required to satisfy the request. Leave arrays empty when uncertain.'
@@ -142,11 +142,21 @@ export const parseScopeReflectionResponse = ({
     if (!mode) {
       return null;
     }
+    const targetLevel =
+      value.targetLevel === 'global'
+      || value.targetLevel === 'page'
+      || value.targetLevel === 'component'
+      || value.targetLevel === 'element'
+        ? value.targetLevel
+        : (mode === 'global' ? 'global' : 'component');
+
+    const isGlobalLevel = targetLevel === 'global';
     const targetHints = normalizeReflectionList(value.targetHints || []);
     return {
-      mode,
-      enforceTargetScoping: value.enforceTargetScoping === true,
-      forbidGlobalSelectors: value.forbidGlobalSelectors === true,
+      mode: isGlobalLevel ? 'global' : mode,
+      targetLevel,
+      enforceTargetScoping: isGlobalLevel ? false : value.enforceTargetScoping === true,
+      forbidGlobalSelectors: isGlobalLevel ? false : value.forbidGlobalSelectors === true,
       targetHints
     };
   };
