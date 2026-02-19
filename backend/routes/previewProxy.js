@@ -1,4 +1,6 @@
 import httpProxy from 'http-proxy';
+import path from 'path';
+import { readFile } from 'fs/promises';
 import { getPortSettings, getProject, updateProjectPorts } from '../database.js';
 import {
   buildPortOverrideOptions,
@@ -23,6 +25,21 @@ const autoRestartStateByProject = new Map();
 const autoRestartInFlightByProject = new Map();
 
 const PREVIEW_PROXY_TIMEOUT_MS = 7_000;
+const PROJECT_UPLOADS_PREFIX = '/uploads/';
+
+const UPLOAD_CONTENT_TYPES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.bmp': 'image/bmp',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff'
+};
 
 const isProxyConnectionFailure = (error) => {
   const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
@@ -552,6 +569,86 @@ const shouldBypassPreviewProxy = (url = '') => {
   );
 };
 
+const parseUploadForwardPath = (forwardPath = '') => {
+  if (typeof forwardPath !== 'string') {
+    return null;
+  }
+
+  const pathOnly = forwardPath.split('?')[0] || '';
+  if (!pathOnly.startsWith(PROJECT_UPLOADS_PREFIX)) {
+    return null;
+  }
+
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathOnly);
+  } catch {
+    return null;
+  }
+
+  if (!decoded.startsWith(PROJECT_UPLOADS_PREFIX)) {
+    return null;
+  }
+
+  const relativePath = decoded.replace(/^\/+/, '');
+  if (!relativePath || relativePath === 'uploads') {
+    return null;
+  }
+
+  return relativePath;
+};
+
+const resolveUploadContentType = (absolutePath) => {
+  const ext = path.extname(absolutePath || '').toLowerCase();
+  return UPLOAD_CONTENT_TYPES[ext] || 'application/octet-stream';
+};
+
+const tryServeProjectUpload = async ({ projectId, forwardPath, res, logger }) => {
+  const relativePath = parseUploadForwardPath(forwardPath);
+  if (!relativePath) {
+    return false;
+  }
+
+  const project = await getProject(projectId);
+  const projectPath = typeof project?.path === 'string' ? project.path : '';
+  if (!projectPath) {
+    return false;
+  }
+
+  const uploadsRoot = path.resolve(projectPath, 'uploads');
+  const absolutePath = path.resolve(projectPath, relativePath);
+  const uploadsRootWithSep = `${uploadsRoot}${path.sep}`;
+  if (absolutePath !== uploadsRoot && !absolutePath.startsWith(uploadsRootWithSep)) {
+    return false;
+  }
+
+  try {
+    const payload = await readFile(absolutePath);
+    if (!res.headersSent) {
+      res.writeHead(200, {
+        'Content-Type': resolveUploadContentType(absolutePath),
+        'Cache-Control': 'no-store'
+      });
+    }
+    res.end(payload);
+    return true;
+  } catch (error) {
+    const code = typeof error?.code === 'string' ? error.code : '';
+    if (code === 'ENOENT' || code === 'EISDIR' || code === 'ENOTDIR') {
+      return false;
+    }
+
+    if (logger?.warn) {
+      logger.warn('[preview-proxy] failed to serve project upload', {
+        projectId,
+        path: relativePath,
+        error: error?.message || error
+      });
+    }
+    return false;
+  }
+};
+
 const resolveFrontendPort = async (projectId) => {
   const { processes, state } = getRunningProcessEntry(projectId);
   const portCandidate = processes?.frontend?.port;
@@ -828,6 +925,16 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       const info = getProjectIdFromRequest(req);
       if (!info?.projectId) {
         next();
+        return;
+      }
+
+      const servedProjectUpload = await tryServeProjectUpload({
+        projectId: info.projectId,
+        forwardPath: info.forwardPath,
+        res,
+        logger
+      });
+      if (servedProjectUpload) {
         return;
       }
 

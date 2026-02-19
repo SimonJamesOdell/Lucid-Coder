@@ -287,6 +287,9 @@ export const createApplyEditsModule = ({
         if (typeof syncBranchOverview === 'function' && stagePayload?.overview) {
           syncBranchOverview(projectId, stagePayload.overview);
         }
+        if (typeof onFileApplied === 'function') {
+          await onFileApplied(filePath, { type: 'delete' });
+        }
         applied += 1;
         continue;
       }

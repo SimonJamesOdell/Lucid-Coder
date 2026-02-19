@@ -2938,6 +2938,32 @@ describe('processGoal final-attempt failures', () => {
     expect(result.error).toMatch(/implementation stage/i);
     expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
   });
+
+  test('does not allow implementation empty-edits fallback when selected assets are required', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      requiredAssetPaths: ['uploads/background.png']
+    });
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/implementation stage/i);
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
 });
 
 describe('processGoal guard coverage', () => {
@@ -3031,6 +3057,31 @@ describe('processGoal guard coverage', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/no repo edits were applied/i);
+  });
+
+  test('reports selected-asset specific error when no edits are applied for asset-backed style goals', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: true,
+      requiredAssetPaths: ['uploads/background.png']
+    });
+    automationModuleMock.applyEdits.mockResolvedValue({ applied: 0, skipped: 1 });
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/selected asset paths/i);
+    expect(result.error).toContain('uploads/background.png');
   });
 
   test('removes approval listener in finally when processing fails', async () => {

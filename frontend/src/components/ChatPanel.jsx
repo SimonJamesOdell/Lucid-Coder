@@ -43,6 +43,139 @@ import { AUTOMATION_LOG_EVENT } from '../services/goalAutomation/automationUtils
 
 export { formatAgentStepMessage };
 
+const createSuiteFlags = () => ({ frontend: false, backend: false });
+
+const hasAnySuiteFlag = (flags) => Boolean(flags?.frontend || flags?.backend);
+
+const mergeSuiteFlags = (...flagsList) => {
+  const merged = createSuiteFlags();
+  for (const flags of flagsList) {
+    if (!flags || typeof flags !== 'object') {
+      continue;
+    }
+    if (flags.frontend) {
+      merged.frontend = true;
+    }
+    if (flags.backend) {
+      merged.backend = true;
+    }
+  }
+  return merged;
+};
+
+const classifyPathSuites = (rawPath, { hasBackend } = {}) => {
+  const path = typeof rawPath === 'string' ? rawPath.trim().replace(/\\/g, '/') : '';
+  const flags = createSuiteFlags();
+  if (!path) {
+    return flags;
+  }
+
+  if (path.startsWith('frontend/')) {
+    flags.frontend = true;
+    return flags;
+  }
+  if (path.startsWith('backend/')) {
+    flags.backend = true;
+    return flags;
+  }
+  if (path.startsWith('shared/')) {
+    flags.frontend = true;
+    flags.backend = Boolean(hasBackend);
+    return flags;
+  }
+
+  const normalized = path.toLowerCase();
+  if (normalized === 'package.json' || normalized === 'version' || normalized === 'changelog.md') {
+    flags.frontend = true;
+    flags.backend = Boolean(hasBackend);
+  }
+
+  return flags;
+};
+
+const deriveSuitesFromStagedDiff = (previousSet, currentSet, { hasBackend } = {}) => {
+  const touched = createSuiteFlags();
+  const prev = previousSet instanceof Set ? previousSet : new Set();
+  const curr = currentSet instanceof Set ? currentSet : new Set();
+
+  for (const path of curr) {
+    if (!prev.has(path)) {
+      Object.assign(touched, mergeSuiteFlags(touched, classifyPathSuites(path, { hasBackend })));
+    }
+  }
+  for (const path of prev) {
+    if (!curr.has(path)) {
+      Object.assign(touched, mergeSuiteFlags(touched, classifyPathSuites(path, { hasBackend })));
+    }
+  }
+
+  return touched;
+};
+
+const extractFailingSuitesFromFixPayload = (payload, { hasBackend } = {}) => {
+  const failing = createSuiteFlags();
+  const metadata = payload && typeof payload.childPromptMetadata === 'object' ? payload.childPromptMetadata : null;
+  if (metadata) {
+    for (const value of Object.values(metadata)) {
+      const kind = typeof value?.testFailure?.kind === 'string' ? value.testFailure.kind.toLowerCase() : '';
+      if (kind === 'frontend') {
+        failing.frontend = true;
+      }
+      if (kind === 'backend') {
+        failing.backend = true;
+      }
+    }
+  }
+
+  if (!hasAnySuiteFlag(failing)) {
+    const childPrompts = Array.isArray(payload?.childPrompts) ? payload.childPrompts : [];
+    for (const prompt of childPrompts) {
+      const text = typeof prompt === 'string' ? prompt.toLowerCase() : '';
+      if (text.includes('frontend tests')) {
+        failing.frontend = true;
+      }
+      if (text.includes('backend tests')) {
+        failing.backend = true;
+      }
+    }
+  }
+
+  if (!hasBackend) {
+    failing.backend = false;
+  }
+
+  return failing;
+};
+
+const resolveSuitesToRun = ({ hasBackend, executionTouched, stagedTouched, pendingFailures, fallbackAll }) => {
+  let suites = createSuiteFlags();
+  suites = mergeSuiteFlags(suites, pendingFailures, executionTouched, stagedTouched);
+
+  if (fallbackAll && !hasAnySuiteFlag(suites)) {
+    suites = {
+      frontend: true,
+      backend: Boolean(hasBackend)
+    };
+  }
+
+  if (!hasBackend) {
+    suites.backend = false;
+  }
+
+  return suites;
+};
+
+const formatAutomationRunMessage = (phase, suites, hasBackend) => {
+  const isRerun = phase === 'rerun';
+  if (suites.frontend && suites.backend && hasBackend) {
+    return isRerun ? 'Re-running frontend + backend tests…' : 'Starting frontend + backend test runs…';
+  }
+  if (suites.backend && hasBackend) {
+    return isRerun ? 'Re-running backend tests…' : 'Starting backend test runs…';
+  }
+  return isRerun ? 'Re-running frontend tests…' : 'Starting frontend tests…';
+};
+
 const ChatPanel = ({
   width = 320,
   side = 'left',
@@ -86,6 +219,7 @@ const ChatPanel = ({
   const filePickerRef = useRef(null);
   const autoFixInFlightRef = useRef(false);
   const autoFixCancelRef = useRef(false);
+  const lastAutomatedStagedPathsRef = useRef(new Set());
   const lastProjectIdRef = useRef(null);
   const messagesRef = useRef([]);
   const {
@@ -147,6 +281,24 @@ const ChatPanel = ({
     }
     return true;
   }, [currentProject?.backend, projectProcesses?.capabilities?.backend?.exists]);
+
+  const getCurrentStagedPathSet = useCallback(() => {
+    const projectId = currentProject?.id;
+    if (!projectId) {
+      return new Set();
+    }
+    const activeBranch = workingBranches?.[projectId];
+    const stagedFiles = Array.isArray(activeBranch?.stagedFiles) ? activeBranch.stagedFiles : [];
+    return new Set(
+      stagedFiles
+        .map((entry) => (typeof entry?.path === 'string' ? entry.path.trim() : ''))
+        .filter(Boolean)
+    );
+  }, [currentProject?.id, workingBranches]);
+
+  useEffect(() => {
+    lastAutomatedStagedPathsRef.current = getCurrentStagedPathSet();
+  }, [currentProject?.id, getCurrentStagedPathSet]);
 
   const isMessagesScrolledToBottom = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -814,6 +966,7 @@ const ChatPanel = ({
         return;
       }
 
+      const executionTouchTracker = { frontend: false, backend: false, __observed: false };
       const execution = await handleRegularFeature(
         currentProject.id,
         currentProject,
@@ -823,7 +976,7 @@ const ChatPanel = ({
         setGoalCount,
         createMessage,
         setMessages,
-        { requestEditorFocus, syncBranchOverview }
+        { requestEditorFocus, syncBranchOverview, touchTracker: executionTouchTracker }
       );
 
       if (execution?.needsClarification) {
@@ -882,25 +1035,61 @@ const ChatPanel = ({
           return;
         }
 
+        const currentStagedPaths = getCurrentStagedPathSet();
+        const stagedTouchedSuites = deriveSuitesFromStagedDiff(
+          lastAutomatedStagedPathsRef.current,
+          currentStagedPaths,
+          { hasBackend }
+        );
+        const executionTouchedSuites = executionTouchTracker.__observed
+          ? {
+              frontend: Boolean(executionTouchTracker.frontend),
+              backend: Boolean(executionTouchTracker.backend)
+            }
+          : null;
+
+        const suitesToRun = resolveSuitesToRun({
+          hasBackend,
+          executionTouched: executionTouchedSuites,
+          stagedTouched: stagedTouchedSuites,
+          pendingFailures: null,
+          fallbackAll: !executionTouchTracker.__observed
+        });
+
+        if (!hasAnySuiteFlag(suitesToRun)) {
+          setPreviewPanelTab?.('commits', { source: 'automation' });
+          setMessages((prev) => [
+            ...prev,
+            createMessage(
+              'assistant',
+              'No frontend/backend files changed since the last passing run. Skipping automated tests.',
+              { variant: 'status' }
+            )
+          ]);
+          return;
+        }
+
         setPreviewPanelTab?.('tests', { source: 'automation' });
         setMessages((prev) => [
           ...prev,
           createMessage(
             'assistant',
-            hasBackend ? 'Starting frontend + backend test runs…' : 'Starting frontend tests…',
+            formatAutomationRunMessage('start', suitesToRun, hasBackend),
             { variant: 'status' }
           )
         ]);
 
         markTestRunIntent?.('automation');
 
-        const testJobs = [
-          startAutomationJob('frontend:test', { projectId: currentProject.id })
-        ];
-        if (hasBackend) {
+        const testJobs = [];
+        if (suitesToRun.frontend) {
+          testJobs.push(startAutomationJob('frontend:test', { projectId: currentProject.id }));
+        }
+        if (suitesToRun.backend && hasBackend) {
           testJobs.push(startAutomationJob('backend:test', { projectId: currentProject.id }));
         }
         const settled = await Promise.allSettled(testJobs);
+        lastAutomatedStagedPathsRef.current = currentStagedPaths;
 
         const firstFailure = settled.find((entry) => entry.status === 'rejected');
         if (firstFailure && firstFailure.status === 'rejected') {
@@ -921,6 +1110,8 @@ const ChatPanel = ({
     appendAgentSteps,
     createMessage,
     currentProject,
+    getCurrentStagedPathSet,
+    hasBackend,
     handlePlanOnlyFeature,
     handleRegularFeature,
     markTestRunIntent,
@@ -1128,6 +1319,7 @@ const ChatPanel = ({
       ? payload.childPromptMetadata
       : null;
     const failureContext = payload && typeof payload.failureContext === 'object' ? payload.failureContext : null;
+    const failingSuites = extractFailingSuitesFromFixPayload(payload, { hasBackend });
 
     if (!prompt || !currentProject?.id) {
       return;
@@ -1202,6 +1394,7 @@ const ChatPanel = ({
         // Best-effort; goal processing will still proceed.
       }
 
+      const executionTouchTracker = { frontend: false, backend: false, __observed: false };
       const execution = await processGoals(
         goalsToProcess,
         currentProject.id,
@@ -1211,6 +1404,7 @@ const ChatPanel = ({
         createMessage,
         setMessages,
         {
+          touchTracker: executionTouchTracker,
           requestEditorFocus,
           syncBranchOverview,
           testFailureContext: childPromptMetadata ? null : failureContext,
@@ -1250,12 +1444,45 @@ const ChatPanel = ({
           return;
         }
 
+        const executionTouched = executionTouchTracker.__observed
+          ? {
+              frontend: Boolean(executionTouchTracker.frontend),
+              backend: Boolean(executionTouchTracker.backend)
+            }
+          : null;
+        const currentStagedPaths = getCurrentStagedPathSet();
+        const stagedTouchedSuites = deriveSuitesFromStagedDiff(
+          lastAutomatedStagedPathsRef.current,
+          currentStagedPaths,
+          { hasBackend }
+        );
+        const suitesToRun = resolveSuitesToRun({
+          hasBackend,
+          executionTouched,
+          stagedTouched: stagedTouchedSuites,
+          pendingFailures: failingSuites,
+          fallbackAll: !hasAnySuiteFlag(failingSuites) && !executionTouchTracker.__observed && !hasAnySuiteFlag(stagedTouchedSuites)
+        });
+
+        if (!hasAnySuiteFlag(suitesToRun)) {
+          setPreviewPanelTab?.('commits', { source: origin === 'automation' ? 'automation' : 'user' });
+          setMessages((prev) => [
+            ...prev,
+            createMessage(
+              'assistant',
+              'No frontend/backend files changed since the last passing suite. Skipping test rerun.',
+              { variant: 'status' }
+            )
+          ]);
+          return;
+        }
+
         setPreviewPanelTab?.('tests', { source: origin === 'automation' ? 'automation' : 'user' });
         setMessages((prev) => [
           ...prev,
           createMessage(
             'assistant',
-            hasBackend ? 'Re-running frontend + backend tests…' : 'Re-running frontend tests…',
+            formatAutomationRunMessage('rerun', suitesToRun, hasBackend),
             { variant: 'status' }
           )
         ]);
@@ -1263,13 +1490,15 @@ const ChatPanel = ({
         // Ensure TestTab can auto-continue the fix loop.
         markTestRunIntent?.('automation');
 
-        const testJobs = [
-          startAutomationJob('frontend:test', { projectId: currentProject.id })
-        ];
-        if (hasBackend) {
+        const testJobs = [];
+        if (suitesToRun.frontend) {
+          testJobs.push(startAutomationJob('frontend:test', { projectId: currentProject.id }));
+        }
+        if (suitesToRun.backend && hasBackend) {
           testJobs.push(startAutomationJob('backend:test', { projectId: currentProject.id }));
         }
         const settled = await Promise.allSettled(testJobs);
+        lastAutomatedStagedPathsRef.current = currentStagedPaths;
 
         const firstFailure = settled.find((entry) => entry.status === 'rejected');
         if (firstFailure && firstFailure.status === 'rejected') {
@@ -1298,6 +1527,7 @@ const ChatPanel = ({
     autoFixHalted,
     createMessage,
     currentProject,
+    getCurrentStagedPathSet,
     hasBackend,
     markTestRunIntent,
     requestEditorFocus,

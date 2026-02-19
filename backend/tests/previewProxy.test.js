@@ -1,4 +1,7 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
+import path from 'path';
+import os from 'os';
+import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 
 const getRunningProcessEntryMock = vi.hoisted(() => vi.fn());
 const getStoredProjectPortsMock = vi.hoisted(() => vi.fn());
@@ -998,6 +1001,38 @@ describe('previewProxy', () => {
     expect(next).not.toHaveBeenCalled();
     expect(proxyStub.web).toHaveBeenCalledTimes(1);
     expect(proxiedUrl).toBe('/');
+  });
+
+  test('middleware serves project uploads directly when preview cookie is present', async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'preview-proxy-uploads-'));
+    try {
+      const uploadsDir = path.join(tmpDir, 'uploads');
+      const imagePath = path.join(uploadsDir, 'hero.png');
+      await mkdir(uploadsDir, { recursive: true });
+      await writeFile(imagePath, Buffer.from('png-binary'));
+
+      getProjectMock.mockResolvedValue({ id: 99, path: tmpDir });
+
+      const { createPreviewProxy, __testOnly } = await import('../routes/previewProxy.js');
+      const instance = createPreviewProxy({ logger: null });
+
+      const req = createReq('/uploads/hero.png', {
+        cookie: `${__testOnly.COOKIE_NAME}=99`
+      });
+      const res = createRes();
+      const next = vi.fn();
+
+      await instance.middleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(proxyStub.web).not.toHaveBeenCalled();
+      expect(res.writeHead).toHaveBeenCalledWith(200, expect.objectContaining({
+        'Content-Type': 'image/png'
+      }));
+      expect(res.end).toHaveBeenCalledWith(expect.any(Buffer));
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   test('middleware proxies Vite dev asset requests when cookie is present even without referer', async () => {

@@ -486,7 +486,6 @@ describe('ChatPanel', () => {
 
       await waitFor(() => {
         expect(mockStartAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: 123 });
-        expect(mockStartAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: 123 });
       });
 
       expect(mockMarkTestRunIntent).toHaveBeenCalledWith('automation');
@@ -656,7 +655,6 @@ describe('ChatPanel', () => {
 
       await waitFor(() => {
         expect(mockStartAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: 123 });
-        expect(mockStartAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: 123 });
       });
     });
 
@@ -703,7 +701,6 @@ describe('ChatPanel', () => {
 
       await waitFor(() => {
         expect(mockStartAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: 123 });
-        expect(mockStartAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: 123 });
       });
 
       expect(goalsApi.fetchGoals).toHaveBeenCalledTimes(2);
@@ -1074,10 +1071,9 @@ describe('ChatPanel', () => {
       await waitFor(() => {
         expect(mockSetPreviewPanelTab).toHaveBeenCalledWith('tests', { source: 'automation' });
         expect(mockStartAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: 123 });
-        expect(mockStartAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: 123 });
       });
 
-      expect(screen.getByText('Re-running frontend + backend tests…')).toBeInTheDocument();
+      expect(screen.getByText('Re-running frontend tests…')).toBeInTheDocument();
     });
 
     it('skips test reruns after a successful fix goal when changes are css-only', async () => {
