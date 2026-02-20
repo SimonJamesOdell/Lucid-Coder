@@ -225,6 +225,36 @@ describe('TestTab coverage effects', () => {
     expect(screen.getByText(/same error repeating/i)).toBeInTheDocument();
   });
 
+  test('continues automation flow when only one touched suite reruns and passes', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    const running = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: createdAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-partial-1', type: 'frontend:test', status: 'running', logs: [], createdAt }
+      ])
+    });
+
+    const completed = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-partial-1', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+      ])
+    });
+
+    let context = running;
+    useAppState.mockImplementation(() => context);
+
+    const view = render(<TestTab project={baseProject} />);
+
+    context = completed;
+    view.rerender(<TestTab project={baseProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText(/Cannot commit/i)).toBeInTheDocument();
+  });
+
   test('circuit-breaker fingerprint handles non-array uncoveredLines in coverage gate failures', async () => {
     const frontendOnlyProject = { ...baseProject, backend: null };
     const createdAt1 = new Date(Date.now() + 50).toISOString();

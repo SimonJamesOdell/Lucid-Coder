@@ -7,6 +7,7 @@ import {
 } from './preview-tab/originUtils';
 import PreviewErrorView from './preview-tab/PreviewErrorView';
 import PreviewLoadingOverlay from './preview-tab/PreviewLoadingOverlay';
+import { setAssistantElementContextPath } from '../utils/assistantElementContext';
 import './PreviewTab.css';
 
 export { normalizeHostname, getDevServerOriginFromWindow };
@@ -649,8 +650,9 @@ const PreviewTab = forwardRef(
 
         const selector = buildSimpleSelector(payload);
         const href = typeof payload.href === 'string' ? payload.href : '';
+        const elementPath = typeof payload.elementPath === 'string' ? payload.elementPath.trim() : '';
 
-        setPreviewContextMenu({ x, y, selector, href });
+        setPreviewContextMenu({ x, y, selector, href, elementPath });
         return;
       }
 
@@ -694,7 +696,8 @@ const PreviewTab = forwardRef(
       return null;
     }
 
-    const { x, y, selector, href } = previewContextMenu;
+    const { x, y, selector, href, elementPath } = previewContextMenu;
+    const contextPath = elementPath || selector;
 
     return (
       <>
@@ -709,6 +712,21 @@ const PreviewTab = forwardRef(
           style={{ left: Math.max(0, x), top: Math.max(0, y) }}
           onMouseDown={(event) => event.stopPropagation()}
         >
+          <button
+            type="button"
+            className="preview-context-menu__item"
+            onClick={() => {
+              if (!project?.id || !contextPath) {
+                setPreviewContextMenu(null);
+                return;
+              }
+              setAssistantElementContextPath(project.id, contextPath);
+              setPreviewContextMenu(null);
+            }}
+            disabled={!project?.id || !contextPath}
+          >
+            Add element to context
+          </button>
           <button
             type="button"
             className="preview-context-menu__item"

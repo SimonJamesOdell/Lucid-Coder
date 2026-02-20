@@ -2,7 +2,7 @@ import React, { forwardRef, useImperativeHandle, act } from 'react';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import PreviewPanel from '../components/PreviewPanel';
+import PreviewPanel, { isLoopbackHostname } from '../components/PreviewPanel';
 import { useAppState } from '../context/AppStateContext';
 import { startAgentUiBridge } from '../utils/agentUiBridge';
 
@@ -1005,6 +1005,34 @@ describe('PreviewPanel', () => {
     await user.click(button);
 
     expect(window.open).toHaveBeenCalledWith('http://localhost:5173/about', '_blank', 'noopener,noreferrer');
+  });
+
+  test('isLoopbackHostname handles loopback and non-string values', () => {
+    expect(isLoopbackHostname('localhost')).toBe(true);
+    expect(isLoopbackHostname('127.0.0.1')).toBe(true);
+    expect(isLoopbackHostname('::1')).toBe(true);
+    expect(isLoopbackHostname('[::1]')).toBe(true);
+    expect(isLoopbackHostname('192.168.0.60')).toBe(false);
+    expect(isLoopbackHostname(undefined)).toBe(false);
+  });
+
+  test('prefers proxy preview target on non-loopback hosts', async () => {
+    const locationSpy = vi.spyOn(window, 'location', 'get').mockReturnValue({ hostname: '192.168.0.60' });
+    getOpenInNewTabUrlMock.mockReturnValue('http://localhost:5173/about');
+    getDisplayedUrlMock.mockReturnValue('http://192.168.0.60:5100/preview/1');
+    getPreviewUrlMock.mockReturnValue('http://192.168.0.60:5100/preview/1');
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 111, name: 'LAN Project' } })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    const button = screen.getByTestId('open-preview-tab');
+    await user.click(button);
+
+    expect(window.open).toHaveBeenCalledWith('http://192.168.0.60:5100/preview/1', '_blank', 'noopener,noreferrer');
+    locationSpy.mockRestore();
   });
 
   test('opens preview url when displayed url is unavailable', async () => {

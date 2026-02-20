@@ -244,12 +244,23 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     job && (job.status === 'failed' || isCoverageGateFailed(job))
   ), []);
 
+  const hasVisibleTestJobs = useMemo(() => (
+    visibleTestConfigs.some((config) => Boolean(jobsByType[config.type]))
+  ), [jobsByType, visibleTestConfigs]);
+
   const allTestsCompleted = useMemo(() => {
+    if (!hasVisibleTestJobs) {
+      return false;
+    }
+
     return visibleTestConfigs.every((config) => {
       const job = jobsByType[config.type];
-      return job && isJobFinal(job);
+      if (!job) {
+        return true;
+      }
+      return isJobFinal(job);
     });
-  }, [jobsByType, visibleTestConfigs]);
+  }, [hasVisibleTestJobs, jobsByType, visibleTestConfigs]);
 
   const didTestsMeetGate = useMemo(() => {
     if (!allTestsCompleted) {
@@ -257,6 +268,9 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
     return visibleTestConfigs.every((config) => {
       const job = jobsByType[config.type];
+      if (!job) {
+        return true;
+      }
       return job?.status === 'succeeded' && !isCoverageGateFailed(job);
     });
   }, [allTestsCompleted, jobsByType, visibleTestConfigs]);

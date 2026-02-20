@@ -12,6 +12,10 @@ import {
   clearAssistantAssetContextPaths,
   setAssistantAssetContextPaths
 } from '../utils/assistantAssetContext';
+import {
+  getAssistantElementContextPath,
+  setAssistantElementContextPath
+} from '../utils/assistantElementContext';
 
 vi.mock('../context/AppStateContext');
 vi.mock('../utils/goalsApi');
@@ -2119,6 +2123,26 @@ describe('ChatPanel', () => {
       expect(prompt).toContain('Current request: Use selected assets');
     });
 
+    it('includes selected preview element path in the request prompt context', async () => {
+      goalsApi.agentRequest.mockResolvedValue({ kind: 'question', answer: 'OK', steps: [] });
+      setAssistantElementContextPath(123, 'body > main:nth-of-type(1) > button:nth-of-type(2)');
+
+      render(<ChatPanel width={320} side="left" />);
+
+      await userEvent.type(screen.getByTestId('chat-input'), 'Turn this blue');
+      await userEvent.click(screen.getByTestId('chat-send-button'));
+
+      await waitFor(() => {
+        expect(goalsApi.agentRequest).toHaveBeenCalled();
+      });
+
+      const prompt = goalsApi.agentRequest.mock.calls[0][0].prompt;
+      expect(prompt).toContain('Selected preview element path:');
+      expect(prompt).toContain('- body > main:nth-of-type(1) > button:nth-of-type(2)');
+      expect(prompt).toContain('Element targeting policy:');
+      expect(prompt).toContain('Current request: Turn this blue');
+    });
+
     it('filters assistant context event paths and falls back to stored paths when paths are omitted', async () => {
       setAssistantAssetContextPaths(123, ['uploads/stored.png']);
 
@@ -2161,6 +2185,26 @@ describe('ChatPanel', () => {
       await waitFor(() => {
         expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent('Included in context: uploads/current.png');
       });
+    });
+
+    it('falls back to stored element path when element context event omits path', async () => {
+      setAssistantElementContextPath(123, 'main > section:nth-of-type(1)');
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:assistant-element-context-changed', {
+        detail: {
+          projectId: 123
+        }
+      }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent(
+          'Included in context: main > section:nth-of-type(1)'
+        );
+      });
+
+      expect(getAssistantElementContextPath(123)).toBe('main > section:nth-of-type(1)');
     });
 
     it('ignores automation-log events when banner text is blank', async () => {
@@ -2654,6 +2698,7 @@ describe('ChatPanel', () => {
       goalsApi.fetchGoals.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
       setAssistantAssetContextPaths(123, ['uploads/clarify.png']);
+      setAssistantElementContextPath(123, 'main > button.primary');
 
       render(<ChatPanel width={320} side="left" />);
 
@@ -2683,6 +2728,8 @@ describe('ChatPanel', () => {
       expect(clarifiedPrompt).toContain('Original request: Current request: Keep this line');
       expect(clarifiedPrompt).toContain('Selected project assets:');
       expect(clarifiedPrompt).toContain('- uploads/clarify.png');
+      expect(clarifiedPrompt).toContain('Selected preview element path:');
+      expect(clarifiedPrompt).toContain('- main > button.primary');
       expect(clarifiedPrompt).toContain('User answer: Answer from hooks');
     });
 

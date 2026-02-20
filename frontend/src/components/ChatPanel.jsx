@@ -39,6 +39,11 @@ import {
   clearAssistantAssetContextPaths,
   getAssistantAssetContextPaths
 } from '../utils/assistantAssetContext';
+import {
+  ASSISTANT_ELEMENT_CONTEXT_CHANGED_EVENT,
+  clearAssistantElementContextPath,
+  getAssistantElementContextPath
+} from '../utils/assistantElementContext';
 import { AUTOMATION_LOG_EVENT } from '../services/goalAutomation/automationUtils';
 
 export { formatAgentStepMessage };
@@ -570,7 +575,9 @@ const ChatPanel = ({
       return;
     }
     clearAssistantAssetContextPaths(currentProject.id);
+    clearAssistantElementContextPath(currentProject.id);
     setSelectedAssistantAssetPaths([]);
+    setSelectedAssistantElementPath('');
   }, [currentProject?.id]);
 
   useEffect(() => {
@@ -727,14 +734,17 @@ const ChatPanel = ({
   const assistantToggleDisabled = autopilotIsActive && !autopilotCanPause && !autopilotCanResume;
   const [selectedAssistantAssetPaths, setSelectedAssistantAssetPaths] = useState([]);
   const selectedAssistantAssetPath = selectedAssistantAssetPaths[0] || '';
+  const [selectedAssistantElementPath, setSelectedAssistantElementPath] = useState('');
 
   useEffect(() => {
     if (!currentProject?.id) {
       setSelectedAssistantAssetPaths([]);
+      setSelectedAssistantElementPath('');
       return;
     }
 
     setSelectedAssistantAssetPaths(getAssistantAssetContextPaths(currentProject.id));
+    setSelectedAssistantElementPath(getAssistantElementContextPath(currentProject.id));
   }, [currentProject?.id]);
 
   useEffect(() => {
@@ -789,9 +799,29 @@ const ChatPanel = ({
       setSelectedAssistantAssetPaths(detailPaths);
     };
 
+    const handleAssistantElementContextChanged = (event) => {
+      if (!currentProject?.id) {
+        setSelectedAssistantElementPath('');
+        return;
+      }
+
+      const detailProjectId = event?.detail?.projectId;
+      if (detailProjectId && String(detailProjectId) !== String(currentProject.id)) {
+        return;
+      }
+
+      const detailPath = typeof event?.detail?.path === 'string'
+        ? event.detail.path.trim()
+        : getAssistantElementContextPath(currentProject.id);
+
+      setSelectedAssistantElementPath(detailPath);
+    };
+
     window.addEventListener(ASSISTANT_ASSET_CONTEXT_CHANGED_EVENT, handleAssistantAssetContextChanged);
+    window.addEventListener(ASSISTANT_ELEMENT_CONTEXT_CHANGED_EVENT, handleAssistantElementContextChanged);
     return () => {
       window.removeEventListener(ASSISTANT_ASSET_CONTEXT_CHANGED_EVENT, handleAssistantAssetContextChanged);
+      window.removeEventListener(ASSISTANT_ELEMENT_CONTEXT_CHANGED_EVENT, handleAssistantElementContextChanged);
     };
   }, [currentProject?.id]);
 
@@ -1236,13 +1266,26 @@ const ChatPanel = ({
             ...pendingClarification.questions.map((question) => `- ${question}`),
             ...(() => {
               const selectedAssetPaths = getAssistantAssetContextPaths(currentProject.id);
-              return selectedAssetPaths.length
-                ? [
+              const selectedElementPath = getAssistantElementContextPath(currentProject.id);
+              const contextBlocks = [];
+
+              if (selectedAssetPaths.length) {
+                contextBlocks.push(
                   'Selected project assets:',
                   ...selectedAssetPaths.map((path) => `- ${path}`),
                   'Asset URL policy: when referencing selected assets in web code, use root-relative URLs like /uploads/<filename>.'
-                ]
-                : [];
+                );
+              }
+
+              if (selectedElementPath) {
+                contextBlocks.push(
+                  'Selected preview element path:',
+                  `- ${selectedElementPath}`,
+                  'Element targeting policy: when user references "this element" or "that element", prioritize edits for this exact element path/selector before broader styling changes.'
+                );
+              }
+
+              return contextBlocks;
             })(),
             `User answer: ${trimmed}`
           ].join('\n')
@@ -1250,13 +1293,26 @@ const ChatPanel = ({
             buildConversationContext(),
             (() => {
               const selectedAssetPaths = getAssistantAssetContextPaths(currentProject.id);
-              return selectedAssetPaths.length
-                ? [
+              const selectedElementPath = getAssistantElementContextPath(currentProject.id);
+              const contextBlocks = [];
+
+              if (selectedAssetPaths.length) {
+                contextBlocks.push(
                   'Selected project assets:',
                   ...selectedAssetPaths.map((path) => `- ${path}`),
                   'Asset URL policy: when referencing selected assets in web code, use root-relative URLs like /uploads/<filename>.'
-                ].join('\n')
-                : '';
+                );
+              }
+
+              if (selectedElementPath) {
+                contextBlocks.push(
+                  'Selected preview element path:',
+                  `- ${selectedElementPath}`,
+                  'Element targeting policy: when user references "this element" or "that element", prioritize edits for this exact element path/selector before broader styling changes.'
+                );
+              }
+
+              return contextBlocks.join('\n');
             })(),
             `Current request: ${trimmed}`
           ]
@@ -1977,10 +2033,11 @@ const ChatPanel = ({
         </div>
       ) : null}
 
-      {selectedAssistantAssetPath ? (
+      {(selectedAssistantAssetPath || selectedAssistantElementPath) ? (
         <div className="chat-context-indicator" data-testid="chat-context-indicator">
           <span className="chat-context-indicator__text">
-            Included in context: {selectedAssistantAssetPath}
+            Included in context: {selectedAssistantAssetPath || selectedAssistantElementPath}
+            {selectedAssistantAssetPath && selectedAssistantElementPath ? ` • Element: ${selectedAssistantElementPath}` : ''}
           </span>
           <button
             type="button"
