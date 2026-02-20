@@ -14,6 +14,20 @@ import LLMUsageTab from './LLMUsageTab';
 import AssetsTab from './AssetsTab';
 import './PreviewPanel.css';
 
+export const isLoopbackHostname = (hostname) => {
+  if (typeof hostname !== 'string') {
+    return false;
+  }
+
+  const normalized = hostname.trim().toLowerCase();
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1' ||
+    normalized === '[::1]'
+  );
+};
+
 const PreviewPanel = () => {
   const [localActiveTab, setLocalActiveTab] = useState('preview');
   const [localFollowAutomation, setLocalFollowAutomation] = useState(true);
@@ -397,15 +411,24 @@ const PreviewPanel = () => {
       return;
     }
 
+    const targetUrl =
+      previewRef.current.getDisplayedUrl?.() ||
+      previewRef.current.getPreviewUrl?.();
+
+    const currentHostname = typeof window !== 'undefined' ? window.location?.hostname : '';
+    const shouldPreferProxyTarget = !isLoopbackHostname(currentHostname);
+
+    if (shouldPreferProxyTarget && targetUrl && targetUrl !== 'about:blank') {
+      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
     const directUrl = previewRef.current.getOpenInNewTabUrl?.();
     if (directUrl && directUrl !== 'about:blank') {
       window.open(directUrl, '_blank', 'noopener,noreferrer');
       return;
     }
 
-    const targetUrl =
-      previewRef.current.getDisplayedUrl?.() ||
-      previewRef.current.getPreviewUrl?.();
     if (!targetUrl || targetUrl === 'about:blank') {
       return;
     }

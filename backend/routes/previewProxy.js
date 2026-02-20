@@ -349,6 +349,55 @@ const buildPreviewBridgeScript = ({ previewPrefix }) => {
     var lastHref = '';
     var lastContextMenuAt = 0;
 
+    var cssEscapeIdent = function(value){
+      if (typeof value !== 'string') return '';
+      return value.replace(/[^a-zA-Z0-9_-]/g, function(char){
+        return '\\\\' + char;
+      });
+    };
+
+    var buildUniqueElementPath = function(node){
+      try {
+        if (!node || node.nodeType !== 1) return '';
+        var segments = [];
+        var current = node;
+        var safety = 0;
+
+        while (current && current.nodeType === 1 && safety < 200) {
+          safety += 1;
+          var tagName = current.tagName && typeof current.tagName === 'string'
+            ? current.tagName.toLowerCase()
+            : 'element';
+          var segment = tagName;
+
+          var currentId = typeof current.id === 'string' ? current.id.trim() : '';
+          if (currentId) {
+            segment += '#' + cssEscapeIdent(currentId);
+            segments.unshift(segment);
+            break;
+          }
+
+          var index = 1;
+          var sibling = current.previousElementSibling;
+          while (sibling) {
+            if (sibling.tagName === current.tagName) {
+              index += 1;
+            }
+            sibling = sibling.previousElementSibling;
+          }
+
+          segment += ':nth-of-type(' + index + ')';
+          segments.unshift(segment);
+
+          current = current.parentElement;
+        }
+
+        return segments.join(' > ');
+      } catch (e) {
+        return '';
+      }
+    };
+
     var send = function(type, extra){
       try {
         var parentWindow = window.parent;
@@ -495,6 +544,7 @@ const buildPreviewBridgeScript = ({ previewPrefix }) => {
         var tagName = target && typeof target.tagName === 'string' ? target.tagName : '';
         var id = target && typeof target.id === 'string' ? target.id : '';
         var className = target && typeof target.className === 'string' ? target.className : '';
+        var elementPath = buildUniqueElementPath(target);
 
         send('LUCIDCODER_PREVIEW_HELPER_CONTEXT_MENU', {
           href: readHref(),
@@ -502,7 +552,8 @@ const buildPreviewBridgeScript = ({ previewPrefix }) => {
           clientY: typeof event.clientY === 'number' ? event.clientY : 0,
           tagName: tagName,
           id: id,
-          className: className
+          className: className,
+          elementPath: elementPath
         });
       } catch (e) {
         // ignore
