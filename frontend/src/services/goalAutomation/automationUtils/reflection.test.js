@@ -146,6 +146,39 @@ describe('reflection style scope contract', () => {
     expect(violation).toBeNull();
   });
 
+  test('allows page-level stylesheet edits without explicit target hints when page selectors are present', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        targetLevel: 'page',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: []
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'modify',
+          path: 'frontend/src/index.css',
+          replacements: [
+            {
+              search: ':root { --bg: #fff; }',
+              replace: 'body { background-color: green; }'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(violation).toBeNull();
+  });
+
   test('keeps deriveStyleScopeContract disabled for app-wide style prompts', () => {
     const contract = deriveStyleScopeContract('apply a global theme across the entire app');
 
@@ -421,6 +454,174 @@ describe('reflection style scope contract', () => {
     expect(violation).toEqual(
       expect.objectContaining({
         type: 'style-scope-target-missing'
+      })
+    );
+  });
+
+  test('keeps component-level targeted scope strict when target hints are missing', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        targetLevel: 'component',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: []
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'modify',
+          path: 'frontend/src/index.css',
+          replacements: [
+            {
+              search: '.button { color: #111; }',
+              replace: '.button { color: #eee; }'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing'
+      })
+    );
+  });
+
+  test('allows page-level upsert edits when page selectors are present', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        targetLevel: 'page',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: []
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'upsert',
+          path: 'frontend/src/index.css',
+          content: 'html { color: #111; }'
+        }
+      ]
+    });
+
+    expect(violation).toBeNull();
+  });
+
+  test('allows page-level modify edits when page selectors are present in replacements', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        targetLevel: 'page',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: []
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'modify',
+          path: 'frontend/src/index.css',
+          replacements: [
+            {
+              search: '.card { color: #111; }',
+              replace: 'body .card { color: #eee; }'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(violation).toBeNull();
+  });
+
+  test('flags page-level global stylesheet edits when selector matching cannot run for edit type', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        targetLevel: 'page',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: []
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'delete',
+          path: 'frontend/src/index.css'
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing',
+        rule: 'targeted-style-scope'
+      })
+    );
+  });
+
+  test('falls back safely for page-level modify replacements with non-string search and replace fields', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustAvoid: [],
+      styleScope: {
+        mode: 'targeted',
+        targetLevel: 'page',
+        enforceTargetScoping: true,
+        forbidGlobalSelectors: true,
+        targetHints: []
+      }
+    };
+
+    const violation = validateEditsAgainstReflection({
+      reflection,
+      normalizeRepoPath,
+      edits: [
+        {
+          type: 'modify',
+          path: 'frontend/src/index.css',
+          replacements: [
+            {
+              search: null,
+              replace: undefined
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(violation).toEqual(
+      expect.objectContaining({
+        type: 'style-scope-target-missing',
+        rule: 'targeted-style-scope'
       })
     );
   });

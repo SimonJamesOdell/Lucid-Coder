@@ -210,6 +210,61 @@ describe('createMetaGoalWithChildren helper', () => {
     expect(result.children).toHaveLength(1);
     expect(result.children[0].prompt).toBe('Existing child');
   });
+
+  it('inherits styleOnly metadata from parent to children', async () => {
+    const projectId = 926;
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt: 'make the site background blue',
+      childPrompts: ['Update the page background styles in existing CSS files']
+    });
+
+    expect(result.parent.metadata?.styleOnly).toBe(true);
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].metadata?.styleOnly).toBe(true);
+  });
+
+  it('preserves explicit child styleOnly=false when parent is styleOnly', async () => {
+    const projectId = 927;
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt: 'make the site background blue',
+      childPrompts: ['Update the page background styles in existing CSS files'],
+      childPromptMetadata: {
+        'Update the page background styles in existing CSS files': {
+          styleOnly: false,
+          acceptanceCriteria: ['Keep this scoped to the specified target']
+        }
+      }
+    });
+
+    expect(result.parent.metadata?.styleOnly).toBe(true);
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].metadata?.styleOnly).toBe(false);
+    expect(result.children[0].metadata?.acceptanceCriteria).toEqual(['Keep this scoped to the specified target']);
+  });
+
+  it('merges child metadata and enforces styleOnly=true when parent is styleOnly', async () => {
+    const projectId = 928;
+    const childPrompt = 'Update the page background styles in existing CSS files';
+    const result = await createMetaGoalWithChildren({
+      projectId,
+      prompt: 'make the site background blue',
+      childPrompts: [childPrompt],
+      childPromptMetadata: {
+        [childPrompt]: {
+          acceptanceCriteria: ['Preserve spacing'],
+          tags: ['ui', 'style']
+        }
+      }
+    });
+
+    expect(result.parent.metadata?.styleOnly).toBe(true);
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].metadata?.styleOnly).toBe(true);
+    expect(result.children[0].metadata?.acceptanceCriteria).toEqual(['Preserve spacing']);
+    expect(result.children[0].metadata?.tags).toEqual(['ui', 'style']);
+  });
 });
 
 describe('mergeGoalMetadata suppression', () => {

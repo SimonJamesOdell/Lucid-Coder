@@ -744,6 +744,32 @@ describe('processGoal scope reflection handling', () => {
     );
     expect(scopeLog?.[1]?.testsNeeded).toBe(false);
   });
+
+  test('disables tests stage for style-only goals without test failure context', async () => {
+    const args = defaultArgs();
+    const styleOnlyGoal = {
+      ...args.goal,
+      metadata: { styleOnly: true }
+    };
+
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: true });
+
+    const result = await processGoal(
+      styleOnlyGoal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      baseOptions
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(getStagePromptPayloads('testing')).toEqual([]);
+    expect(getStagePromptPayloads('implementation').length).toBeGreaterThan(0);
+  });
 });
 
 describe('processGoal implementation retries', () => {

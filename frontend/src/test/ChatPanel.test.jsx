@@ -1657,6 +1657,35 @@ describe('ChatPanel', () => {
       });
     });
 
+    it('positions the catch-up button lower when no context attachment is present', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      const messagesContainer = screen.getByTestId('chat-messages');
+      Object.defineProperty(messagesContainer, 'scrollHeight', { value: 1000, configurable: true });
+      Object.defineProperty(messagesContainer, 'clientHeight', { value: 100, configurable: true });
+      Object.defineProperty(messagesContainer, 'scrollTop', { value: 0, writable: true, configurable: true });
+
+      fireEvent.scroll(messagesContainer);
+
+      const scrollButton = await screen.findByRole('button', { name: 'Scroll to latest message' });
+      expect(scrollButton).not.toHaveClass('chat-scroll-bottom--with-context');
+    });
+
+    it('keeps the raised catch-up button position when context attachment is present', async () => {
+      setAssistantAssetContextPaths(123, ['uploads/context-image.png']);
+      render(<ChatPanel width={320} side="left" />);
+
+      const messagesContainer = screen.getByTestId('chat-messages');
+      Object.defineProperty(messagesContainer, 'scrollHeight', { value: 1000, configurable: true });
+      Object.defineProperty(messagesContainer, 'clientHeight', { value: 100, configurable: true });
+      Object.defineProperty(messagesContainer, 'scrollTop', { value: 0, writable: true, configurable: true });
+
+      fireEvent.scroll(messagesContainer);
+
+      const scrollButton = await screen.findByRole('button', { name: 'Scroll to latest message' });
+      expect(scrollButton).toHaveClass('chat-scroll-bottom--with-context');
+    });
+
     it('skips clearTimeout when the timeout handle is falsy', async () => {
       const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(() => 0);
       const clearSpy = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(() => {});
@@ -2694,7 +2723,8 @@ describe('ChatPanel', () => {
       });
 
       const clarifiedPrompt = goalsApi.agentRequest.mock.calls[1][0].prompt;
-      expect(clarifiedPrompt).toContain('Original request: Current request: First request');
+      expect(clarifiedPrompt).toContain('Original request: First request');
+      expect(clarifiedPrompt).toContain('Current request: First request');
       expect(clarifiedPrompt).toContain('Clarification questions:');
       expect(clarifiedPrompt).toContain('- Need details?');
       expect(clarifiedPrompt).toContain('User answer: Answer');
@@ -2741,7 +2771,8 @@ describe('ChatPanel', () => {
       });
 
       const clarifiedPrompt = goalsApi.agentRequest.mock.calls[0][0].prompt;
-      expect(clarifiedPrompt).toContain('Original request: Current request: Keep this line');
+      expect(clarifiedPrompt).toContain('Original request: Keep this line');
+      expect(clarifiedPrompt).toContain('Current request: Keep this line');
       expect(clarifiedPrompt).toContain('Selected project assets:');
       expect(clarifiedPrompt).toContain('- uploads/clarify.png');
       expect(clarifiedPrompt).toContain('Selected preview element path:');
@@ -2775,7 +2806,8 @@ describe('ChatPanel', () => {
         expect(goalsApi.agentRequest).toHaveBeenCalled();
       });
 
-      expect(goalsApi.agentRequest.mock.calls[0][0].prompt).toContain('Original request: Current request: ');
+      expect(goalsApi.agentRequest.mock.calls[0][0].prompt).toContain('Original request: ');
+      expect(goalsApi.agentRequest.mock.calls[0][0].prompt).toContain('Current request: ');
     });
 
     it('logs a warning when stale goal cleanup fails after clarification', async () => {

@@ -3,6 +3,7 @@ import axios from 'axios';
 import './AssetsTab.css';
 import AssetOptimizeModal from './AssetOptimizeModal';
 import AssetRenameModal from './AssetRenameModal';
+import SettingsModal from './SettingsModal';
 import {
   getAssistantAssetContextPaths,
   setAssistantAssetContextPaths
@@ -113,6 +114,7 @@ const AssetsTab = ({ project }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [deletingPath, setDeletingPath] = useState('');
+  const [deleteModalAssetPath, setDeleteModalAssetPath] = useState('');
   const [optimizingPath, setOptimizingPath] = useState('');
   const [selectedAssetPath, setSelectedAssetPath] = useState('');
   const [optimizeModalAssetPath, setOptimizeModalAssetPath] = useState('');
@@ -179,6 +181,7 @@ const AssetsTab = ({ project }) => {
     setRenameInputValue('');
     setRenameErrorMessage('');
     setRenamingPath('');
+    setDeleteModalAssetPath('');
   }, [projectId]);
 
   useEffect(() => {
@@ -299,16 +302,20 @@ const AssetsTab = ({ project }) => {
       return;
     }
 
-    const ok = window.confirm(`Delete this asset?\n\n${assetPath}`);
-    if (!ok) {
+    setDeleteModalAssetPath(assetPath);
+  }, [projectId]);
+
+  const confirmDeleteAsset = useCallback(async () => {
+    if (!projectId || !deleteModalAssetPath) {
       return;
     }
 
-    setDeletingPath(assetPath);
+    setDeletingPath(deleteModalAssetPath);
     try {
       const response = await axios.post(`/api/projects/${projectId}/files-ops/delete`, {
-        targetPath: assetPath,
-        recursive: false
+        targetPath: deleteModalAssetPath,
+        recursive: false,
+        confirm: true
       });
       if (!response?.data?.success) {
         throw new Error(response?.data?.error || 'Failed to delete asset');
@@ -319,13 +326,14 @@ const AssetsTab = ({ project }) => {
           detail: { projectId }
         }));
       }
+      setDeleteModalAssetPath('');
     } catch (err) {
       console.error('Failed to delete asset:', err);
       window.alert(err?.response?.data?.error || err?.message || 'Failed to delete asset');
     } finally {
       setDeletingPath('');
     }
-  }, [loadAssets, projectId]);
+  }, [deleteModalAssetPath, loadAssets, projectId]);
 
   const applyAssetRename = useCallback(async ({ fromPath, toPath }) => {
     if (!projectId || !fromPath || !toPath) {
@@ -582,6 +590,7 @@ const AssetsTab = ({ project }) => {
 
   if (AssetsTab.__testHooks?.handlers) {
     AssetsTab.__testHooks.handlers.deleteAsset = deleteAsset;
+    AssetsTab.__testHooks.handlers.confirmDeleteAsset = confirmDeleteAsset;
     AssetsTab.__testHooks.handlers.applyAssetRename = applyAssetRename;
     AssetsTab.__testHooks.handlers.renameAsset = openRenameModal;
     AssetsTab.__testHooks.handlers.openOptimizeModal = setOptimizeModalAssetPath;
@@ -825,6 +834,47 @@ const AssetsTab = ({ project }) => {
         }}
         onSubmit={submitRenameModal}
       />
+
+      <SettingsModal
+        isOpen={Boolean(deleteModalAssetPath)}
+        onClose={() => {
+          if (deletingPath) {
+            return;
+          }
+          setDeleteModalAssetPath('');
+        }}
+        title="Delete asset"
+        subtitle="This action cannot be undone."
+        testId="asset-delete-modal"
+        closeTestId="asset-delete-modal-close"
+        titleId="asset-delete-title"
+        panelClassName="assets-tab__delete-modal-panel"
+        bodyClassName="assets-tab__delete-modal-body"
+        closeLabel="Close delete asset confirmation"
+      >
+        <p className="assets-tab__delete-modal-copy">Delete this asset?</p>
+        <p className="assets-tab__delete-modal-path">{deleteModalAssetPath}</p>
+        <div className="assets-tab__delete-modal-actions">
+          <button
+            type="button"
+            className="assets-tab__delete-modal-cancel"
+            onClick={() => setDeleteModalAssetPath('')}
+            disabled={Boolean(deletingPath)}
+            data-testid="asset-delete-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="assets-tab__delete-modal-confirm"
+            onClick={confirmDeleteAsset}
+            disabled={Boolean(deletingPath)}
+            data-testid="asset-delete-confirm"
+          >
+            {deletingPath ? 'Deleting…' : 'Delete asset'}
+          </button>
+        </div>
+      </SettingsModal>
     </div>
   );
 };

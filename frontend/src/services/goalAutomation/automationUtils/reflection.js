@@ -8,6 +8,7 @@ const SCOPE_REFLECTION_DEFAULT = Object.freeze({
 
 const GLOBAL_SELECTOR_REGEX = /\b(body|html)\s*[{,]|:root\s*[{,]|(^|\n)\s*\*\s*[{,]|#root\s*[{,]|:global\(\s*(body|html|:root|\*)\s*\)/i;
 const GLOBAL_STYLE_FILE_REGEX = /(^|\/)(index|app|styles|theme|globals?)\.(css|scss|sass|less)$/i;
+const PAGE_SCOPE_SELECTOR_REGEX = /\b(body|html)\b|:root|#root|\.app\b|\.app-container\b|\.app-shell\b|:global\(\s*(body|html|:root|#root|\.app)\s*\)/i;
 
 const readEditText = (edit = {}) => {
   if (edit?.type === 'upsert') {
@@ -70,6 +71,22 @@ const editTouchesGlobalSelectors = (edit = {}) => {
       const search = typeof replacement?.search === 'string' ? replacement.search : '';
       const replace = typeof replacement?.replace === 'string' ? replacement.replace : '';
       return GLOBAL_SELECTOR_REGEX.test(`${search}\n${replace}`);
+    });
+  }
+
+  return false;
+};
+
+const editTouchesPageScopeSelectors = (edit = {}) => {
+  if (edit?.type === 'upsert') {
+    return typeof edit?.content === 'string' && PAGE_SCOPE_SELECTOR_REGEX.test(edit.content);
+  }
+
+  if (edit?.type === 'modify' && Array.isArray(edit?.replacements)) {
+    return edit.replacements.some((replacement) => {
+      const search = typeof replacement?.search === 'string' ? replacement.search : '';
+      const replace = typeof replacement?.replace === 'string' ? replacement.replace : '';
+      return PAGE_SCOPE_SELECTOR_REGEX.test(`${search}\n${replace}`);
     });
   }
 
@@ -175,12 +192,13 @@ export const parseScopeReflectionResponse = ({
         : (mode === 'global' ? 'global' : 'component');
 
     const isGlobalLevel = targetLevel === 'global';
+    const isPageLevel = targetLevel === 'page';
     const targetHints = normalizeReflectionList(value.targetHints || []);
     return {
       mode: isGlobalLevel ? 'global' : mode,
       targetLevel,
       enforceTargetScoping: isGlobalLevel ? false : value.enforceTargetScoping === true,
-      forbidGlobalSelectors: isGlobalLevel ? false : value.forbidGlobalSelectors === true,
+      forbidGlobalSelectors: (isGlobalLevel || isPageLevel) ? false : value.forbidGlobalSelectors === true,
       targetHints
     };
   };
@@ -288,7 +306,9 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
       };
     }
 
-    if (styleScope?.forbidGlobalSelectors && editTouchesGlobalSelectors(edit)) {
+    const pageLevelScope = styleScope?.targetLevel === 'page';
+
+    if (styleScope?.forbidGlobalSelectors && !pageLevelScope && editTouchesGlobalSelectors(edit)) {
       return {
         type: 'style-scope-global-selector',
         path: normalizedPath,
@@ -298,8 +318,13 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
     }
 
     if (styleScope?.enforceTargetScoping && GLOBAL_STYLE_FILE_REGEX.test(normalizedPath)) {
-      const mentionsTarget = editMentionsTargetHints(edit, styleScope?.targetHints || []);
+      const targetHints = normalizeReflectionList(styleScope?.targetHints || []);
+      const mentionsTarget = editMentionsTargetHints(edit, targetHints);
+      const pageScopeMatch = styleScope?.targetLevel === 'page' && editTouchesPageScopeSelectors(edit);
       if (!mentionsTarget) {
+        if (pageScopeMatch) {
+          continue;
+        }
         return {
           type: 'style-scope-target-missing',
           path: normalizedPath,

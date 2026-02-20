@@ -541,7 +541,15 @@ export async function processGoal(
       }
     }
 
-    const testsStageEnabled = scopeReflection?.testsNeeded !== false;
+    const goalMetadata = goal?.metadata && typeof goal.metadata === 'object' ? goal.metadata : null;
+    const styleOnlyGoal = goalMetadata?.styleOnly === true;
+    if (scopeReflection && styleOnlyGoal && !testFailureContext) {
+      scopeReflection.testsNeeded = false;
+    }
+
+    const testsStageEnabled = styleOnlyGoal && !testFailureContext
+      ? false
+      : scopeReflection?.testsNeeded !== false;
     const requiredAssetPaths = Array.isArray(scopeReflection?.requiredAssetPaths)
       ? scopeReflection.requiredAssetPaths
           .map((path) => (typeof path === 'string' ? path.trim() : ''))

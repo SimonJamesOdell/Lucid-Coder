@@ -106,6 +106,223 @@ const shouldIncludeGoalsContext = (prompt = '') => {
   return false;
 };
 
+const isTechStackQuestion = (prompt = '') => {
+  if (!prompt || typeof prompt !== 'string') {
+    return false;
+  }
+
+  const normalized = prompt.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    normalized.includes('tech stack')
+    || normalized.includes('stack')
+    || normalized.includes('framework')
+    || normalized.includes('frameworks')
+  );
+};
+
+const parseJsonObject = (raw) => {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    try {
+      return JSON5.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+};
+
+const readOptionalProjectFile = async (projectId, filePath) => {
+  try {
+    const content = await readProjectFile(projectId, filePath);
+    return typeof content === 'string' ? content : '';
+  } catch {
+    return '';
+  }
+};
+
+const collectPackageSignals = (pkg, signals) => {
+  if (!pkg || typeof pkg !== 'object') {
+    return;
+  }
+
+  const dependencies = {
+    ...(pkg.dependencies && typeof pkg.dependencies === 'object' ? pkg.dependencies : {}),
+    ...(pkg.devDependencies && typeof pkg.devDependencies === 'object' ? pkg.devDependencies : {})
+  };
+
+  const keys = Object.keys(dependencies);
+  for (const key of keys) {
+    signals.add(key.toLowerCase());
+  }
+};
+
+const pickFirstSignal = (signals, names) => {
+  for (const name of names) {
+    if (signals.has(name)) {
+      return name;
+    }
+  }
+  return null;
+};
+
+const formatFrameworkName = (name) => {
+  switch (name) {
+    case 'react':
+      return 'React';
+    case 'vue':
+      return 'Vue';
+    case '@angular/core':
+      return 'Angular';
+    case 'svelte':
+      return 'Svelte';
+    case 'next':
+      return 'Next.js';
+    case 'nuxt':
+      return 'Nuxt';
+    case 'vite':
+      return 'Vite';
+    case 'express':
+      return 'Express';
+    case 'fastify':
+      return 'Fastify';
+    case 'koa':
+      return 'Koa';
+    case '@nestjs/core':
+      return 'NestJS';
+    case 'hono':
+      return 'Hono';
+    case 'socket.io':
+      return 'Socket.IO';
+    case 'vitest':
+      return 'Vitest';
+    case 'jest':
+      return 'Jest';
+    case '@playwright/test':
+      return 'Playwright';
+    case 'cypress':
+      return 'Cypress';
+    case 'sqlite3':
+      return 'SQLite';
+    case 'pg':
+      return 'PostgreSQL';
+    case 'mysql2':
+      return 'MySQL';
+    case 'mongodb':
+      return 'MongoDB';
+    default:
+      return name;
+  }
+};
+
+const buildTechStackAnswer = ({ rootSignals, frontendSignals, backendSignals }) => {
+  const combined = new Set([...rootSignals, ...frontendSignals, ...backendSignals]);
+
+  const frontendFramework = pickFirstSignal(frontendSignals.size ? frontendSignals : combined, [
+    'react',
+    'vue',
+    '@angular/core',
+    'svelte',
+    'next',
+    'nuxt'
+  ]);
+  const frontendTooling = pickFirstSignal(frontendSignals.size ? frontendSignals : combined, ['vite', 'webpack']);
+
+  const backendFramework = pickFirstSignal(backendSignals.size ? backendSignals : combined, [
+    'express',
+    'fastify',
+    'koa',
+    '@nestjs/core',
+    'hono'
+  ]);
+
+  const testTools = [
+    pickFirstSignal(combined, ['vitest']),
+    pickFirstSignal(combined, ['jest']),
+    pickFirstSignal(combined, ['@playwright/test']),
+    pickFirstSignal(combined, ['cypress'])
+  ].filter(Boolean);
+
+  const db = pickFirstSignal(combined, ['sqlite3', 'pg', 'mysql2', 'mongodb']);
+  const realtime = pickFirstSignal(combined, ['socket.io']);
+
+  const frontendLabel = [frontendFramework, frontendTooling]
+    .filter(Boolean)
+    .map(formatFrameworkName)
+    .join(' + ');
+  const backendLabel = backendFramework ? formatFrameworkName(backendFramework) : null;
+
+  const lines = [];
+  lines.push('Based on the loaded project, the stack appears to be:');
+  lines.push(`- Frontend: ${frontendLabel || 'JavaScript SPA (framework not confidently detected)'}`);
+  lines.push(`- Backend: ${backendLabel || 'Node.js service (framework not confidently detected)'}`);
+  if (realtime) {
+    lines.push(`- Realtime: ${formatFrameworkName(realtime)}`);
+  }
+  if (db) {
+    lines.push(`- Data layer: ${formatFrameworkName(db)}`);
+  }
+  if (testTools.length > 0) {
+    lines.push(`- Testing: ${Array.from(new Set(testTools.map(formatFrameworkName))).join(', ')}`);
+  }
+
+  return lines.join('\n');
+};
+
+const answerTechStackQuestion = async ({ projectId, steps }) => {
+  const filesToRead = ['package.json', 'frontend/package.json', 'backend/package.json'];
+  const contents = new Map();
+
+  for (const filePath of filesToRead) {
+    steps.push({
+      type: 'action',
+      action: 'read_file',
+      target: filePath,
+      reason: 'Collect dependency metadata for stack detection.'
+    });
+
+    const content = await readOptionalProjectFile(projectId, filePath);
+    if (content) {
+      contents.set(filePath, content);
+      steps.push({
+        type: 'observation',
+        action: 'read_file',
+        target: filePath,
+        summary: summarizeContent(content)
+      });
+    } else {
+      steps.push({
+        type: 'observation',
+        action: 'read_file',
+        target: filePath,
+        error: 'File not found or unreadable'
+      });
+    }
+  }
+
+  const rootSignals = new Set();
+  const frontendSignals = new Set();
+  const backendSignals = new Set();
+
+  collectPackageSignals(parseJsonObject(contents.get('package.json')), rootSignals);
+  collectPackageSignals(parseJsonObject(contents.get('frontend/package.json')), frontendSignals);
+  collectPackageSignals(parseJsonObject(contents.get('backend/package.json')), backendSignals);
+
+  const hasSignals = rootSignals.size > 0 || frontendSignals.size > 0 || backendSignals.size > 0;
+  if (!hasSignals) {
+    return null;
+  }
+
+  return buildTechStackAnswer({ rootSignals, frontendSignals, backendSignals });
+};
+
 const summarizeGoalsForPrompt = (goals = []) => {
   const payload = JSON.stringify(
     goals.map((goal) => ({
@@ -262,6 +479,14 @@ export const answerProjectQuestion = async ({ projectId, prompt }) => {
 
   const steps = [];
 
+  if (isTechStackQuestion(prompt)) {
+    const fastAnswer = await answerTechStackQuestion({ projectId, steps });
+    if (fastAnswer) {
+      steps.push({ type: 'answer', content: fastAnswer });
+      return { answer: fastAnswer, steps };
+    }
+  }
+
   await preloadGoalsContext({ projectId, prompt, steps });
 
   for (let iteration = 0; iteration < MAX_AGENT_STEPS; iteration += 1) {
@@ -399,7 +624,11 @@ export const __testUtils = {
   formatStepsForPrompt,
   summarizeContent,
   coerceJsonObject,
-  shouldIncludeGoalsContext
+  shouldIncludeGoalsContext,
+  isTechStackQuestion,
+  parseJsonObject,
+  readOptionalProjectFile,
+  formatFrameworkName
 };
 
 export default {

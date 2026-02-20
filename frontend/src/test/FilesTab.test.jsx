@@ -858,7 +858,8 @@ describe('FilesTab Component', () => {
       await waitFor(() => {
         expect(mockAxios.post).toHaveBeenCalledWith(`/api/projects/${mockProject.id}/files-ops/delete`, {
           targetPath: 'src',
-          recursive: true
+          recursive: true,
+          confirm: true
         });
       });
     } finally {
@@ -1548,7 +1549,8 @@ describe('FilesTab Component', () => {
       await waitFor(() =>
         expect(mockAxios.post).toHaveBeenCalledWith(`/api/projects/${mockProject.id}/files-ops/delete`, {
           targetPath: 'src/App.jsx',
-          recursive: false
+          recursive: false,
+          confirm: true
         })
       );
 
