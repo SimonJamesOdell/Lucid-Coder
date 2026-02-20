@@ -1035,6 +1035,24 @@ describe('PreviewPanel', () => {
     locationSpy.mockRestore();
   });
 
+  test('falls back to direct URL on non-loopback hosts when proxy target is about:blank', async () => {
+    const locationSpy = vi.spyOn(window, 'location', 'get').mockReturnValue({ hostname: '192.168.0.60' });
+    getDisplayedUrlMock.mockReturnValue('about:blank');
+    getPreviewUrlMock.mockReturnValue('about:blank');
+    getOpenInNewTabUrlMock.mockReturnValue('http://localhost:5173/about');
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 112, name: 'LAN Blank Proxy' } })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('open-preview-tab'));
+
+    expect(window.open).toHaveBeenCalledWith('http://localhost:5173/about', '_blank', 'noopener,noreferrer');
+    locationSpy.mockRestore();
+  });
+
   test('opens preview url when displayed url is unavailable', async () => {
     getOpenInNewTabUrlMock.mockReturnValue('http://localhost:5173/');
     useAppState.mockReturnValue(
@@ -1828,6 +1846,34 @@ describe('PreviewPanel', () => {
     });
 
     expect(window.open).not.toHaveBeenCalled();
+  });
+
+  test('open-in-new-tab handler tolerates missing window when computing host fallback', async () => {
+    getDisplayedUrlMock.mockReturnValue('about:blank');
+    getPreviewUrlMock.mockReturnValue('about:blank');
+    getOpenInNewTabUrlMock.mockReturnValue(null);
+    useAppState.mockReturnValue(createAppState({ currentProject: { id: 204, name: 'Windowless Hostname' } }));
+
+    render(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(typeof PreviewPanel.__testHooks.handleOpenInNewTab).toBe('function');
+    });
+
+    const originalWindow = globalThis.window;
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: undefined
+    });
+
+    expect(() => {
+      PreviewPanel.__testHooks.handleOpenInNewTab?.();
+    }).not.toThrow();
+
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    });
   });
 
 });

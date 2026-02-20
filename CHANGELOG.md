@@ -1,3 +1,10 @@
+## 0.7.8 (2026-02-20)
+- Add preview element-target context end-to-end: right-click capture in the injected preview bridge, unique element-path derivation, preview menu action (`Add element to context`), per-project element-context storage, and ChatPanel context indicator + prompt injection so targeted requests like “turn this blue” can resolve to a specific element.
+- Fix a preview bridge script escaping regression that prevented custom iframe context-menu handlers from attaching (restoring LucidCoder preview right-click behavior instead of the native browser menu).
+- Improve `Open preview in new tab` behavior for LAN/non-loopback access by preferring the proxy/displayed preview URL when the app is served from network hosts, while preserving direct dev-server preference for localhost/loopback workflows.
+- Expand focused frontend coverage for the new context and preview behavior: add `assistantElementContext` utility tests, extend ChatPanel prompt/event coverage for element context, and extend PreviewPanel coverage for loopback/LAN open-tab branching.
+- Expand TestTab coverage-effects scenarios around partial-suite automation completion handling and modal/circuit-breaker edge behavior to keep strict coverage gates green.
+
 ## 0.7.7 (2026-02-19)
 - Harden preview upload path handling in the backend preview proxy (`parseUploadForwardPath`) and expose focused test hooks used to validate edge-path behavior without changing runtime routing semantics.
 - Expand `previewProxy` coverage with targeted upload-serving/parse/error-path tests (including malformed encoding, root uploads guards, missing logger branches, and headers-sent serving), closing remaining line-level gaps.

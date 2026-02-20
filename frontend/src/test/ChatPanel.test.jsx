@@ -2172,6 +2172,7 @@ describe('ChatPanel', () => {
 
     it('ignores assistant context events for different projects', async () => {
       setAssistantAssetContextPaths(123, ['uploads/current.png']);
+      setAssistantElementContextPath(123, 'main > article:nth-of-type(1)');
 
       render(<ChatPanel width={320} side="left" />);
 
@@ -2182,8 +2183,16 @@ describe('ChatPanel', () => {
         }
       }));
 
+      window.dispatchEvent(new CustomEvent('lucidcoder:assistant-element-context-changed', {
+        detail: {
+          projectId: 999,
+          path: 'main > article:nth-of-type(2)'
+        }
+      }));
+
       await waitFor(() => {
         expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent('Included in context: uploads/current.png');
+        expect(screen.getByTestId('chat-context-indicator')).toHaveTextContent('Element: main > article:nth-of-type(1)');
       });
     });
 
@@ -2256,6 +2265,13 @@ describe('ChatPanel', () => {
         detail: {
           projectId: 123,
           paths: ['uploads/other.png']
+        }
+      }));
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:assistant-element-context-changed', {
+        detail: {
+          projectId: 123,
+          path: 'main > section:nth-of-type(2)'
         }
       }));
 
