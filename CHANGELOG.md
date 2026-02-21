@@ -1,6 +1,9 @@
 ## 0.7.9 (2026-02-21)
-- Close coverage gaps: add tests for `AssetsTab`, `ChatPanel`, `FilesTab`, `reflection`, `agentOrchestrator`, `promptHeuristics`, and `questionToolAgent`.
-- Bump version metadata to `0.7.9` across root, frontend, backend manifests, lockfiles, and shared version export.
+- Close coverage gaps: add tests for `AssetsTab`, `ChatPanel`, `FilesTab`, `reflection` utilities, `agentOrchestrator`, `promptHeuristics`, and `questionToolAgent` (frontend and backend unit/integration suites).
+- Frontend: refine `AssetsTab` (assistant asset-context persistence, image zoom/pan, upload name sanitization, rename/optimize modal flows, and live asset-update handling), `ChatPanel` (improved thinking/automation topic indicator, better suite-selection heuristics for reruns, clarification/tracking fixes), and `FilesTab` (rendering and repository-path handling fixes). Tests added to cover the UI edge branches.
+- Backend: tighten goal orchestration in `agentOrchestrator` (metadata merging, clarification task creation, planning snapshot helpers) and harden `promptHeuristics` (more robust `extractLatestRequest`, `isStyleOnlyPrompt`, `extractSelectedProjectAssets`, and color extraction). Targeted unit tests close remaining edge branches.
+
+
 
 ## 0.7.8 (2026-02-20)
 - Add preview element-target context end-to-end: right-click capture in the injected preview bridge, unique element-path derivation, preview menu action (`Add element to context`), per-project element-context storage, and ChatPanel context indicator + prompt injection so targeted requests like “turn this blue” can resolve to a specific element.
