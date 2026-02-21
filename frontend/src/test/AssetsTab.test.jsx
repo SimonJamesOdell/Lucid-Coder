@@ -59,7 +59,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAxios.get.mockReset();
   mockAxios.post.mockReset();
-  window.confirm = vi.fn(() => true);
   window.alert = vi.fn();
   clearAssistantAssetContextPaths(project.id);
 });
@@ -928,6 +927,7 @@ describe('AssetsTab', () => {
     const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
     const deleteButton = imageCard.querySelector('.assets-tab__action--delete');
     await user.click(deleteButton);
+    await user.click(await screen.findByTestId('asset-delete-confirm'));
 
     await waitFor(() => {
       expect(window.alert).toHaveBeenCalledWith('Delete denied');
@@ -945,6 +945,7 @@ describe('AssetsTab', () => {
     const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
     const deleteButton = imageCard.querySelector('.assets-tab__action--delete');
     await user.click(deleteButton);
+    await user.click(await screen.findByTestId('asset-delete-confirm'));
 
     await waitFor(() => {
       expect(window.alert).toHaveBeenCalledWith('Failed to delete asset');
@@ -952,6 +953,7 @@ describe('AssetsTab', () => {
 
     mockAxios.post.mockRejectedValueOnce({});
     await user.click(deleteButton);
+    await user.click(await screen.findByTestId('asset-delete-confirm'));
 
     await waitFor(() => {
       expect(window.alert).toHaveBeenCalledWith('Failed to delete asset');
@@ -969,6 +971,7 @@ describe('AssetsTab', () => {
     const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
     const deleteButton = imageCard.querySelector('.assets-tab__action--delete');
     await user.click(deleteButton);
+    await user.click(await screen.findByTestId('asset-delete-confirm'));
 
     await waitFor(() => {
       expect(window.alert).toHaveBeenCalledWith('Delete hard failure');
@@ -992,6 +995,7 @@ describe('AssetsTab', () => {
     const imageCard = cards.find((card) => within(card).queryByText('uploads/image.png'));
     const deleteButton = imageCard.querySelector('.assets-tab__action--delete');
     await user.click(deleteButton);
+    await user.click(await screen.findByTestId('asset-delete-confirm'));
 
     await waitFor(() => {
       expect(window.alert).toHaveBeenCalledWith('Delete rejected from backend');
@@ -1130,6 +1134,7 @@ describe('AssetsTab', () => {
 
     const hooks = AssetsTab.__testHooks?.handlers;
     expect(typeof hooks?.deleteAsset).toBe('function');
+    expect(typeof hooks?.confirmDeleteAsset).toBe('function');
     expect(typeof hooks?.applyAssetRename).toBe('function');
     expect(typeof hooks?.renameAsset).toBe('function');
     expect(typeof hooks?.openOptimizeModal).toBe('function');
@@ -1139,6 +1144,7 @@ describe('AssetsTab', () => {
     expect(typeof hooks?.handleManualOptimize).toBe('function');
 
     await hooks.deleteAsset('');
+    await hooks.confirmDeleteAsset();
     await hooks.applyAssetRename({ fromPath: '', toPath: '' });
     hooks.renameAsset('');
     await hooks.submitRenameModal();
@@ -1147,6 +1153,50 @@ describe('AssetsTab', () => {
     hooks.handleManualOptimize({ quality: 70, scalePercent: 100, format: 'auto' });
 
     expect(mockAxios.post).not.toHaveBeenCalled();
+  });
+
+  test('delete modal close control closes when idle and stays open while deleting', async () => {
+    const user = userEvent.setup();
+    let resolveDelete;
+    const deletePromise = new Promise((resolve) => {
+      resolveDelete = resolve;
+    });
+
+    mockAxios.get
+      .mockResolvedValueOnce(assetsResponse(sampleAssets))
+      .mockResolvedValueOnce(assetsResponse(sampleAssets.slice(1)));
+    mockAxios.post.mockReturnValueOnce(deletePromise);
+
+    render(<AssetsTab project={project} />);
+
+    const cards = await screen.findAllByTestId('asset-card');
+    const deleteButton = cards[0].querySelector('.assets-tab__action--delete');
+
+    await user.click(deleteButton);
+    expect(await screen.findByTestId('asset-delete-modal')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('asset-delete-modal-close'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('asset-delete-modal')).not.toBeInTheDocument();
+    });
+
+    await user.click(deleteButton);
+    expect(await screen.findByTestId('asset-delete-modal')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('asset-delete-confirm'));
+    const confirmButton = screen.getByTestId('asset-delete-confirm');
+    await waitFor(() => {
+      expect(confirmButton).toBeDisabled();
+    });
+
+    await user.click(screen.getByTestId('asset-delete-modal-close'));
+    expect(screen.getByTestId('asset-delete-modal')).toBeInTheDocument();
+
+    resolveDelete({ data: { success: true } });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('asset-delete-modal')).not.toBeInTheDocument();
+    });
   });
 
   test('renaming selected asset updates selected and optimize modal paths', async () => {
@@ -1208,20 +1258,22 @@ describe('AssetsTab', () => {
     const deleteButton = imageCard.querySelector('.assets-tab__action--delete');
 
     await user.click(deleteButton);
+    expect(await screen.findByTestId('asset-delete-modal')).toBeInTheDocument();
+    await user.click(screen.getByTestId('asset-delete-confirm'));
 
     await waitFor(() => {
       expect(mockAxios.post).toHaveBeenCalledWith(`/api/projects/${project.id}/files-ops/delete`, {
         targetPath: 'uploads/image.png',
-        recursive: false
+        recursive: false,
+        confirm: true
       });
     });
 
     expect(dispatchSpy).toHaveBeenCalled();
   });
 
-  test('does not delete when user cancels confirmation', async () => {
+  test('does not delete when user cancels delete modal', async () => {
     const user = userEvent.setup();
-    window.confirm = vi.fn(() => false);
 
     mockAxios.get.mockResolvedValueOnce(assetsResponse(sampleAssets));
 
@@ -1230,6 +1282,12 @@ describe('AssetsTab', () => {
     const cards = await screen.findAllByTestId('asset-card');
     const deleteButton = cards[0].querySelector('.assets-tab__action--delete');
     await user.click(deleteButton);
+    expect(await screen.findByTestId('asset-delete-modal')).toBeInTheDocument();
+    await user.click(screen.getByTestId('asset-delete-cancel'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('asset-delete-modal')).not.toBeInTheDocument();
+    });
 
     expect(mockAxios.post).not.toHaveBeenCalled();
   });

@@ -288,7 +288,7 @@
 .chat-scroll-bottom {
   position: absolute;
   right: 1rem;
-  bottom: 218px;
+  bottom: 188px;
   padding: 0.5rem;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -302,6 +302,10 @@
   justify-content: center;
   width: 32px;
   height: 32px;
+}
+
+.chat-scroll-bottom--with-context {
+  bottom: 218px;
 }
 
 .chat-scroll-bottom:hover {

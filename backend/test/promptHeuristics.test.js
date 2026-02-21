@@ -77,6 +77,36 @@ describe('promptHeuristics', () => {
     expect(isStyleOnlyPrompt(prompt)).toBe(true);
   });
 
+  it('prefers original request over clarification transcript user answers', () => {
+    const prompt = [
+      'Original request: make the background blue',
+      'Clarification questions:',
+      '- Should this apply to the entire page?',
+      'User answer: Q: Should this apply to the entire page? A: the entire page'
+    ].join('\n');
+
+    expect(extractLatestRequest(prompt)).toBe('make the background blue');
+  });
+
+  it('returns transcript-style user answers when no original request exists', () => {
+    const prompt = [
+      'Clarification questions:',
+      'User answer: Q: Should this apply globally? A: yes, apply globally'
+    ].join('\n');
+
+    expect(extractLatestRequest(prompt)).toBe('Q: Should this apply globally? A: yes, apply globally');
+  });
+
+  it('falls back to raw prompt when user answer value is blank', () => {
+    const prompt = [
+      'Conversation context:',
+      'User answer:',
+      'Assistant: waiting for details'
+    ].join('\n');
+
+    expect(extractLatestRequest(prompt)).toBe(prompt);
+  });
+
   it('unwraps nested request labels', () => {
     const prompt = 'Original request: Current request: Use the image as the site background';
     expect(extractLatestRequest(prompt)).toBe('Use the image as the site background');

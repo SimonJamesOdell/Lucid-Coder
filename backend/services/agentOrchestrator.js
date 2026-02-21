@@ -359,6 +359,10 @@ const createGoalTreeWithChildren = async ({
       title: parentTitle,
       extraClarifyingQuestions: parentExtraClarifyingQuestions
     })).goal;
+  const parentMetadata = parent?.metadata && typeof parent.metadata === 'object'
+    ? parent.metadata
+    : null;
+  const inheritStyleOnly = parentMetadata?.styleOnly === true;
 
   const allGoals = await listStoredGoals(projectId);
   const existingChildren = allGoals.filter((goal) =>
@@ -381,7 +385,19 @@ const createGoalTreeWithChildren = async ({
   })();
 
   const createNode = async (plan, parentId) => {
-    const metadataOverrides = metadataMap.get(normalizePromptKey(plan.prompt)) || null;
+    const planMetadata = metadataMap.get(normalizePromptKey(plan.prompt)) || null;
+    const metadataOverrides = (() => {
+      if (!inheritStyleOnly) {
+        return planMetadata;
+      }
+      if (!planMetadata || typeof planMetadata !== 'object') {
+        return { styleOnly: true };
+      }
+      if (planMetadata.styleOnly === false) {
+        return planMetadata;
+      }
+      return { ...planMetadata, styleOnly: true };
+    })();
     const childGoal = await createChildGoal({
       projectId,
       parentGoalId: parentId,
@@ -448,6 +464,8 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
   const plannerPromptWithAssets = selectedProjectAssets.length > 0
     ? `${plannerPrompt}\n\nSelected project assets:\n${selectedProjectAssets.map((assetPath) => `- ${assetPath}`).join('\n')}`
     : plannerPrompt;
+  const plannerMetadata = buildGoalMetadataFromPrompt({ prompt: plannerPrompt });
+  const isStyleOnlyRequest = plannerMetadata?.styleOnly === true;
 
   if (goalId != null) {
     const parent = await getStoredGoal(goalId);
@@ -485,6 +503,9 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
         'Do NOT restate the user prompt verbatim. ' +
         'Prefer generic, implementation-oriented steps that would apply to any web app unless project context is essential. '
       : '';
+    const styleOnlyInstruction = isStyleOnlyRequest
+      ? 'This request is style-only. Do NOT include child goals that add, modify, or verify automated tests; focus only on implementation edits. '
+      : '';
 
     const systemMessage = {
       role: 'system',
@@ -517,6 +538,7 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
           ? `Project snapshot:\n${projectSnapshot}\n` +
             'Use the snapshot to map generic goals to concrete files/components only when it clearly improves accuracy. '
           : '') +
+        styleOnlyInstruction +
         strictInstructions +
         ' Respond with JSON shaped like ' +
         '{ "parentTitle": "Short summary (<=10 words)", ' +

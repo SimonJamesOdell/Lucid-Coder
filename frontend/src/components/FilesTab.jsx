@@ -687,7 +687,8 @@ const FilesTab = ({
 
         const response = await axios.post(`/api/projects/${projectId}/files-ops/delete`, {
           targetPath: target.path,
-          recursive: target.type === 'folder'
+          recursive: target.type === 'folder',
+          confirm: true
         });
 
         if (!response.data?.success) {

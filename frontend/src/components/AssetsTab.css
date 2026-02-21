@@ -381,3 +381,60 @@
   opacity: 0.65;
   cursor: not-allowed;
 }
+
+.assets-tab__delete-modal-panel {
+  --settings-modal-panel-width: 520px;
+}
+
+.assets-tab__delete-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.assets-tab__delete-modal-copy {
+  margin: 0;
+  color: var(--text-primary, #fff);
+  font-size: 0.95rem;
+}
+
+.assets-tab__delete-modal-path {
+  margin: 0;
+  color: var(--text-secondary, #b3b3b3);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.45rem;
+  background: var(--background-secondary, #1a1a1a);
+  padding: 0.55rem 0.65rem;
+  word-break: break-all;
+}
+
+.assets-tab__delete-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.assets-tab__delete-modal-cancel,
+.assets-tab__delete-modal-confirm {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+.assets-tab__delete-modal-cancel {
+  background: transparent;
+  color: var(--text-secondary, #b3b3b3);
+}
+
+.assets-tab__delete-modal-confirm {
+  background: rgba(255, 107, 129, 0.16);
+  border-color: var(--error-color, #ff6b81);
+  color: var(--error-color, #ff6b81);
+}
+
+.assets-tab__delete-modal-cancel:disabled,
+.assets-tab__delete-modal-confirm:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}

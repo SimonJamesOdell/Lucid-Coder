@@ -167,6 +167,81 @@ describe('questionToolAgent', () => {
     expect(result.answer).toMatch(/react/i);
   });
 
+  it('answers tech stack questions via fast path without planner loop', async () => {
+    projectTools.readProjectFile.mockImplementation(async (_projectId, filePath) => {
+      if (filePath === 'package.json') {
+        return JSON.stringify({ devDependencies: { '@playwright/test': '^1.0.0' } });
+      }
+      if (filePath === 'frontend/package.json') {
+        return JSON.stringify({ dependencies: { react: '^18.2.0', vite: '^5.0.0' }, devDependencies: { vitest: '^1.0.0' } });
+      }
+      if (filePath === 'backend/package.json') {
+        return JSON.stringify({ dependencies: { express: '^4.0.0', sqlite3: '^5.0.0', 'socket.io': '^4.0.0' } });
+      }
+      throw new Error('missing');
+    });
+
+    const result = await answerProjectQuestion({
+      projectId: 5,
+      prompt: 'what tech stack is this project using?'
+    });
+
+    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(result.answer).toMatch(/frontend:\s+react \+ vite/i);
+    expect(result.answer).toMatch(/backend:\s+express/i);
+    expect(result.answer).toMatch(/testing:\s+vitest, playwright/i);
+    expect(result.answer).toMatch(/data layer:\s+sqlite/i);
+    expect(result.answer).toMatch(/realtime:\s+socket\.io/i);
+  });
+
+  it('falls back to combined signals for frontend detection when frontend package is missing', async () => {
+    projectTools.readProjectFile.mockImplementation(async (_projectId, filePath) => {
+      if (filePath === 'package.json') {
+        return JSON.stringify({ dependencies: { react: '^18.2.0', vite: '^5.0.0', express: '^4.0.0' } });
+      }
+      if (filePath === 'frontend/package.json') {
+        throw new Error('missing frontend package');
+      }
+      if (filePath === 'backend/package.json') {
+        return JSON.stringify({ dependencies: { express: '^4.0.0' } });
+      }
+      throw new Error('missing');
+    });
+
+    const result = await answerProjectQuestion({
+      projectId: 5,
+      prompt: 'What is the tech stack?'
+    });
+
+    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(result.answer).toMatch(/frontend:\s+react \+ vite/i);
+    expect(result.answer).toMatch(/backend:\s+express/i);
+  });
+
+  it('uses generic frontend fallback label when no frontend framework signals are detected', async () => {
+    projectTools.readProjectFile.mockImplementation(async (_projectId, filePath) => {
+      if (filePath === 'package.json') {
+        return JSON.stringify({ dependencies: { express: '^4.0.0' } });
+      }
+      if (filePath === 'frontend/package.json') {
+        throw new Error('missing frontend package');
+      }
+      if (filePath === 'backend/package.json') {
+        return JSON.stringify({ dependencies: { express: '^4.0.0' } });
+      }
+      throw new Error('missing');
+    });
+
+    const result = await answerProjectQuestion({
+      projectId: 5,
+      prompt: 'What is the stack here?'
+    });
+
+    expect(llmClient.generateResponse).not.toHaveBeenCalled();
+    expect(result.answer).toMatch(/frontend:\s+javascript spa \(framework not confidently detected\)/i);
+    expect(result.answer).toMatch(/backend:\s+express/i);
+  });
+
   it('throws when the loop hits the iteration limit without an answer', async () => {
     mockSteps([
       { action: 'read_file', path: 'README.md', reason: 'Need info' },
@@ -739,7 +814,16 @@ describe('questionToolAgent', () => {
 });
 
 describe('questionToolAgent helpers', () => {
-  const { formatStepsForPrompt, summarizeContent, coerceJsonObject, shouldIncludeGoalsContext } = __testUtils;
+  const {
+    formatStepsForPrompt,
+    summarizeContent,
+    coerceJsonObject,
+    shouldIncludeGoalsContext,
+    isTechStackQuestion,
+    parseJsonObject,
+    readOptionalProjectFile,
+    formatFrameworkName
+  } = __testUtils;
 
   it('formats action, observation, answer, and fallback entries', () => {
     const steps = [
@@ -807,5 +891,93 @@ describe('questionToolAgent helpers', () => {
     expect(shouldIncludeGoalsContext('   ')).toBe(false);
     expect(shouldIncludeGoalsContext(123)).toBe(false);
     expect(shouldIncludeGoalsContext('What frameworks are used?')).toBe(false);
+  });
+
+  it('handles tech-stack classifier guard clauses and positive matches', () => {
+    expect(isTechStackQuestion()).toBe(false);
+    expect(isTechStackQuestion(42)).toBe(false);
+    expect(isTechStackQuestion('   ')).toBe(false);
+    expect(isTechStackQuestion('What frameworks does this use?')).toBe(true);
+    expect(isTechStackQuestion('show me the tech stack')).toBe(true);
+  });
+
+  it('parses JSON and JSON5 payloads, and rejects non-string inputs', () => {
+    expect(parseJsonObject(undefined)).toBeNull();
+    expect(parseJsonObject('')).toBeNull();
+    expect(parseJsonObject('{"action":"answer"}')).toEqual({ action: 'answer' });
+    expect(parseJsonObject('{action:"answer"}')).toEqual({ action: 'answer' });
+  });
+
+  it('returns empty optional file content for non-string values and read errors', async () => {
+    projectTools.readProjectFile.mockResolvedValueOnce({ content: 'not string' });
+    projectTools.readProjectFile.mockRejectedValueOnce(new Error('read failed'));
+
+    const nonString = await readOptionalProjectFile(1, 'package.json');
+    const failedRead = await readOptionalProjectFile(1, 'frontend/package.json');
+
+    expect(nonString).toBe('');
+    expect(failedRead).toBe('');
+  });
+
+  it('formats additional framework labels and unknown fallbacks', () => {
+    expect(formatFrameworkName('vue')).toBe('Vue');
+    expect(formatFrameworkName('@angular/core')).toBe('Angular');
+    expect(formatFrameworkName('svelte')).toBe('Svelte');
+    expect(formatFrameworkName('next')).toBe('Next.js');
+    expect(formatFrameworkName('nuxt')).toBe('Nuxt');
+    expect(formatFrameworkName('fastify')).toBe('Fastify');
+    expect(formatFrameworkName('koa')).toBe('Koa');
+    expect(formatFrameworkName('@nestjs/core')).toBe('NestJS');
+    expect(formatFrameworkName('hono')).toBe('Hono');
+    expect(formatFrameworkName('jest')).toBe('Jest');
+    expect(formatFrameworkName('cypress')).toBe('Cypress');
+    expect(formatFrameworkName('pg')).toBe('PostgreSQL');
+    expect(formatFrameworkName('mysql2')).toBe('MySQL');
+    expect(formatFrameworkName('mongodb')).toBe('MongoDB');
+    expect(formatFrameworkName('custom-lib')).toBe('custom-lib');
+  });
+});
+
+describe('questionToolAgent tech-stack fallback observations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('records unreadable package files while still producing a tech stack answer when signals exist', async () => {
+    projectTools.readProjectFile.mockImplementation(async (_projectId, filePath) => {
+      if (filePath === 'package.json') {
+        throw new Error('missing root package');
+      }
+      if (filePath === 'frontend/package.json') {
+        return JSON.stringify({ dependencies: { vue: '^3.0.0', vite: '^5.0.0' } });
+      }
+      if (filePath === 'backend/package.json') {
+        return null;
+      }
+      return '';
+    });
+
+    const result = await answerProjectQuestion({
+      projectId: 77,
+      prompt: 'What is the tech stack?'
+    });
+
+    expect(result.answer).toMatch(/frontend:\s+vue \+ vite/i);
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'observation',
+          action: 'read_file',
+          target: 'package.json',
+          error: 'File not found or unreadable'
+        }),
+        expect.objectContaining({
+          type: 'observation',
+          action: 'read_file',
+          target: 'backend/package.json',
+          error: 'File not found or unreadable'
+        })
+      ])
+    );
   });
 });

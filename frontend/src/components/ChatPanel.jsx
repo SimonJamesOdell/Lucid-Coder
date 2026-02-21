@@ -181,6 +181,81 @@ const formatAutomationRunMessage = (phase, suites, hasBackend) => {
   return isRerun ? 'Re-running frontend tests…' : 'Starting frontend tests…';
 };
 
+const ChatMessagesPane = React.memo(({
+  messages,
+  isSending,
+  thinkingAutomationTopic,
+  thinkingTopic,
+  messagesContainerRef,
+  handleMessagesScroll,
+  showScrollToBottom,
+  scrollMessagesToBottom,
+  hasContextAttachment
+}) => {
+  return (
+    <>
+      <div
+        className="chat-messages"
+        data-testid="chat-messages"
+        ref={messagesContainerRef}
+        onScroll={handleMessagesScroll}
+      >
+        {messages.length === 0 ? (
+          <div className="chat-welcome">
+            <p>Welcome! Ask me anything about your project.</p>
+            <p style={{ opacity: 0.8, fontSize: 12, marginTop: 6 }}>Tip: type /help for commands.</p>
+          </div>
+        ) : (
+          messages.map(message => (
+            <div
+              key={message.id}
+              className={`chat-message ${message.sender} ${message.variant ? `chat-message--${message.variant}` : ''}`}
+            >
+              <div className="chat-message-row">
+                <div className={`message-content ${message.variant === 'status' ? 'message-content--status' : ''}`}>
+                  {message.sender === 'assistant' ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {message.text}
+                    </ReactMarkdown>
+                  ) : (
+                    message.text
+                  )}
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+        {isSending ? (
+          <div className="chat-typing" data-testid="chat-typing">
+            {thinkingAutomationTopic || thinkingTopic ? (
+              <span className="chat-typing__topic" data-testid="chat-typing-topic">
+                Thinking about: {thinkingAutomationTopic || thinkingTopic}
+              </span>
+            ) : null}
+            <span className="chat-typing__dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        ) : null}
+      </div>
+      {showScrollToBottom ? (
+        <button
+          type="button"
+          className={`chat-scroll-bottom${hasContextAttachment ? ' chat-scroll-bottom--with-context' : ''}`}
+          onClick={scrollMessagesToBottom}
+          aria-label="Scroll to latest message"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 12L3 7L4.4 5.6L8 9.2L11.6 5.6L13 7L8 12Z" fill="currentColor"/>
+          </svg>
+        </button>
+      ) : null}
+    </>
+  );
+});
+
 const ChatPanel = ({
   width = 320,
   side = 'left',
@@ -735,6 +810,7 @@ const ChatPanel = ({
   const [selectedAssistantAssetPaths, setSelectedAssistantAssetPaths] = useState([]);
   const selectedAssistantAssetPath = selectedAssistantAssetPaths[0] || '';
   const [selectedAssistantElementPath, setSelectedAssistantElementPath] = useState('');
+  const hasContextAttachment = Boolean(selectedAssistantAssetPath || selectedAssistantElementPath);
 
   useEffect(() => {
     if (!currentProject?.id) {
@@ -1257,10 +1333,11 @@ const ChatPanel = ({
               const originalRequest = typeof pendingClarification.prompt === 'string'
                 ? pendingClarification.prompt.trim()
                 : '';
-              const originalRequestLine = originalRequest.startsWith('Current request:')
-                ? originalRequest
-                : `Current request: ${originalRequest}`;
-              return `Original request: ${originalRequestLine}`;
+              const normalizedOriginalRequest = originalRequest.replace(/^current request\s*:\s*/i, '').trim();
+              return [
+                `Original request: ${normalizedOriginalRequest}`,
+                `Current request: ${normalizedOriginalRequest}`
+              ].join('\n');
             })(),
             'Clarification questions:',
             ...pendingClarification.questions.map((question) => `- ${question}`),
@@ -1768,66 +1845,17 @@ const ChatPanel = ({
         </div>
       </div>
       
-      <div
-        className="chat-messages"
-        data-testid="chat-messages"
-        ref={messagesContainerRef}
-        onScroll={handleMessagesScroll}
-      >
-        {messages.length === 0 ? (
-          <div className="chat-welcome">
-            <p>Welcome! Ask me anything about your project.</p>
-            <p style={{ opacity: 0.8, fontSize: 12, marginTop: 6 }}>Tip: type /help for commands.</p>
-          </div>
-        ) : (
-          messages.map(message => (
-            <div
-              key={message.id}
-              className={`chat-message ${message.sender} ${message.variant ? `chat-message--${message.variant}` : ''}`}
-            >
-              <div className="chat-message-row">
-                <div className={`message-content ${message.variant === 'status' ? 'message-content--status' : ''}`}>
-                  {message.sender === 'assistant' ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {message.text}
-                    </ReactMarkdown>
-                  ) : (
-                    message.text
-                  )}
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-        {isSending ? (
-          <div className="chat-typing" data-testid="chat-typing">
-            {/* c8 ignore start */}
-            {thinkingAutomationTopic || thinkingTopic ? (
-              <span className="chat-typing__topic" data-testid="chat-typing-topic">
-                Thinking about: {thinkingAutomationTopic || thinkingTopic}
-              </span>
-            ) : null}
-            {/* c8 ignore stop */}
-            <span className="chat-typing__dots" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </span>
-          </div>
-        ) : null}
-      </div>
-      {showScrollToBottom ? (
-        <button
-          type="button"
-          className="chat-scroll-bottom"
-          onClick={scrollMessagesToBottom}
-          aria-label="Scroll to latest message"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M8 12L3 7L4.4 5.6L8 9.2L11.6 5.6L13 7L8 12Z" fill="currentColor"/>
-          </svg>
-        </button>
-      ) : null}
+      <ChatMessagesPane
+        messages={messages}
+        isSending={isSending}
+        thinkingAutomationTopic={thinkingAutomationTopic}
+        thinkingTopic={thinkingTopic}
+        messagesContainerRef={messagesContainerRef}
+        handleMessagesScroll={handleMessagesScroll}
+        showScrollToBottom={showScrollToBottom}
+        scrollMessagesToBottom={scrollMessagesToBottom}
+        hasContextAttachment={hasContextAttachment}
+      />
 
       {autopilotSession ? (
         <div className="chat-inspector" data-testid="chat-inspector">

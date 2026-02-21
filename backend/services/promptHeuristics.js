@@ -50,6 +50,14 @@ export const extractLatestRequest = (prompt = '') => {
   const raw = String(prompt || '');
   if (!raw) return raw;
 
+  const looksLikeClarificationTranscript = (value = '') => {
+    const text = String(value || '').trim();
+    if (!text) {
+      return false;
+    }
+    return /^q\s*:/i.test(text) || /^a\s*:/i.test(text) || /\n\s*q\s*:/i.test(text) || /\n\s*a\s*:/i.test(text);
+  };
+
   const unwrapNestedLabel = (value, depth = 0) => {
     const trimmed = value.trim();
     if (!trimmed || depth >= 3) return trimmed;
@@ -73,10 +81,22 @@ export const extractLatestRequest = (prompt = '') => {
   if (current) return unwrapNestedLabel(current);
 
   const answer = findValueAfterPrefix('User answer:');
-  if (answer) return unwrapNestedLabel(answer);
+  const normalizedAnswer = answer ? unwrapNestedLabel(answer) : '';
+  const answerLooksLikeClarification = looksLikeClarificationTranscript(normalizedAnswer);
 
   const original = findValueAfterPrefix('Original request:');
-  if (original) return unwrapNestedLabel(original);
+  const normalizedOriginal = original ? unwrapNestedLabel(original) : '';
+  if (normalizedOriginal) {
+    return normalizedOriginal;
+  }
+
+  if (normalizedAnswer && !answerLooksLikeClarification) {
+    return normalizedAnswer;
+  }
+
+  if (normalizedAnswer) {
+    return normalizedAnswer;
+  }
 
   return unwrapNestedLabel(raw);
 };
