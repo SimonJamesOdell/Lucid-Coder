@@ -107,6 +107,30 @@ const extractJsonObject = (raw) => {
   }
 };
 
+const normalizeClassificationResult = (parsed) => {
+  if (!parsed || typeof parsed !== 'object') {
+    return parsed;
+  }
+
+  if (parsed.kind === 'question' || parsed.kind === 'small-change' || parsed.kind === 'feature') {
+    return parsed;
+  }
+
+  if (parsed.action === 'answer' && typeof parsed.answer === 'string') {
+    const nested = extractJsonObject(parsed.answer);
+    if (nested && (nested.kind === 'question' || nested.kind === 'small-change' || nested.kind === 'feature')) {
+      return nested;
+    }
+
+    const normalizedText = parsed.answer.trim().toLowerCase();
+    if (normalizedText === 'question' || normalizedText === 'small-change' || normalizedText === 'feature') {
+      return { kind: normalizedText };
+    }
+  }
+
+  return parsed;
+};
+
 export const classifyAgentRequest = async ({ projectId, prompt }) => {
   if (!projectId) {
     throw new Error('projectId is required');
@@ -135,6 +159,7 @@ export const classifyAgentRequest = async ({ projectId, prompt }) => {
     max_tokens: 400,
     temperature: 0,
     __lucidcoderDisableToolBridge: true,
+    __lucidcoderForceMinimalToolBridge: true,
     __lucidcoderPhase: 'classification',
     __lucidcoderRequestType: 'classify'
   };
@@ -142,6 +167,7 @@ export const classifyAgentRequest = async ({ projectId, prompt }) => {
   const raw = await llmClient.generateResponse([systemMessage, userMessage], callOptions);
 
   let parsed = extractJsonObject(raw);
+  parsed = normalizeClassificationResult(parsed);
   if (!parsed) {
     // One repair attempt: ask the model to re-emit *only* valid JSON.
     const repairSystem = {
@@ -163,6 +189,7 @@ export const classifyAgentRequest = async ({ projectId, prompt }) => {
       { ...callOptions, __lucidcoderRequestType: 'classify_repair' }
     );
     parsed = extractJsonObject(repaired);
+    parsed = normalizeClassificationResult(parsed);
   }
 
   if (!parsed) {
@@ -176,7 +203,7 @@ export const classifyAgentRequest = async ({ projectId, prompt }) => {
   return parsed;
 };
 
-export const handleAgentRequest = async ({ projectId, prompt }) => {
+export const handleAgentRequest = async ({ projectId, prompt, maxSteps }) => {
   if (!projectId) {
     throw new Error('projectId is required');
   }
@@ -189,7 +216,7 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
 
   const safeAnswerProjectQuestion = async (meta = undefined) => {
     try {
-      const { answer, steps } = await answerProjectQuestion({ projectId, prompt });
+      const { answer, steps } = await answerProjectQuestion({ projectId, prompt, maxSteps });
       return {
         kind: 'question',
         answer: answer || null,
@@ -219,8 +246,53 @@ export const handleAgentRequest = async ({ projectId, prompt }) => {
       classification = await classifyAgentRequest({ projectId, prompt });
     }
   } catch (error) {
-    console.warn('[Agent] Classification failed, falling back to question agent:', error?.message || error);
+    console.warn('[Agent] Classification failed, attempting planner fallback:', error?.message || error);
     const classificationError = error?.message || 'Unknown error';
+    let plannerFallbackError;
+
+    try {
+      const planned = await planGoalFromPrompt({ projectId, prompt });
+      if (planned && typeof planned === 'object') {
+        return {
+          kind: 'feature',
+          parent: planned.parent,
+          children: planned.children,
+          message: 'Goals created using planner fallback after classification failed.',
+          meta: {
+            classificationError
+          }
+        };
+      }
+    } catch (planningFallbackError) {
+      plannerFallbackError = planningFallbackError?.message || planningFallbackError || 'Unknown error';
+      console.warn(
+        '[Agent] Planner fallback after classification failure failed:',
+        planningFallbackError?.message || planningFallbackError
+      );
+    }
+
+    try {
+      const simplifiedPlan = await planGoalFromPromptFallback({ projectId, prompt });
+      if (simplifiedPlan && typeof simplifiedPlan === 'object') {
+        return {
+          kind: 'feature',
+          parent: simplifiedPlan.parent,
+          children: simplifiedPlan.children,
+          message: 'Goals planned using a simplified fallback after classification failed.',
+          meta: {
+            classificationError,
+            ...(plannerFallbackError ? { plannerFallbackError } : {})
+          }
+        };
+      }
+    } catch (simplifiedFallbackError) {
+      console.warn(
+        '[Agent] Simplified planner fallback after classification failure failed:',
+        simplifiedFallbackError?.message || simplifiedFallbackError
+      );
+    }
+
+    console.warn('[Agent] Falling back to question agent after classification failure');
     const questionResult = await safeAnswerProjectQuestion({ classificationError });
     const meta = {
       ...questionResult.meta,
@@ -297,7 +369,8 @@ export const __testing = {
   normalizeJsonLikeText,
   stripCodeFences,
   extractFirstJsonObjectSubstring,
-  extractJsonObject
+  extractJsonObject,
+  normalizeClassificationResult
 };
 
 export default {

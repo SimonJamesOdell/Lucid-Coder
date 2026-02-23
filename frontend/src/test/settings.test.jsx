@@ -439,10 +439,10 @@ describe('settings git helpers', () => {
 
     expect(setTestingSettings).toHaveBeenCalledTimes(1);
     const updater = setTestingSettings.mock.calls[0][0];
-    expect(updater({ coverageTarget: 100 })).toEqual({ coverageTarget: 80 });
+    expect(updater({ coverageTarget: 100, maxSteps: 8 })).toEqual({ coverageTarget: 80, maxSteps: 8 });
   });
 
-  test('updateTestingSettings sends payload and updates state', async () => {
+  test('updateTestingSettings sends payload and updates state with maxSteps', async () => {
     let capturedBody;
     const trackedFetch = (url, options) => {
       capturedBody = JSON.parse(options.body);
@@ -455,14 +455,16 @@ describe('settings git helpers', () => {
 
     const result = await updateTestingSettings({
       trackedFetch,
-      testingSettings: { coverageTarget: 100 },
+      testingSettings: { coverageTarget: 100, maxSteps: 8 },
       setTestingSettings,
-      updates: { coverageTarget: 60 }
+      updates: { coverageTarget: 60, maxSteps: 12 }
     });
 
     expect(capturedBody).toEqual({ coverageTarget: 60 });
-    expect(result).toEqual({ coverageTarget: 60 });
+    expect(result).toEqual({ coverageTarget: 60, maxSteps: 12 });
     expect(setTestingSettings).toHaveBeenCalledTimes(1);
+    const updater = setTestingSettings.mock.calls[0][0];
+    expect(updater({ coverageTarget: 100, maxSteps: 8 })).toEqual({ coverageTarget: 60, maxSteps: 12 });
   });
 
   test('updateTestingSettings falls back to current coverage target when updates omit coverageTarget', async () => {
@@ -475,14 +477,19 @@ describe('settings git helpers', () => {
       }));
     };
 
-    await updateTestingSettings({
+    const setTestingSettings = vi.fn();
+
+    const result = await updateTestingSettings({
       trackedFetch,
       testingSettings: { coverageTarget: 90 },
-      setTestingSettings: vi.fn(),
+      setTestingSettings,
       updates: {}
     });
 
     expect(capturedBody).toEqual({ coverageTarget: 90 });
+    expect(result).toEqual({ coverageTarget: 90 });
+    const updater = setTestingSettings.mock.calls[0][0];
+    expect(updater({ coverageTarget: 100, maxSteps: 8 })).toEqual({ coverageTarget: 90, maxSteps: 8 });
   });
 
   test('updateTestingSettings surfaces fetch errors from request failures', async () => {

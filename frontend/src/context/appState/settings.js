@@ -315,6 +315,8 @@ export const updateTestingSettings = async ({
   setTestingSettings,
   updates = {}
 }) => {
+  const requestedMaxSteps = Number.parseInt(updates.maxSteps ?? testingSettings.maxSteps, 10);
+  const hasMaxSteps = Number.isFinite(requestedMaxSteps);
   const payload = {
     coverageTarget: Number.parseInt(updates.coverageTarget ?? testingSettings.coverageTarget, 10)
   };
@@ -345,10 +347,18 @@ export const updateTestingSettings = async ({
 
   setTestingSettings((prev) => ({
     ...prev,
-    ...data.settings
+    ...data.settings,
+    ...(hasMaxSteps ? { maxSteps: requestedMaxSteps } : {})
   }));
 
-  return data.settings;
+  if (!hasMaxSteps) {
+    return data.settings;
+  }
+
+  return {
+    ...data.settings,
+    maxSteps: requestedMaxSteps
+  };
 };
 
 export const getEffectiveGitSettings = ({ gitSettings, projectGitSettings, projectId }) => {

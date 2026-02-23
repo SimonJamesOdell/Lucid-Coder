@@ -2,6 +2,14 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
 import { processGoal, __processGoalTestHooks } from '../../services/goalAutomation/processGoal.js';
 
+const orchestratorMock = vi.hoisted(() => ({
+  analyzeProject: vi.fn(),
+  validateRouterDependency: vi.fn(),
+  validateGenerationSafety: vi.fn()
+}));
+vi.mock('../../utils/frameworkOrchestrator', () => orchestratorMock);
+vi.mock('../../utils/frameworkOrchestrator.js', () => orchestratorMock);
+
 const goalsApiMock = vi.hoisted(() => ({
   fetchGoals: vi.fn(),
   advanceGoalPhase: vi.fn()
@@ -23,7 +31,9 @@ const automationModuleMock = vi.hoisted(() => ({
   buildScopeReflectionPrompt: vi.fn(),
   deriveStyleScopeContract: vi.fn(),
   parseScopeReflectionResponse: vi.fn(),
-  validateEditsAgainstReflection: vi.fn()
+  validateExecutionContractGate: vi.fn(),
+  validateEditsAgainstReflection: vi.fn(),
+  scoreEditPlanConfidence: vi.fn()
 }));
 vi.mock('../../services/goalAutomation/automationUtils.js', () => automationModuleMock);
 
@@ -82,11 +92,33 @@ beforeEach(() => {
   automationModuleMock.normalizeRepoPath.mockImplementation((value) => value);
   automationModuleMock.buildScopeReflectionPrompt.mockReturnValue({});
   automationModuleMock.deriveStyleScopeContract.mockReturnValue(null);
-  automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+  automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+    testsNeeded: false,
+    mustChange: [],
+    mustAvoid: [],
+    mustHave: []
+  });
+  automationModuleMock.validateExecutionContractGate.mockReturnValue(null);
   automationModuleMock.validateEditsAgainstReflection.mockReturnValue(null);
+  automationModuleMock.scoreEditPlanConfidence.mockReturnValue({
+    score: 0.8,
+    label: 'high',
+    metrics: {
+      touchedFiles: 1,
+      mustChangeSatisfied: true,
+      forbiddenTouches: 0,
+      mixedWorkspaceTouches: 0,
+      stage: 'implementation'
+    }
+  });
 
   mockedAxios.post.mockResolvedValue({ data: {} });
   mockedAxios.get.mockResolvedValue({ data: { files: [] } });
+  orchestratorMock.analyzeProject.mockResolvedValue({
+    success: true,
+    decision: { decision: 'proceed', normalized: 0.85 },
+    profile: { detected: { framework: 'react', routerDependency: true } }
+  });
 });
 
 describe('processGoal instruction-only goals', () => {
@@ -519,6 +551,47 @@ describe('processGoal retries and context handling', () => {
     expect(touchTracker).toEqual({ frontend: true, backend: true, __observed: true });
   });
 
+  test('does not request editor focus when preservePreviewTab is enabled', async () => {
+    const args = defaultArgs();
+    const requestEditorFocus = vi.fn();
+
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/styles/app.css',
+        replacements: [{ search: 'background: white;', replace: 'background: blue;' }]
+      }
+    ]);
+
+    automationModuleMock.applyEdits.mockImplementation(async ({ onFileApplied, stage }) => {
+      if (typeof onFileApplied === 'function' && stage === 'implementation') {
+        await onFileApplied('frontend/src/styles/app.css');
+      }
+      return { applied: 1, skipped: 0 };
+    });
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        preservePreviewTab: true,
+        testsAttemptSequence: [1],
+        implementationAttemptSequence: [1],
+        requestEditorFocus
+      }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(requestEditorFocus).not.toHaveBeenCalled();
+  });
+
   test('normalizes requiredAssetPaths entries for implementation retry messaging', async () => {
     automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
       testsNeeded: false,
@@ -666,11 +739,179 @@ describe('processGoal retries and context handling', () => {
   });
 });
 
+describe('processGoal framework analysis hooks', () => {
+  test('logs framework analysis failure payload when analysis returns success=false', async () => {
+    const args = defaultArgs();
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    orchestratorMock.analyzeProject.mockResolvedValueOnce({
+      success: false,
+      error: 'analysis unavailable'
+    });
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        testsAttemptSequence: [1],
+        implementationAttemptSequence: [1]
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(dispatchSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'processGoal:decision' }));
+    expect(automationModuleMock.automationLog).toHaveBeenCalledWith(
+      'processGoal:framework:failed',
+      expect.objectContaining({ error: 'analysis unavailable' })
+    );
+
+    dispatchSpy.mockRestore();
+  });
+
+  test('emits framework decision event when analysis succeeds with a decision payload', async () => {
+    const args = defaultArgs();
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    orchestratorMock.analyzeProject.mockResolvedValueOnce({
+      success: true,
+      decision: { decision: 'proceed', normalized: 0.91 },
+      profile: { detected: { framework: 'react', routerDependency: true } }
+    });
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        testsAttemptSequence: [1],
+        implementationAttemptSequence: [1]
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(automationModuleMock.automationLog).toHaveBeenCalledWith(
+      'processGoal:framework',
+      expect.objectContaining({ framework: 'react' })
+    );
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'processGoal:decision' })
+    );
+
+    dispatchSpy.mockRestore();
+  });
+
+  test('passes options.project object to framework analysis context when provided', async () => {
+    const args = defaultArgs();
+    const providedProject = { id: 999, path: '/provided/project', framework: 'react' };
+
+    await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        testsAttemptSequence: [1],
+        implementationAttemptSequence: [1],
+        project: providedProject
+      }
+    );
+
+    expect(orchestratorMock.analyzeProject).toHaveBeenCalledWith(
+      args.goal.prompt,
+      expect.objectContaining({ project: providedProject })
+    );
+  });
+
+  test('handles framework analysis exceptions and decision event dispatch failures safely', async () => {
+    const args = defaultArgs();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    orchestratorMock.analyzeProject
+      .mockRejectedValueOnce(new Error('analysis crashed'))
+      .mockResolvedValueOnce({
+        success: true,
+        decision: { decision: 'proceed', normalized: 0.9 },
+        profile: { detected: { framework: 'react', routerDependency: true } }
+      });
+
+    const first = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        testsAttemptSequence: [1],
+        implementationAttemptSequence: [1]
+      }
+    );
+
+    const second = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        testsAttemptSequence: [1],
+        implementationAttemptSequence: [1]
+      }
+    );
+
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith('[processGoal] Framework analysis error:', expect.any(String));
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'processGoal:decision' })
+    );
+
+    dispatchSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});
+
 describe('processGoal scope reflection handling', () => {
-  test('logs and continues when the reflection request fails', async () => {
+  test('fails closed when the reflection request fails and no execution contract is available', async () => {
     const args = defaultArgs();
     const reflectionError = new Error('reflection unavailable');
     mockedAxios.post.mockRejectedValueOnce(reflectionError);
+    automationModuleMock.validateExecutionContractGate.mockImplementation((reflection, options = {}) => {
+      if (options.stage === 'implementation' && !reflection) {
+        return {
+          type: 'execution-contract-invalid',
+          rule: 'execution-contract-required-fields',
+          message: 'Execution contract is missing required structured fields'
+        };
+      }
+      return null;
+    });
 
     const result = await processGoal(
       args.goal,
@@ -684,7 +925,8 @@ describe('processGoal scope reflection handling', () => {
       baseOptions
     );
 
-    expect(result).toEqual({ success: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Execution contract is missing required structured fields');
     expect(automationModuleMock.automationLog).toHaveBeenCalledWith(
       'processGoal:scopeReflection:error',
       expect.objectContaining({ message: reflectionError.message })
@@ -769,6 +1011,137 @@ describe('processGoal scope reflection handling', () => {
     expect(result).toEqual({ success: true });
     expect(getStagePromptPayloads('testing')).toEqual([]);
     expect(getStagePromptPayloads('implementation').length).toBeGreaterThan(0);
+  });
+
+  test('keeps preview tab unchanged when preservePreviewTab is enabled', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/styles/app.css',
+        replacements: [{ search: 'background: white;', replace: 'background: green;' }]
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(args.setPreviewPanelTab).not.toHaveBeenCalled();
+    expect(getStagePromptPayloads('testing')).toEqual([]);
+    expect(args.createMessage).not.toHaveBeenCalledWith(
+      'assistant',
+      expect.stringMatching(/^Completed:/),
+      { variant: 'status' }
+    );
+  });
+
+  test('skips non-stylesheet edits during preservePreviewTab style shortcuts', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'old', replace: 'new' }]
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true }
+    );
+
+    expect(result).toEqual(expect.objectContaining({ success: true, skipped: true, skippedReason: 'style-shortcut-scope' }));
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test('ignores preserve-preview edits without a normalizable path before validating stylesheet scope', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        replacements: [{ search: 'old', replace: 'new' }]
+      },
+      {
+        type: 'modify',
+        path: 'frontend/src/styles/app.css',
+        replacements: [{ search: 'background: white;', replace: 'background: green;' }]
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('logs null shortcut path when preserve-preview scope violation omits a path', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/styles/app.css',
+        replacements: [{ search: 'background: white;', replace: 'background: green;' }]
+      }
+    ]);
+    automationModuleMock.validateEditsAgainstReflection.mockImplementation((_edits, _reflection, options) => {
+      if (options?.stage === 'implementation') {
+        return {
+          type: 'style-shortcut-scope',
+          rule: 'style-shortcut-scope',
+          message: 'Scoped shortcut violation with no path'
+        };
+      }
+      return null;
+    });
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true }
+    );
+
+    expect(result).toEqual(expect.objectContaining({ success: true, skipped: true, skippedReason: 'style-shortcut-scope' }));
+    expect(automationModuleMock.automationLog).toHaveBeenCalledWith(
+      'processGoal:styleShortcut:skipNonStylesheetEdit',
+      expect.objectContaining({ path: null })
+    );
   });
 });
 
@@ -960,6 +1333,43 @@ describe('processGoal implementation retries', () => {
 });
 
 describe('processGoal stage error handling', () => {
+  test('tolerates final tests-stage parse failures when configured and continues implementation', async () => {
+    const syntaxError = new SyntaxError("Expected property name or '}' in JSON at position 1");
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: true });
+    automationModuleMock.parseEditsFromLLM
+      .mockImplementationOnce(() => {
+        throw syntaxError;
+      })
+      .mockReturnValue([
+        {
+          type: 'modify',
+          path: 'frontend/src/App.jsx',
+          replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+        }
+      ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [1], implementationAttemptSequence: [1], tolerateTestStageParseFailure: true }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.automationLog).toHaveBeenCalledWith(
+      'processGoal:llm:tests:parseError:tolerated',
+      expect.objectContaining({ message: syntaxError.message })
+    );
+    const implCalls = getStagePromptPayloads('implementation');
+    expect(implCalls).toHaveLength(1);
+  });
+
   test('retries the tests stage when applyEdits throws scope violations', async () => {
     const violationError = new Error('Scope limit');
     violationError.__lucidcoderScopeViolation = { message: 'Stay in App.jsx', path: 'frontend/src/App.jsx' };
@@ -3007,6 +3417,27 @@ describe('processGoal final-attempt failures', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('No repo edits were applied');
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test('fails preserve-preview shortcut mode when implementation returns empty edits', async () => {
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1], preservePreviewTab: true }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('LLM returned no edits for the implementation stage.');
     expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
   });
 

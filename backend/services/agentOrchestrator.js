@@ -16,7 +16,12 @@ import { llmClient } from '../llm-client.js';
 import { ensureGitRepository, runGitCommand } from '../utils/git.js';
 import { getProject } from '../database.js';
 import { assertGoalTransition, isGoalState } from './goalLifecycle.js';
-import { extractLatestRequest, extractSelectedProjectAssets, isStyleOnlyPrompt } from './promptHeuristics.js';
+import {
+  extractLatestRequest,
+  extractSelectedProjectAssets,
+  hasResolvedClarificationAnswers,
+  isStyleOnlyPrompt
+} from './promptHeuristics.js';
 import {
   extractJsonObject,
   extractFirstJsonObjectSubstring,
@@ -124,9 +129,38 @@ const mergeGoalMetadata = ({ baseMetadata, extraMetadata, acceptanceCriteria, cl
   const normalizedExtra = extraMetadata && typeof extraMetadata === 'object'
     ? { ...extraMetadata }
     : null;
+
+  const hasMeaningfulTestFailure = (() => {
+    const value = normalizedExtra?.testFailure;
+    if (value === true) {
+      return true;
+    }
+    if (typeof value === 'string') {
+      return value.trim().length > 0;
+    }
+    if (value && typeof value === 'object') {
+      return Object.keys(value).length > 0;
+    }
+    return false;
+  })();
+
+  const hasMeaningfulUncoveredLines = (() => {
+    const value = normalizedExtra?.uncoveredLines;
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) && value > 0;
+    }
+    if (typeof value === 'string') {
+      return value.trim().length > 0;
+    }
+    return false;
+  })();
+
   const suppressClarifyingQuestions = normalizedExtra?.suppressClarifyingQuestions === true
-    || Boolean(normalizedExtra?.testFailure)
-    || Boolean(normalizedExtra?.uncoveredLines);
+    || hasMeaningfulTestFailure
+    || hasMeaningfulUncoveredLines;
   if (normalizedExtra) {
     delete normalizedExtra.suppressClarifyingQuestions;
     if (suppressClarifyingQuestions) {
@@ -558,12 +592,31 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
     const raw = await llmClient.generateResponse(buildPlannerMessages(strict), {
       max_tokens: 900,
       temperature: 0.3,
+      __lucidcoderDisableToolBridge: true,
+      __lucidcoderForceMinimalToolBridge: true,
       __lucidcoderPhase: 'meta_goal_planning',
       __lucidcoderRequestType: 'plan_meta_goals'
     });
 
     console.log('[DEBUG] LLM raw response:', raw);
-    const parsed = extractJsonObject(raw);
+    let parsed = extractJsonObject(raw);
+    if (
+      parsed
+      && typeof parsed === 'object'
+      && parsed.action === 'answer'
+      && typeof parsed.answer === 'string'
+    ) {
+      const nested = extractJsonObject(parsed.answer);
+      if (nested && typeof nested === 'object') {
+        parsed = nested;
+      } else {
+        return {
+          parentTitle: null,
+          clarifyingQuestions: [],
+          normalizedChildPlans: buildHeuristicChildPlans(plannerPrompt)
+        };
+      }
+    }
     console.log('[DEBUG] Parsed JSON:', parsed);
 
     if (!parsed) {
@@ -613,7 +666,8 @@ export const planGoalFromPrompt = async ({ projectId, prompt, goalId = null }) =
     }
   }
 
-  const shouldRequestClarifications = process.env.NODE_ENV !== 'test';
+  const shouldRequestClarifications =
+    process.env.NODE_ENV !== 'test' && !hasResolvedClarificationAnswers(prompt);
   if (shouldRequestClarifications && (!plan.clarifyingQuestions || plan.clarifyingQuestions.length === 0)) {
     try {
       plan.clarifyingQuestions = await requestClarificationQuestions(plannerPromptWithAssets, projectContext);

@@ -104,21 +104,30 @@ export const planMetaGoal = async ({ projectId, prompt, childPrompts }) => {
   return res.data;
 };
 
-export const agentRequest = async ({ projectId, prompt }) => {
+export const agentRequest = async ({ projectId, prompt, maxSteps } = {}) => {
   if (!projectId) throw new Error('projectId is required');
   if (!prompt) throw new Error('prompt is required');
-  const res = await axios.post('/api/agent/request', { projectId, prompt });
+  const payload = { projectId, prompt };
+  if (Number.isFinite(maxSteps)) {
+    payload.maxSteps = Math.trunc(maxSteps);
+  }
+  const res = await axios.post('/api/agent/request', payload);
   return res.data;
 };
 
-export const agentRequestStream = async ({ projectId, prompt, onChunk, onComplete, onError, signal } = {}) => {
+export const agentRequestStream = async ({ projectId, prompt, maxSteps, onChunk, onComplete, onError, signal } = {}) => {
   if (!projectId) throw new Error('projectId is required');
   if (!prompt) throw new Error('prompt is required');
+
+  const payload = { projectId, prompt };
+  if (Number.isFinite(maxSteps)) {
+    payload.maxSteps = Math.trunc(maxSteps);
+  }
 
   const response = await fetch('/api/agent/request/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId, prompt }),
+    body: JSON.stringify(payload),
     signal
   });
 

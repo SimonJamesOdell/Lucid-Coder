@@ -48,7 +48,8 @@ const baseState = () => ({
   },
   updatePortSettings: vi.fn().mockResolvedValue(undefined),
   testingSettings: {
-    coverageTarget: 100
+    coverageTarget: 100,
+    maxSteps: 8
   },
   updateTestingSettings: vi.fn().mockResolvedValue(undefined),
   projectShutdownState: {
@@ -166,7 +167,7 @@ describe('Navigation Component', () => {
     expect(screen.getByText('Configure LLM')).toBeInTheDocument();
     expect(screen.getByText('Configure Git')).toBeInTheDocument();
     expect(screen.getByText('Ports')).toBeInTheDocument();
-    expect(screen.getByText('Configure Testing')).toBeInTheDocument();
+    expect(screen.getByText('Configure Agent')).toBeInTheDocument();
   });
 
   test('configure LLM option opens configuration modal', async () => {
@@ -422,7 +423,7 @@ describe('Navigation Component', () => {
     const { user } = renderNavigation();
 
     await user.click(screen.getByRole('button', { name: /Settings/ }));
-    await user.click(screen.getByText('Configure Testing'));
+    await user.click(screen.getByText('Configure Agent'));
 
     const modal = await screen.findByTestId('testing-settings-modal');
     expect(modal).toBeInTheDocument();
@@ -435,13 +436,13 @@ describe('Navigation Component', () => {
     const { user, state } = renderNavigation({ updateTestingSettings });
 
     await user.click(screen.getByRole('button', { name: /Settings/ }));
-    await user.click(screen.getByText('Configure Testing'));
+    await user.click(screen.getByText('Configure Agent'));
 
     const slider = await screen.findByTestId('testing-coverage-slider');
     fireEvent.change(slider, { target: { value: '70' } });
     await user.click(screen.getByTestId('testing-settings-save'));
 
-    expect(state.updateTestingSettings).toHaveBeenCalledWith({ coverageTarget: 70 });
+    expect(state.updateTestingSettings).toHaveBeenCalledWith({ coverageTarget: 70, maxSteps: 8 });
 
     alertSpy.mockRestore();
   });
@@ -453,7 +454,7 @@ describe('Navigation Component', () => {
     const { user } = renderNavigation({ updateTestingSettings });
 
     await user.click(screen.getByRole('button', { name: /Settings/ }));
-    await user.click(screen.getByText('Configure Testing'));
+    await user.click(screen.getByText('Configure Agent'));
 
     const saveButton = await screen.findByTestId('testing-settings-save');
     await user.click(saveButton);
@@ -473,7 +474,7 @@ describe('Navigation Component', () => {
     const { user } = renderNavigation({ updateTestingSettings });
 
     await user.click(screen.getByRole('button', { name: /Settings/ }));
-    await user.click(screen.getByText('Configure Testing'));
+    await user.click(screen.getByText('Configure Agent'));
 
     const saveButton = await screen.findByTestId('testing-settings-save');
     await user.click(saveButton);
@@ -492,7 +493,7 @@ describe('Navigation Component', () => {
     const { user } = renderNavigation();
 
     await user.click(screen.getByRole('button', { name: /Settings/ }));
-    await user.click(screen.getByText('Configure Testing'));
+    await user.click(screen.getByText('Configure Agent'));
 
     await screen.findByTestId('testing-settings-modal');
     await user.click(screen.getByTestId('testing-settings-close'));

@@ -53,6 +53,10 @@ describe('automationUtils coverage helpers', () => {
     expect(buildFallbackBranchNameFromPrompt('Refactor', 'feature-xyz')).toBe('feature-xyz');
   });
 
+  test('buildFallbackBranchNameFromPrompt removes imperative filler phrases like "give me"', () => {
+    expect(buildFallbackBranchNameFromPrompt('give me navigation bar', 'feature-xyz')).toBe('navigation-bar');
+  });
+
   test('isBranchNameRelevantToPrompt returns true when tokenization yields no signal', () => {
     expect(isBranchNameRelevantToPrompt('feature/something', '')).toBe(true);
     expect(isBranchNameRelevantToPrompt('', 'some prompt')).toBe(true);

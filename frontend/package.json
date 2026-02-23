@@ -2,7 +2,7 @@
   "name": "lucidcoder-frontend",
   "private": true,
   "_versionWarning": "DO NOT EDIT VERSION MANUALLY — use npm run release",
-  "version": "0.7.9",
+  "version": "0.8.0",
   "type": "module",
   "scripts": {
     "release": "npm --prefix .. run release --",

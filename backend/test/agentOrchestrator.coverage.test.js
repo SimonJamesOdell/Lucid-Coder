@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { initializeDatabase } from '../database.js';
 import {
   createMetaGoalWithChildren,
+  createGoalFromPrompt,
   planGoalFromPrompt,
   __testExports__
 } from '../services/agentOrchestrator.js';
@@ -203,5 +204,79 @@ describe('agentOrchestrator coverage helpers (unit)', () => {
     const prompts = result.children.map((child) => child.prompt);
     expect(prompts[0]).toMatch(/^Identify the components/);
     expect(prompts).toHaveLength(3);
+  });
+
+  it('suppresses clarifying questions when metadata overrides include meaningful test failure/object and uncovered lines/string', async () => {
+    const result = await createGoalFromPrompt({
+      projectId: 908,
+      prompt: 'Implement nav update',
+      extraClarifyingQuestions: ['Should this still be asked?'],
+      metadataOverrides: {
+        testFailure: { summary: 'failing test' },
+        uncoveredLines: '12,13',
+        clarifyingQuestions: ['Should this still be asked?']
+      }
+    });
+
+    expect(result.tasks[0]?.type).toBe('analysis');
+  });
+
+  it('does not suppress clarifying questions when metadata overrides contain empty failure markers', async () => {
+    const result = await createGoalFromPrompt({
+      projectId: 909,
+      prompt: 'Implement nav update',
+      extraClarifyingQuestions: ['Need router?'],
+      metadataOverrides: {
+        testFailure: {},
+        uncoveredLines: '',
+        clarifyingQuestions: ['Need router?']
+      }
+    });
+
+    expect(result.tasks[0]?.type).toBe('clarification');
+  });
+
+  it('uses heuristic child plans when planner wraps answer action without nested JSON', async () => {
+    const { llmClient } = await import('../llm-client.js');
+
+    llmClient.generateResponse
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          action: 'answer',
+          answer: 'I cannot provide structured child goals right now.'
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          needsClarification: false,
+          questions: []
+        })
+      );
+
+    const result = await planGoalFromPrompt({ projectId: 910, prompt: 'Add profile page and settings' });
+    expect(result.children.length).toBe(3);
+    expect(result.children[0].prompt).toMatch(/^Identify the components/);
+  });
+
+  it('unwraps nested JSON from answer envelopes during planner parsing', async () => {
+    const { llmClient } = await import('../llm-client.js');
+
+    llmClient.generateResponse.mockResolvedValueOnce(
+      JSON.stringify({
+        action: 'answer',
+        answer: JSON.stringify({
+          childGoals: [
+            { prompt: 'Implement dashboard shell' },
+            { prompt: 'Wire dashboard routes' }
+          ]
+        })
+      })
+    );
+
+    const result = await planGoalFromPrompt({ projectId: 911, prompt: 'Build dashboard shell and routes' });
+    expect(result.children.map((child) => child.prompt)).toEqual([
+      'Implement dashboard shell',
+      'Wire dashboard routes'
+    ]);
   });
 });

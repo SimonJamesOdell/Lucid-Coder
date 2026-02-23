@@ -4,13 +4,44 @@ import {
   isStyleOnlyPrompt,
   extractStyleColor,
   extractLatestRequest,
-  extractSelectedProjectAssets
+  extractSelectedProjectAssets,
+  hasResolvedClarificationAnswers
 } from '../services/promptHeuristics.js';
 
 describe('promptHeuristics', () => {
+  it('hasResolvedClarificationAnswers handles empty and malformed user-answer payloads', () => {
+    expect(hasResolvedClarificationAnswers('')).toBe(false);
+    expect(hasResolvedClarificationAnswers('User answer:')).toBe(false);
+    expect(hasResolvedClarificationAnswers('User answer:\n   ')).toBe(false);
+  });
+
   it('returns false for empty/undefined prompts (covers default arg branches)', () => {
     expect(isStyleOnlyPrompt()).toBe(false);
     expect(isStyleOnlyPrompt('')).toBe(false);
+  });
+
+  it('detects explicit resolved clarification marker and rejects missing user-answer prompts', () => {
+    expect(hasResolvedClarificationAnswers('Resolved clarification answers: yes')).toBe(false);
+    expect(hasResolvedClarificationAnswers('User answer: anything\nResolved clarification answers: yes')).toBe(true);
+  });
+
+  it('keeps current request unchanged when clarification transcript has no extracted answers', () => {
+    const prompt = [
+      'Current request: Build navbar',
+      'User answer: Q: Hover or click?'
+    ].join('\n');
+
+    expect(extractLatestRequest(prompt)).toBe('Build navbar');
+  });
+
+  it('handles blank and non-clarification user-answer blocks', () => {
+    expect(hasResolvedClarificationAnswers('User answer:   ')).toBe(false);
+    expect(hasResolvedClarificationAnswers('User answer: still thinking')).toBe(false);
+  });
+
+  it('detects multiline and inline clarification answers from user answer blocks', () => {
+    expect(hasResolvedClarificationAnswers('User answer: Q: One?\nA: yes')).toBe(true);
+    expect(hasResolvedClarificationAnswers('User answer: Q: One? A: yes')).toBe(true);
   });
 
   it('returns true for a style-only prompt with core signals and no non-style signals', () => {
@@ -95,6 +126,34 @@ describe('promptHeuristics', () => {
     ].join('\n');
 
     expect(extractLatestRequest(prompt)).toBe('Q: Should this apply globally? A: yes, apply globally');
+  });
+
+  it('returns current request with resolved multiline clarification answers', () => {
+    const prompt = [
+      'Current request: Build navbar',
+      'User answer: Q: Hover or click?',
+      'A: both'
+    ].join('\n');
+
+    expect(extractLatestRequest(prompt)).toContain('Resolved clarification answers: both');
+  });
+
+  it('returns current request with resolved inline clarification answers', () => {
+    const prompt = [
+      'Current request: Build navbar',
+      'User answer: Q: Hover or click? A: both Q: Use router? A: yes'
+    ].join('\n');
+
+    expect(extractLatestRequest(prompt)).toContain('Resolved clarification answers: both; yes');
+  });
+
+  it('treats empty inline clarification answers as unresolved', () => {
+    const prompt = [
+      'Current request: Build navbar',
+      'User answer: A:'
+    ].join('\n');
+
+    expect(extractLatestRequest(prompt)).toBe('Build navbar');
   });
 
   it('falls back to raw prompt when user answer value is blank', () => {

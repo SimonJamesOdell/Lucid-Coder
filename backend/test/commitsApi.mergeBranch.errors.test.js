@@ -107,6 +107,54 @@ describe('commitsApi.mergeBranch error-path coverage', () => {
     });
   });
 
+  it('rejects merge when branch has no mergeable changes', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `rev-list --count main..${branchName}`) {
+        return { stdout: '0\n' };
+      }
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/No mergeable changes on this branch/i)
+    });
+  });
+
+  it('coerces non-string rev-list stdout when checking mergeable changes', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `rev-list --count main..${branchName}`) {
+        return { stdout: 1 };
+      }
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).resolves.toMatchObject({
+      current: 'main',
+      mergedBranch: branchName
+    });
+  });
+
+  it('coerces missing rev-list stdout through String fallback when checking mergeable changes', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === `rev-list --count main..${branchName}`) {
+        return {};
+      }
+      return { stdout: '' };
+    });
+
+    const { mergeBranch } = api();
+    await expect(mergeBranch(projectId, branchName)).resolves.toMatchObject({
+      current: 'main',
+      mergedBranch: branchName
+    });
+  });
+
   it('allows css-only merge and skips git operations when git is not ready', async () => {
     core.isCssOnlyBranchDiff.mockResolvedValueOnce(true);
     getProjectContext.mockResolvedValueOnce({ gitReady: false, projectPath: 'X' });

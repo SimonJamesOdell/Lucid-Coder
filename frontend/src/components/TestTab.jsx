@@ -275,6 +275,22 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     });
   }, [allTestsCompleted, jobsByType, visibleTestConfigs]);
 
+  const proofSuiteLabel = useMemo(() => {
+    const availableTypes = visibleTestConfigs
+      .filter((config) => Boolean(jobsByType[config.type]))
+      .map((config) => config.type);
+    const includesFrontend = availableTypes.includes('frontend:test');
+    const includesBackend = availableTypes.includes('backend:test');
+
+    if (includesFrontend && includesBackend) {
+      return 'frontend and backend';
+    }
+    if (includesBackend) {
+      return 'backend';
+    }
+    return 'frontend';
+  }, [jobsByType, visibleTestConfigs]);
+
   const coverageGateMessage = useMemo(() => {
     const failingJob = visibleTestConfigs
       .map((config) => jobsByType[config.type])
@@ -580,43 +596,72 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
         setResultModalMessage(testsPassedCommitsMessage);
         setResultModalConfirmText('Continue to commits');
         setResultModalConfirmAction(() => () => {
-          setIsResultModalOpen(false);
-          if (
-            projectId
-            && typeof syncBranchOverview === 'function'
-            && activeBranchName
-            && activeBranchName !== 'main'
-          ) {
-            const testsRequired = typeof activeWorkingBranch?.testsRequired === 'boolean'
-              ? activeWorkingBranch.testsRequired
-              : true;
-            const mergeBlockedReason = typeof activeWorkingBranch?.mergeBlockedReason === 'string'
-              ? activeWorkingBranch.mergeBlockedReason
-              : null;
-            const lastTestSummary = activeWorkingBranch?.lastTestSummary && typeof activeWorkingBranch.lastTestSummary === 'object'
-              ? activeWorkingBranch.lastTestSummary
-              : null;
-            const status = typeof activeWorkingBranch?.status === 'string'
-              ? activeWorkingBranch.status
-              : 'active';
+          setResultModalProcessing(true);
+          setResultModalProcessingMessage('Recording test proof…');
+          setLocalError(null);
 
-            syncBranchOverview(projectId, {
-              current: activeBranchName,
-              workingBranches: [
-                {
-                  name: activeBranchName,
-                  status,
-                  stagedFiles,
-                  lastTestStatus: 'passed',
-                  testsRequired,
-                  mergeBlockedReason,
-                  lastTestCompletedAt: new Date().toISOString(),
-                  lastTestSummary
-                }
-              ]
-            });
-          }
-          onRequestCommitsTab?.();
+          (async () => {
+            try {
+              await submitProofIfNeeded({
+                onBeforeSubmit: () => setResultModalProcessingMessage('Recording test proof…')
+              });
+
+              setResultModalProcessing(false);
+              setResultModalProcessingMessage('');
+              setIsResultModalOpen(false);
+
+              if (
+                projectId
+                && typeof syncBranchOverview === 'function'
+                && activeBranchName
+                && activeBranchName !== 'main'
+              ) {
+                const testsRequired = typeof activeWorkingBranch?.testsRequired === 'boolean'
+                  ? activeWorkingBranch.testsRequired
+                  : true;
+                const mergeBlockedReason = typeof activeWorkingBranch?.mergeBlockedReason === 'string'
+                  ? activeWorkingBranch.mergeBlockedReason
+                  : null;
+                const lastTestSummary = activeWorkingBranch?.lastTestSummary && typeof activeWorkingBranch.lastTestSummary === 'object'
+                  ? activeWorkingBranch.lastTestSummary
+                  : null;
+                const status = typeof activeWorkingBranch?.status === 'string'
+                  ? activeWorkingBranch.status
+                  : 'active';
+
+                syncBranchOverview(projectId, {
+                  current: activeBranchName,
+                  workingBranches: [
+                    {
+                      name: activeBranchName,
+                      status,
+                      stagedFiles,
+                      lastTestStatus: 'passed',
+                      testsRequired,
+                      mergeBlockedReason,
+                      lastTestCompletedAt: new Date().toISOString(),
+                      lastTestSummary
+                    }
+                  ]
+                });
+              }
+
+              onRequestCommitsTab?.();
+            } catch (proofError) {
+              const proofMessage = proofError.response?.data?.error
+                || proofError.message
+                || 'Failed to record branch test proof';
+              setLocalError(proofMessage);
+              setResultModalProcessing(false);
+              setResultModalProcessingMessage('');
+              setResultModalVariant('danger');
+              setResultModalTitle('Commit failed');
+              setResultModalMessage(proofMessage);
+              setResultModalConfirmText(null);
+              setResultModalConfirmAction(null);
+              setIsResultModalOpen(true);
+            }
+          })();
         });
         setResultModalProcessing(false);
         setResultModalProcessingMessage('');
@@ -752,7 +797,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
               });
 
               if (needsProof) {
-                const proofSuiteLabel = ['frontend', 'backend'][Number(Boolean(hasBackend))];
                 throw buildModalError(
                   'Tests required before commit',
                   `Run ${proofSuiteLabel} tests again before committing this branch so the server can record a passing proof.`
@@ -915,7 +959,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     syncBranchOverview,
     resetCommitResumeState,
     submitProofIfNeeded,
-    coverageGateMessage
+    coverageGateMessage,
+    proofSuiteLabel
   ]);
 
   const shouldRunTest = useCallback((type) => {
@@ -992,6 +1037,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     setLocalError(null);
 
     const source = typeof options?.source === 'string' ? options.source : 'user';
+    const forceRun = Boolean(options?.forceRun);
 
     try {
       markTestRunIntent?.(source, {
@@ -1000,7 +1046,9 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       });
 
       // Filter to only run tests that need to be run
-      const testsToRun = visibleTestConfigs.filter((config) => shouldRunTest(config.type));
+      const testsToRun = forceRun
+        ? visibleTestConfigs
+        : visibleTestConfigs.filter((config) => shouldRunTest(config.type));
       
       if (testsToRun.length === 0) {
         console.log('All tests previously succeeded with no file changes - skipping test runs');
@@ -1169,6 +1217,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     hooks.setLocalError = setLocalError;
     hooks.getLocalError = () => localError;
     hooks.getActiveJobs = () => activeJobs;
+    hooks.getProofSuiteLabel = () => proofSuiteLabel;
     hooks.submitProofIfNeeded = submitProofIfNeeded;
     hooks.getResultModalState = () => ({
       title: resultModalTitle,
@@ -1200,6 +1249,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       hooks.setLocalError = undefined;
       hooks.getLocalError = undefined;
       hooks.getActiveJobs = undefined;
+      hooks.getProofSuiteLabel = undefined;
       hooks.submitProofIfNeeded = undefined;
       hooks.getResultModalState = undefined;
     };

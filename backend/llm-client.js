@@ -531,8 +531,11 @@ export class LLMClient {
         const shouldUseDefaultBridge =
           this.shouldUseActionToolBridgeByDefault(this.config.provider) &&
           options.__lucidcoderDisableToolBridge !== true;
+        const shouldUseMinimalBridgeFirst = options.__lucidcoderForceMinimalToolBridge === true;
 
-        const initialPayload = shouldUseDefaultBridge
+        const initialPayload = shouldUseMinimalBridgeFirst
+          ? this.buildToolBridgePayload(basePayload)
+          : shouldUseDefaultBridge
           ? this.buildActionToolBridgePayload(basePayload)
           : basePayload;
 
@@ -542,7 +545,7 @@ export class LLMClient {
           const primaryText = this.getErrorMessage(primaryError);
           // If the provider rejects tool schemas outright, fall back to a plain request.
           if (
-            shouldUseDefaultBridge &&
+            (shouldUseDefaultBridge || shouldUseMinimalBridgeFirst) &&
             (/tools\b/i.test(primaryText) && /(unsupported|not supported|unknown|unrecognized|invalid)/i.test(primaryText))
           ) {
             response = await request(basePayload);

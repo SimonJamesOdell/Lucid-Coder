@@ -15,7 +15,8 @@ const defaultPortSettings = {
 };
 
 const defaultTestingSettings = {
-  coverageTarget: 100
+  coverageTarget: 100,
+  maxSteps: 8
 };
 
 const defaultProjectTestingSettings = {};

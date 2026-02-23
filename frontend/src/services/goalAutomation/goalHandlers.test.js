@@ -9,7 +9,8 @@ vi.mock('./processGoal', () => ({
 
 vi.mock('../../utils/goalsApi', () => ({
   fetchGoals: vi.fn(),
-  planMetaGoal: vi.fn()
+  planMetaGoal: vi.fn(),
+  advanceGoalPhase: vi.fn()
 }));
 
 vi.mock('./ensureBranch', () => ({
@@ -73,7 +74,7 @@ describe('goalHandlers processGoals', () => {
       mockSetMessages,
       expect.any(Object)
     );
-    expect(result).toEqual({ success: true, processed: 1 });
+    expect(result).toEqual({ success: true, processed: 1, styleShortcutChangeApplied: false });
   });
 
   it('returns immediately when no child goals are provided', async () => {
@@ -143,7 +144,7 @@ describe('goalHandlers processGoals', () => {
       mockSetMessages,
       expect.any(Object)
     );
-    expect(result).toEqual({ success: true, processed: 2 });
+    expect(result).toEqual({ success: true, processed: 2, styleShortcutChangeApplied: false });
   });
 
   it('waits while paused before processing goals', async () => {
@@ -166,7 +167,7 @@ describe('goalHandlers processGoals', () => {
     const result = await resultPromise;
 
     expect(shouldPause).toHaveBeenCalled();
-    expect(result).toEqual({ success: true, processed: 1 });
+    expect(result).toEqual({ success: true, processed: 1, styleShortcutChangeApplied: false });
   });
 
   it('continues when a child goal is skipped', async () => {
@@ -183,7 +184,7 @@ describe('goalHandlers processGoals', () => {
       mockSetMessages
     );
 
-    expect(result).toEqual({ success: true, processed: 0 });
+    expect(result).toEqual({ success: true, processed: 0, styleShortcutChangeApplied: false });
   });
 
   it('cancels processing when paused and cancelled', async () => {
@@ -201,7 +202,7 @@ describe('goalHandlers processGoals', () => {
       }
     );
 
-    expect(result).toEqual({ success: false, processed: 0, cancelled: true });
+    expect(result).toEqual({ success: false, processed: 0, cancelled: true, styleShortcutChangeApplied: false });
   });
 
   it('returns failure when a goal fails to process', async () => {
@@ -218,7 +219,45 @@ describe('goalHandlers processGoals', () => {
       mockSetMessages
     );
 
-    expect(result).toEqual({ success: false, processed: 0 });
+    expect(result).toEqual({ success: false, processed: 0, styleShortcutChangeApplied: false });
+  });
+
+  it('advances remaining sibling goals when style shortcut finishes early', async () => {
+    const { processGoal } = await import('./processGoal');
+    processGoal.mockImplementationOnce(async (...args) => {
+      const opts = args[8];
+      opts.__styleShortcutChangeApplied = true;
+      return { success: true };
+    });
+
+    const tree = [
+      {
+        id: 1,
+        prompt: 'Parent goal',
+        children: [
+          { id: 2, prompt: 'Apply style change', children: [] },
+          { id: 3, prompt: 'Integrate style change', children: [] }
+        ]
+      }
+    ];
+
+    const result = await goalHandlers.processGoals(
+      tree,
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages,
+      { preservePreviewTab: true }
+    );
+
+    expect(processGoal).toHaveBeenCalledTimes(1);
+    expect(goalsApi.advanceGoalPhase).toHaveBeenCalledWith(3, 'testing');
+    expect(goalsApi.advanceGoalPhase).toHaveBeenCalledWith(3, 'implementing');
+    expect(goalsApi.advanceGoalPhase).toHaveBeenCalledWith(3, 'verifying');
+    expect(goalsApi.advanceGoalPhase).toHaveBeenCalledWith(3, 'ready');
+    expect(result).toEqual({ success: true, processed: 2, styleShortcutChangeApplied: true });
   });
 
   it('returns cancelled when pause checks detect a cancel request', async () => {
@@ -236,7 +275,117 @@ describe('goalHandlers processGoals', () => {
       }
     );
 
-    expect(result).toEqual({ success: false, processed: 0, cancelled: true });
+    expect(result).toEqual({ success: false, processed: 0, cancelled: true, styleShortcutChangeApplied: false });
+  });
+
+  it('handles style shortcut sibling advancement when sibling goal id is missing', async () => {
+    const { processGoal } = await import('./processGoal');
+    processGoal.mockImplementationOnce(async (...args) => {
+      const opts = args[8];
+      opts.__styleShortcutChangeApplied = true;
+      return { success: true };
+    });
+
+    const tree = [
+      {
+        id: 1,
+        prompt: 'Parent goal',
+        children: [
+          { id: 2, prompt: 'Apply style change', children: [] },
+          { id: null, prompt: 'Missing id sibling', children: [] }
+        ]
+      }
+    ];
+
+    const result = await goalHandlers.processGoals(
+      tree,
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages,
+      { preservePreviewTab: true }
+    );
+
+    expect(result).toEqual({ success: true, processed: 1, styleShortcutChangeApplied: true });
+    expect(goalsApi.advanceGoalPhase).not.toHaveBeenCalledWith(null, expect.any(String));
+  });
+
+  it('breaks remaining sibling advancement when pause loop reports cancellation', async () => {
+    const { processGoal } = await import('./processGoal');
+    processGoal.mockImplementationOnce(async (...args) => {
+      const opts = args[8];
+      opts.__styleShortcutChangeApplied = true;
+      return { success: true };
+    });
+
+    const shouldPause = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const shouldCancel = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    const result = await goalHandlers.processGoals(
+      [
+        { id: 2, prompt: 'Apply style change', children: [] },
+        { id: 3, prompt: 'Sibling goal', children: [] }
+      ],
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages,
+      {
+        preservePreviewTab: true,
+        shouldPause,
+        shouldCancel
+      }
+    );
+
+    expect(result).toEqual({ success: true, processed: 1, styleShortcutChangeApplied: true });
+    expect(shouldPause).toHaveBeenCalled();
+    expect(shouldCancel).toHaveBeenCalled();
+    expect(goalsApi.advanceGoalPhase).not.toHaveBeenCalledWith(3, 'testing');
+  });
+
+  it('recursively advances child goals when style shortcut leaves nested siblings', async () => {
+    const { processGoal } = await import('./processGoal');
+    processGoal.mockImplementationOnce(async (...args) => {
+      const opts = args[8];
+      opts.__styleShortcutChangeApplied = true;
+      return { success: true };
+    });
+
+    const result = await goalHandlers.processGoals(
+      [
+        {
+          id: 1,
+          prompt: 'Parent goal',
+          children: [
+            { id: 2, prompt: 'Apply style change', children: [] },
+            {
+              id: 3,
+              prompt: 'Remaining sibling',
+              children: [{ id: 4, prompt: 'Nested child', children: [] }]
+            }
+          ]
+        }
+      ],
+      42,
+      mockProject,
+      mockSetPreviewPanelTab,
+      mockSetGoalCount,
+      mockCreateMessage,
+      mockSetMessages,
+      { preservePreviewTab: true }
+    );
+
+    expect(result).toEqual({ success: true, processed: 3, styleShortcutChangeApplied: true });
+    expect(goalsApi.advanceGoalPhase).toHaveBeenCalledWith(3, 'testing');
+    expect(goalsApi.advanceGoalPhase).toHaveBeenCalledWith(4, 'ready');
   });
 });
 

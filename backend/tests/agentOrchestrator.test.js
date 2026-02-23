@@ -1195,6 +1195,53 @@ describe('agentOrchestrator', () => {
       }
     });
 
+    it('falls back to heuristic child plans when planner returns an action-answer prose envelope', async () => {
+      llmClient.generateResponse.mockResolvedValue(
+        JSON.stringify({
+          action: 'answer',
+          answer: 'Create pages for Home/About/Contact and wire nav links with a products dropdown.'
+        })
+      );
+
+      const result = await planGoalFromPrompt({
+        projectId: 777,
+        prompt: 'Add a fixed top navbar with products dropdown pages'
+      });
+
+      expect(result.children.length).toBeGreaterThan(0);
+      expect(result.children.map((child) => child.prompt)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('Identify the components')
+        ])
+      );
+    });
+
+    it('skips clarification-question generation when prompt already includes answered clarifications', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+
+      llmClient.generateResponse.mockResolvedValueOnce(
+        JSON.stringify({
+          childPrompts: ['Implement navbar routes', 'Add dropdown interactions']
+        })
+      );
+
+      const prompt = [
+        'Original request: Add a navbar with products dropdown and subpages',
+        'Current request: Add a navbar with products dropdown and subpages',
+        'User answer: Q: Do you prefer hover or click? A: both Q: Should routing use react-router-dom? A: yes'
+      ].join('\n');
+
+      try {
+        const result = await planGoalFromPrompt({ projectId: 503, prompt });
+
+        expect(llmClient.generateResponse).toHaveBeenCalledTimes(1);
+        expect(result.questions).toEqual([]);
+      } finally {
+        process.env.NODE_ENV = originalEnv;
+      }
+    });
+
     it('falls back to empty clarifications when clarification JSON is invalid', async () => {
       const originalEnv = process.env.NODE_ENV;
       process.env.NODE_ENV = 'development';

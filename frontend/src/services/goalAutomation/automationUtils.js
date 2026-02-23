@@ -18,6 +18,8 @@ import {
   isTestFilePath,
   normalizeReflectionList,
   parseScopeReflectionResponse as parseScopeReflectionResponseFromModule,
+  scoreEditPlanConfidence as scoreEditPlanConfidenceFromModule,
+  validateExecutionContractGate as validateExecutionContractGateFromModule,
   validateEditsAgainstReflection as validateEditsAgainstReflectionFromModule
 } from './automationUtils/reflection.js';
 import {
@@ -147,6 +149,7 @@ export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
             'It MUST start with one verb: added, changed, fixed, updated, refactored, removed. ' +
             'It MUST contain at least two words and at most five words total. ' +
             'Each word MUST contain at least one letter a-z (no numeric-only words; no ranges; no constraint text). ' +
+            'Convert request phrasing into implementation intent: drop request-voice words like give, me, please, can-you, we-need, i-want; keep the actual feature nouns/verbs. ' +
             'Prefer using words/nouns that appear in the user request (plus minimal glue words like "modal"/"color" if needed). ' +
             'Do NOT use meta/instructional words like: rules, json, schema, key, chars, words, tokens, prompt, requirement, branch.'
         },
@@ -163,6 +166,7 @@ export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
           'The branch value must be a short, human-meaningful change description, written in lowercase kebab-case. ' +
           'Start with one verb: added, changed, fixed, updated, refactored, removed. ' +
           'Use at least two words and at most five words total. Each word must contain at least one letter a-z.' +
+          ' Convert request phrasing into implementation intent: remove request-voice words like give/me/please/can-you/we-need/i-want.' +
           ' Prefer using words/nouns from the user request; avoid meta words like rules/json/schema/prompt/requirement/branch.' +
           '\n\nExamples (format only):' +
           '\nUser request: "Turn the background blue" -> {"branch":"changed-background-blue"}' +
@@ -192,7 +196,7 @@ export const requestBranchNameFromLLM = async ({ prompt, fallbackName }) => {
       });
 
       const parsed = parseBranchNameFromLLMText(normalizedRawText);
-      const extracted = extractBranchName(parsed, fallbackName);
+      const extracted = extractBranchName(parsed, '');
       automationLog('ensureBranch:llm:parsed', { attempt, parsed, extracted });
 
       if (isValidBranchName(extracted)) {
@@ -640,10 +644,23 @@ export const parseScopeReflectionResponse = (llmResponse) => parseScopeReflectio
 
 const deriveReflectionPathPrefixes = (entries) => deriveReflectionPathPrefixesFromModule(entries, normalizeRepoPath);
 
-export const validateEditsAgainstReflection = (edits, reflection) => validateEditsAgainstReflectionFromModule({
+export const validateEditsAgainstReflection = (edits, reflection, options = {}) => validateEditsAgainstReflectionFromModule({
   edits,
   reflection,
-  normalizeRepoPath
+  normalizeRepoPath,
+  stage: options?.stage === 'tests' ? 'tests' : 'implementation'
+});
+
+export const scoreEditPlanConfidence = (edits, reflection, options = {}) => scoreEditPlanConfidenceFromModule({
+  edits,
+  reflection,
+  normalizeRepoPath,
+  stage: options?.stage === 'tests' ? 'tests' : 'implementation'
+});
+
+export const validateExecutionContractGate = (reflection, options = {}) => validateExecutionContractGateFromModule({
+  reflection,
+  stage: options?.stage === 'tests' ? 'tests' : 'implementation'
 });
 
 
@@ -828,6 +845,44 @@ export const buildEditsPrompt = ({
 
   const failureContextBlock = formatTestFailureContext(testFailureContext);
   const reflectionBlock = formatScopeReflectionContext(scopeReflection);
+  const styleScope = scopeReflection?.styleScope && typeof scopeReflection.styleScope === 'object'
+    ? scopeReflection.styleScope
+    : null;
+  const styleTargetHints = Array.isArray(styleScope?.targetHints)
+    ? styleScope.targetHints.filter((entry) => typeof entry === 'string' && entry.trim())
+    : [];
+
+  let styleScopeInstructionBlock = '';
+  if (styleScope?.mode === 'global' || styleScope?.targetLevel === 'global' || styleScope?.targetLevel === 'page') {
+    styleScopeInstructionBlock =
+      '\n\nStyle scope instruction:\n' +
+      '- This request is explicitly global/page-level. Apply at least one concrete stylesheet change (do not return a no-op).\n' +
+      '- Global selectors like body/html/:root are allowed for this request when needed.';
+  } else if (styleScope?.mode === 'targeted' && styleTargetHints.length === 0) {
+    styleScopeInstructionBlock =
+      '\n\nStyle scope instruction:\n' +
+      '- Structured target hints are unavailable. Do not no-op. Apply the smallest valid stylesheet change that satisfies the request.\n' +
+      '- If no component selector can be determined confidently, apply a minimal page-level stylesheet update.';
+  }
+
+  const executionContract = {
+    stage: stageLabel,
+    testsNeeded: scopeReflection?.testsNeeded !== false,
+    mustChange: Array.isArray(scopeReflection?.mustChange) ? scopeReflection.mustChange : [],
+    mustAvoid: Array.isArray(scopeReflection?.mustAvoid) ? scopeReflection.mustAvoid : [],
+    mustHave: Array.isArray(scopeReflection?.mustHave) ? scopeReflection.mustHave : [],
+    requiredAssetPaths: Array.isArray(scopeReflection?.requiredAssetPaths) ? scopeReflection.requiredAssetPaths : [],
+    styleScope: styleScope
+      ? {
+          mode: styleScope.mode || null,
+          targetLevel: styleScope.targetLevel || null,
+          enforceTargetScoping: styleScope.enforceTargetScoping === true,
+          forbidGlobalSelectors: styleScope.forbidGlobalSelectors === true,
+          targetHints: styleTargetHints
+        }
+      : null
+  };
+  const executionContractBlock = `\n\nExecution contract (source of truth):\n${JSON.stringify(executionContract, null, 2)}`;
 
   // [FAILURE PREVENTION] Build framework guidance for LLM
   const buildFrameworkContextBlock = (profile, decision, safeguards) => {
@@ -868,6 +923,10 @@ export const buildEditsPrompt = ({
   if (reflectionBlock) {
     userContent += reflectionBlock;
   }
+  userContent += executionContractBlock;
+  if (styleScopeInstructionBlock) {
+    userContent += styleScopeInstructionBlock;
+  }
   if (failureContextBlock) {
     userContent += failureContextBlock;
   }
@@ -892,7 +951,9 @@ export const buildEditsPrompt = ({
             'Do NOT change global selectors (body, html, :root, *, or app-wide wrappers) unless the request explicitly asks for page-wide/app-wide/global styling. ' +
           'IMPORTANT: Never wrap a component in <BrowserRouter> (or <HashRouter>, <MemoryRouter>) if the app already has a router in App.jsx or main.jsx. ' +
           'Adding a second router causes a "Cannot read properties of null (reading \'useRef\')" React crash. ' +
-          'New route-aware components should use <Link>, useNavigate, etc. without their own Router provider.'
+            'New route-aware components should use <Link>, useNavigate, etc. without their own Router provider. ' +
+            'Follow the "Execution contract" in the user message as the single source of truth. ' +
+            'For implementation stage, do not return an empty edits array unless the contract explicitly implies no code changes are required.'
       },
       {
         role: 'user',
@@ -1141,7 +1202,8 @@ export const __automationUtilsTestHooks = {
   normalizeJsonLikeText,
   normalizeReflectionList,
   deriveReflectionPathPrefixes,
-  isTestFilePath
+  isTestFilePath,
+  scoreEditPlanConfidence
 };
 
 export { applyEdits, __setApplyEditsTestDeps };

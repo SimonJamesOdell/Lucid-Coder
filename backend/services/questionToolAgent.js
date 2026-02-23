@@ -3,8 +3,39 @@ import { listProjectDirectory, readProjectFile } from './projectTools.js';
 import { listGoals as listStoredGoals } from './goalStore.js';
 import JSON5 from 'json5';
 
-const MAX_AGENT_STEPS = 4;
+const DEFAULT_MAX_AGENT_STEPS = 8;
+const MIN_AGENT_STEPS = 2;
+const MAX_AGENT_STEPS = 40;
 const CONTENT_SNIPPET_LIMIT = 1200;
+
+const clampStepLimit = (value) => {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const rounded = Math.trunc(value);
+  if (rounded < MIN_AGENT_STEPS) {
+    return MIN_AGENT_STEPS;
+  }
+  if (rounded > MAX_AGENT_STEPS) {
+    return MAX_AGENT_STEPS;
+  }
+  return rounded;
+};
+
+const coerceStepLimit = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const numeric = typeof value === 'number' ? value : Number(value);
+  return clampStepLimit(numeric);
+};
+
+const resolveAgentStepLimit = (requestedMaxSteps) => {
+  const envLimit = coerceStepLimit(process.env.LUCIDCODER_AGENT_MAX_STEPS);
+  const baseLimit = envLimit ?? DEFAULT_MAX_AGENT_STEPS;
+  const requestLimit = coerceStepLimit(requestedMaxSteps);
+  return requestLimit ?? baseLimit;
+};
 
 /* c8 ignore start */
 const SYSTEM_PROMPT = `You are an autonomous software engineer with access to developer tools.
@@ -116,11 +147,18 @@ const isTechStackQuestion = (prompt = '') => {
     return false;
   }
 
+  if (/\btech\s*stack\b/.test(normalized)) {
+    return true;
+  }
+
   return (
-    normalized.includes('tech stack')
-    || normalized.includes('stack')
-    || normalized.includes('framework')
-    || normalized.includes('frameworks')
+    /\bwhat\s+frameworks?\b/.test(normalized)
+    || /\bwhich\s+frameworks?\b/.test(normalized)
+    || /\bframeworks?\s+(?:are|is)\s+(?:used|in\s+use)\b/.test(normalized)
+    || /\bwhat\s+does\s+this\s+(?:project|repo|codebase)\s+use\b.*\bframeworks?\b/.test(normalized)
+    || /\bwhat\s+is\s+the\s+stack\b/.test(normalized)
+    || /\bwhat\s+stack\b/.test(normalized)
+    || /\bwhich\s+stack\b/.test(normalized)
   );
 };
 
@@ -422,6 +460,46 @@ const parseAgentJson = (raw) => {
   return parsed;
 };
 
+const unwrapAnswerEnvelope = (answer) => {
+  if (typeof answer !== 'string') {
+    return answer;
+  }
+
+  let current = answer.trim();
+  if (!current) {
+    return current;
+  }
+
+  for (let index = 0; index < 3; index += 1) {
+    const parsed = coerceJsonObject(current);
+    if (!parsed || typeof parsed !== 'object') {
+      break;
+    }
+
+    const keys = Object.keys(parsed);
+    const isActionEnvelope =
+      parsed.action === 'answer'
+      && typeof parsed.answer === 'string'
+      && keys.every((key) => key === 'action' || key === 'answer');
+    const isQuestionEnvelope =
+      parsed.kind === 'question'
+      && typeof parsed.answer === 'string'
+      && keys.every((key) => key === 'kind' || key === 'answer' || key === 'steps' || key === 'meta');
+
+    if (!isActionEnvelope && !isQuestionEnvelope) {
+      break;
+    }
+
+    const nextValue = parsed.answer.trim();
+    if (!nextValue || nextValue === current) {
+      break;
+    }
+    current = nextValue;
+  }
+
+  return current;
+};
+
 
 const tryRepairPlannerJson = async ({ messages, rawDecision }) => {
   // Keep unit tests strict: only attempt self-repair outside test runs.
@@ -469,13 +547,15 @@ const tryRepairPlannerJson = async ({ messages, rawDecision }) => {
 const createAgentError = (message) => Object.assign(new Error(message), { statusCode: 502 });
 
 
-export const answerProjectQuestion = async ({ projectId, prompt }) => {
+export const answerProjectQuestion = async ({ projectId, prompt, maxSteps }) => {
   if (!projectId) {
     throw new Error('projectId is required');
   }
   if (!prompt || !prompt.trim()) {
     throw new Error('prompt is required');
   }
+
+  const stepLimit = resolveAgentStepLimit(maxSteps);
 
   const steps = [];
 
@@ -489,7 +569,7 @@ export const answerProjectQuestion = async ({ projectId, prompt }) => {
 
   await preloadGoalsContext({ projectId, prompt, steps });
 
-  for (let iteration = 0; iteration < MAX_AGENT_STEPS; iteration += 1) {
+  for (let iteration = 0; iteration < stepLimit; iteration += 1) {
     const messages = buildMessages(prompt, steps);
     const rawDecision = await llmClient.generateResponse(messages, {
       max_tokens: 600,
@@ -602,7 +682,7 @@ export const answerProjectQuestion = async ({ projectId, prompt }) => {
     }
 
     if (action === 'answer') {
-      const answer = decision.answer?.trim();
+      const answer = unwrapAnswerEnvelope(decision.answer?.trim());
       if (!answer) {
         throw createAgentError('Answer action missing answer text');
       }
@@ -617,7 +697,9 @@ export const answerProjectQuestion = async ({ projectId, prompt }) => {
     throw createAgentError(`Unknown agent action: ${action}`);
   }
 
-  throw createAgentError('The agent was unable to answer the question within the step limit.');
+  throw createAgentError(
+    `The agent was unable to answer the question within the step limit (${stepLimit}).`
+  );
 };
 
 export const __testUtils = {
@@ -626,9 +708,11 @@ export const __testUtils = {
   coerceJsonObject,
   shouldIncludeGoalsContext,
   isTechStackQuestion,
+  resolveAgentStepLimit,
   parseJsonObject,
   readOptionalProjectFile,
-  formatFrameworkName
+  formatFrameworkName,
+  unwrapAnswerEnvelope
 };
 
 export default {

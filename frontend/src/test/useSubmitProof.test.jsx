@@ -40,7 +40,9 @@ afterEach(() => {
 });
 
 describe('useSubmitProof', () => {
-  it('falls back to the unknown source guard when the test intent lacks a string source', async () => {
+  it('allows proof submission when the test intent source is missing', async () => {
+    axios.post.mockResolvedValue({ data: {} });
+
     const { submitProofIfNeeded } = renderHookInstance({
       testRunIntent: { source: null }
     });
@@ -50,8 +52,8 @@ describe('useSubmitProof', () => {
       result = await submitProofIfNeeded();
     });
 
-    expect(result).toBe(false);
-    expect(axios.post).not.toHaveBeenCalled();
+    expect(result).toBe(true);
+    expect(axios.post).toHaveBeenCalledTimes(1);
   });
 
   it('sends a null frontend job id when the frontend job lacks an identifier', async () => {
@@ -101,5 +103,74 @@ describe('useSubmitProof', () => {
     expect(payload.jobIds).toEqual(['front-88']);
     expect(payload.frontendJobId).toBe('front-88');
     expect(payload.backendJobId).toBeNull();
+  });
+
+  it('records proof when only frontend test job is present and succeeded', async () => {
+    axios.post.mockResolvedValue({ data: {} });
+
+    const { submitProofIfNeeded } = renderHookInstance({
+      jobsByType: {
+        'frontend:test': { id: 'front-only', status: 'succeeded' },
+        'backend:test': null
+      }
+    });
+
+    let result;
+    await act(async () => {
+      result = await submitProofIfNeeded();
+    });
+
+    expect(result).toBe(true);
+    expect(axios.post).toHaveBeenCalledTimes(1);
+
+    const [, payload] = axios.post.mock.calls[0];
+    expect(payload.jobIds).toEqual(['front-only']);
+    expect(payload.frontendJobId).toBe('front-only');
+    expect(payload.backendJobId).toBeNull();
+  });
+
+  it('skips proof submission when any discovered test job is incomplete', async () => {
+    const { submitProofIfNeeded } = renderHookInstance({
+      jobsByType: {
+        'frontend:test': { id: 'front-1', status: 'running' },
+        'backend:test': { id: 'back-1', status: 'succeeded' }
+      }
+    });
+
+    let result;
+    await act(async () => {
+      result = await submitProofIfNeeded();
+    });
+
+    expect(result).toBe(false);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('returns false when there are no test jobs to record', async () => {
+    const { submitProofIfNeeded } = renderHookInstance({
+      jobsByType: {}
+    });
+
+    let result;
+    await act(async () => {
+      result = await submitProofIfNeeded();
+    });
+
+    expect(result).toBe(false);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('returns false when jobsByType is null', async () => {
+    const { submitProofIfNeeded } = renderHookInstance({
+      jobsByType: null
+    });
+
+    let result;
+    await act(async () => {
+      result = await submitProofIfNeeded();
+    });
+
+    expect(result).toBe(false);
+    expect(axios.post).not.toHaveBeenCalled();
   });
 });

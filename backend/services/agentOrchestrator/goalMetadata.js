@@ -77,6 +77,8 @@ const createRequestClarificationQuestions = ({ llmClient, extractJsonObject }) =
   const raw = await llmClient.generateResponse([systemMessage, userMessage], {
     max_tokens: 300,
     temperature: 0.2,
+    __lucidcoderDisableToolBridge: true,
+    __lucidcoderForceMinimalToolBridge: true,
     __lucidcoderPhase: 'meta_goal_clarification',
     __lucidcoderRequestType: 'clarification_questions'
   });

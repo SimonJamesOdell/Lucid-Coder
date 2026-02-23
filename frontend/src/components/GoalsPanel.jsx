@@ -178,6 +178,25 @@ const GoalsPanel = ({
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false);
   const [clearMode, setClearMode] = useState('all');
   const [selectedGoalId, setSelectedGoalId] = useState(null);
+  const clearInFlightRef = useRef(false);
+
+  const isAlreadyMissingGoalError = (error) => {
+    const status = Number(error?.response?.status);
+    if (status === 404 || status === 410) {
+      return true;
+    }
+
+    const details = [
+      error?.message,
+      error?.response?.data?.error,
+      error?.response?.data?.details
+    ]
+      .filter((part) => typeof part === 'string' && part.trim())
+      .join(' ')
+      .toLowerCase();
+
+    return /not\s+found|already\s+(?:deleted|removed)|no\s+such\s+goal/.test(details);
+  };
 
   const fullGoalTree = useMemo(() => buildGoalTree(goals), [goals]);
   const goalTabs = useMemo(() => splitGoalTreeForTabs(fullGoalTree), [fullGoalTree]);
@@ -479,6 +498,10 @@ const GoalsPanel = ({
     }
     /* c8 ignore stop */
 
+    if (clearInFlightRef.current || isClearing) {
+      return;
+    }
+
     const rootIds = clearTargets.map((goal) => goal?.id).filter(Boolean);
     /* c8 ignore start */
     if (rootIds.length === 0) {
@@ -486,12 +509,20 @@ const GoalsPanel = ({
     }
     /* c8 ignore stop */
 
+    clearInFlightRef.current = true;
     setIsClearing(true);
     setError(null);
     try {
       for (const id of rootIds) {
         // Delete top-level goals; the backend deletes children as well.
-        await deleteGoal(id);
+        try {
+          await deleteGoal(id);
+        } catch (error) {
+          if (isAlreadyMissingGoalError(error)) {
+            continue;
+          }
+          throw error;
+        }
       }
       await loadGoals(projectId);
       markTestRunIntent?.('user');
@@ -499,9 +530,14 @@ const GoalsPanel = ({
     } catch {
       setError('Failed to clear goals');
     } finally {
+      clearInFlightRef.current = false;
       setIsClearing(false);
     }
   };
+
+  if (GoalsPanel.__testHooks) {
+    GoalsPanel.__testHooks.latestHandleClearGoals = handleClearGoals;
+  }
 
   const openClearDialog = (mode) => {
     setClearMode(mode);

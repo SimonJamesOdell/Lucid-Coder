@@ -603,6 +603,30 @@ describe('GoalsPanel', () => {
     });
   });
 
+  it('ignores repeated clear confirm clicks while a clear operation is already in flight', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValueOnce([
+      { id: 40, prompt: 'Current goal', status: 'planning', parentGoalId: null }
+    ]);
+
+    let resolveDelete;
+    goalsApi.deleteGoal.mockImplementation(() => new Promise((resolve) => {
+      resolveDelete = resolve;
+    }));
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-clear-all'));
+    const confirm = await screen.findByTestId('modal-confirm');
+
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    expect(goalsApi.deleteGoal).toHaveBeenCalledTimes(1);
+    resolveDelete({ success: true, deletedGoalIds: [40] });
+  });
+
   it('renders child goals in creation order (oldest first)', async () => {
     useAppState.mockReturnValue({ currentProject: project, jobState: null });
     goalsApi.fetchGoals.mockResolvedValue([
@@ -753,6 +777,103 @@ describe('GoalsPanel', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('Failed to clear goals');
+    });
+  });
+
+  it('ignores double-confirm clicks while clear goals is already in progress', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([{ id: 61, prompt: 'Delete me', status: 'planning', parentGoalId: null }]);
+
+    let resolveDelete;
+    const deletePromise = new Promise((resolve) => {
+      resolveDelete = resolve;
+    });
+    goalsApi.deleteGoal.mockReturnValue(deletePromise);
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-clear-all'));
+    const confirmButton = await screen.findByTestId('modal-confirm');
+
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    expect(goalsApi.deleteGoal).toHaveBeenCalledTimes(1);
+
+    resolveDelete({ success: true });
+    await waitFor(() => {
+      expect(screen.queryByTestId('modal-content')).not.toBeInTheDocument();
+    });
+  });
+
+  it('returns early from clear handler when clear operation is already in-flight', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals.mockResolvedValue([{ id: 71, prompt: 'Guard goal', status: 'planning', parentGoalId: null }]);
+
+    let resolveDelete;
+    goalsApi.deleteGoal.mockImplementation(() => new Promise((resolve) => {
+      resolveDelete = resolve;
+    }));
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-clear-all'));
+
+    const firstRun = GoalsPanel.__testHooks?.latestHandleClearGoals?.();
+    const secondRun = GoalsPanel.__testHooks?.latestHandleClearGoals?.();
+
+    expect(goalsApi.deleteGoal).toHaveBeenCalledTimes(1);
+
+    resolveDelete({ success: true });
+    await firstRun;
+    await secondRun;
+  });
+
+  it('treats already-deleted goal errors as successful clear operations', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals
+      .mockResolvedValueOnce([{ id: 62, prompt: 'Already gone', status: 'planning', parentGoalId: null }])
+      .mockResolvedValueOnce([]);
+    goalsApi.deleteGoal.mockRejectedValue({ response: { status: 404 } });
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-clear-all'));
+    await user.click(await screen.findByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('modal-content')).not.toBeInTheDocument();
+    });
+  });
+
+  it('treats already-missing errors from response error/details text as successful clear operations', async () => {
+    useAppState.mockReturnValue({ currentProject: project, jobState: null });
+    goalsApi.fetchGoals
+      .mockResolvedValueOnce([{ id: 63, prompt: 'Missing by text', status: 'planning', parentGoalId: null }])
+      .mockResolvedValueOnce([]);
+    goalsApi.deleteGoal.mockRejectedValue({
+      response: {
+        status: 500,
+        data: {
+          error: 'Goal already removed',
+          details: 'no such goal exists in storage'
+        }
+      }
+    });
+
+    const user = userEvent.setup();
+    render(<GoalsPanel mode="tab" />);
+
+    await user.click(await screen.findByTestId('goals-clear-all'));
+    await user.click(await screen.findByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('modal-content')).not.toBeInTheDocument();
     });
   });
 

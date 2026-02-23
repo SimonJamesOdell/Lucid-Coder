@@ -15,6 +15,14 @@ export const useSubmitProof = ({
   allTestsCompleted
 }) => {
   const lastRecordedProofKeyRef = useRef(null);
+  const normalizedJobsByType = jobsByType && typeof jobsByType === 'object' ? jobsByType : {};
+
+  const collectProofJobs = useCallback(() => {
+    const entries = Object.entries(normalizedJobsByType);
+    return entries
+      .filter(([type, job]) => type.endsWith(':test') && job)
+      .map(([, job]) => job);
+  }, [normalizedJobsByType]);
 
   const submitProofIfNeeded = useCallback(async ({ onBeforeSubmit } = {}) => {
     if (!projectId || !activeBranchName) {
@@ -26,17 +34,21 @@ export const useSubmitProof = ({
     }
 
     const lastRunSource = typeof testRunIntent?.source === 'string' ? testRunIntent.source : 'unknown';
-    if (lastRunSource !== 'automation') {
+
+    const frontendJob = normalizedJobsByType['frontend:test'];
+    const backendJob = normalizedJobsByType['backend:test'];
+    const proofJobs = collectProofJobs();
+
+    if (!proofJobs.length) {
       return false;
     }
 
-    const frontendJob = jobsByType['frontend:test'];
-    const backendJob = jobsByType['backend:test'];
-    if (frontendJob?.status !== 'succeeded' || backendJob?.status !== 'succeeded') {
+    const hasIncompleteProofJob = proofJobs.some((job) => job?.status !== 'succeeded');
+    if (hasIncompleteProofJob) {
       return false;
     }
 
-    const jobIds = [frontendJob?.id, backendJob?.id].filter(Boolean);
+    const jobIds = proofJobs.map((job) => job?.id).filter(Boolean);
     if (jobIds.length === 0) {
       return false;
     }
@@ -56,7 +68,7 @@ export const useSubmitProof = ({
       source: lastRunSource
     });
 
-    if (response.data?.overview && typeof syncBranchOverview === 'function') {
+    if (response?.data?.overview && typeof syncBranchOverview === 'function') {
       syncBranchOverview(projectId, response.data.overview);
     }
 
@@ -66,7 +78,8 @@ export const useSubmitProof = ({
     projectId,
     activeBranchName,
     activeWorkingBranch?.status,
-    jobsByType,
+    normalizedJobsByType,
+    collectProofJobs,
     syncBranchOverview,
     testRunIntent
   ]);

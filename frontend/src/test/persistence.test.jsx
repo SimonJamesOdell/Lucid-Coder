@@ -128,7 +128,7 @@ describe('persistence helpers', () => {
   test('loadTestingSettingsFromStorage merges stored values', () => {
     localStorage.setItem('testingSettings', JSON.stringify({ coverageTarget: 70 }));
 
-    expect(loadTestingSettingsFromStorage()).toEqual({ coverageTarget: 70 });
+    expect(loadTestingSettingsFromStorage()).toEqual({ coverageTarget: 70, maxSteps: 8 });
   });
 
   test('loadTestingSettingsFromStorage returns defaults when window is undefined', () => {

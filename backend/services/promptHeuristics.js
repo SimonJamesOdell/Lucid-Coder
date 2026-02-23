@@ -1,5 +1,40 @@
 const normalizePrompt = (prompt = '') => String(prompt || '').trim().toLowerCase();
 
+export const hasResolvedClarificationAnswers = (prompt = '') => {
+  const raw = String(prompt || '');
+  if (!raw) {
+    return false;
+  }
+
+  if (!/\buser\s+answer\s*:/i.test(raw)) {
+    return false;
+  }
+
+  if (/resolved\s+clarification\s+answers\s*:/i.test(raw)) {
+    return true;
+  }
+
+  const userAnswerMatch = raw.match(/\bUser\s+answer\s*:([\s\S]*)$/i);
+  if (!userAnswerMatch?.[1]) {
+    return false;
+  }
+
+  const answerBlock = userAnswerMatch[1].trim();
+  if (!answerBlock) {
+    return false;
+  }
+
+  const multilineAnswer = answerBlock
+    .split(/\r?\n/)
+    .map((line) => String(line).trim())
+    .find((line) => /^A\s*:\s*.+$/i.test(line));
+  if (multilineAnswer) {
+    return true;
+  }
+
+  return /\bA\s*:\s*[^\s].+/i.test(answerBlock);
+};
+
 export const extractSelectedProjectAssets = (prompt = '') => {
   const raw = String(prompt || '');
   if (!raw) {
@@ -50,6 +85,8 @@ export const extractLatestRequest = (prompt = '') => {
   const raw = String(prompt || '');
   if (!raw) return raw;
 
+  const SECTION_PREFIX_REGEX = /^(original request|current request|clarification questions|user answer|selected project assets|selected preview element path)\s*:/i;
+
   const looksLikeClarificationTranscript = (value = '') => {
     const text = String(value || '').trim();
     if (!text) {
@@ -67,35 +104,100 @@ export const extractLatestRequest = (prompt = '') => {
   };
 
   const lines = raw.split(/\r?\n/).map((line) => line.trim());
-  const findValueAfterPrefix = (prefix) => {
+  const findSectionValueAfterPrefix = (prefix) => {
+    const normalizedPrefix = String(prefix).toLowerCase();
+    const isUserAnswerPrefix = normalizedPrefix === 'user answer:';
+
     for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
       const line = lines[idx];
-      if (line.toLowerCase().startsWith(prefix.toLowerCase())) {
-        return line.slice(prefix.length).trim();
+      if (line.toLowerCase().startsWith(normalizedPrefix)) {
+        const initial = line.slice(prefix.length).trim();
+        const collected = [];
+        if (initial) {
+          collected.push(initial);
+        }
+
+        for (let follow = idx + 1; follow < lines.length; follow += 1) {
+          const candidate = lines[follow];
+          if (SECTION_PREFIX_REGEX.test(candidate)) {
+            break;
+          }
+          if (isUserAnswerPrefix && (/^assistant\s*:/i.test(candidate) || /^user\s*:/i.test(candidate))) {
+            break;
+          }
+          collected.push(candidate);
+        }
+
+        return collected.join('\n').trim();
       }
     }
     return '';
   };
 
-  const current = findValueAfterPrefix('Current request:');
-  if (current) return unwrapNestedLabel(current);
+  const extractClarificationAnswers = (value = '') => {
+    const text = String(value || '').trim();
+    if (!text) {
+      return '';
+    }
 
-  const answer = findValueAfterPrefix('User answer:');
+    const answerLines = text
+      .split(/\r?\n/)
+      .map((line) => {
+        const match = String(line || '').trim().match(/^A\s*:\s*(.+)$/i);
+        return match?.[1] ? match[1].trim() : '';
+      })
+      .filter(Boolean);
+
+    if (answerLines.length > 0) {
+      return answerLines.join('; ');
+    }
+
+    const inlineAnswers = [];
+    const inlinePattern = /\bA\s*:\s*([\s\S]*?)(?=\s+Q\s*:|$)/gi;
+    let match = inlinePattern.exec(text);
+    while (match) {
+      const candidate = String(match[1] || '').trim();
+      inlineAnswers.push(candidate);
+      match = inlinePattern.exec(text);
+    }
+
+    const normalizedInlineAnswers = inlineAnswers.filter(Boolean);
+
+    if (normalizedInlineAnswers.length === 0) {
+      return '';
+    }
+
+    return normalizedInlineAnswers.join('; ');
+  };
+
+  const current = findSectionValueAfterPrefix('Current request:');
+  const answer = findSectionValueAfterPrefix('User answer:');
   const normalizedAnswer = answer ? unwrapNestedLabel(answer) : '';
   const answerLooksLikeClarification = looksLikeClarificationTranscript(normalizedAnswer);
 
-  const original = findValueAfterPrefix('Original request:');
+  if (current) {
+    const normalizedCurrent = unwrapNestedLabel(current);
+    const resolvedAnswers = extractClarificationAnswers(normalizedAnswer);
+
+    if (answerLooksLikeClarification && resolvedAnswers) {
+      return `${normalizedCurrent}\n\nResolved clarification answers: ${resolvedAnswers}`;
+    }
+    return normalizedCurrent;
+  }
+
+  const original = findSectionValueAfterPrefix('Original request:');
   const normalizedOriginal = original ? unwrapNestedLabel(original) : '';
   if (normalizedOriginal) {
     return normalizedOriginal;
   }
 
-  if (normalizedAnswer && !answerLooksLikeClarification) {
+  if (normalizedAnswer) {
     return normalizedAnswer;
   }
 
-  if (normalizedAnswer) {
-    return normalizedAnswer;
+  const hasExplicitUserAnswerHeader = /(?:^|\n)\s*User\s+answer\s*:/i.test(raw);
+  if (hasExplicitUserAnswerHeader) {
+    return raw;
   }
 
   return unwrapNestedLabel(raw);
@@ -211,5 +313,6 @@ export default {
   isStyleOnlyPrompt,
   extractStyleColor,
   extractLatestRequest,
-  extractSelectedProjectAssets
+  extractSelectedProjectAssets,
+  hasResolvedClarificationAnswers
 };

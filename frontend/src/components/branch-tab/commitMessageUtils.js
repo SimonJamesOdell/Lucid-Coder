@@ -15,9 +15,16 @@ export const COMMIT_INSTRUCTION_PREFIXES = [
 
 export const COMMIT_INSTRUCTION_KEYWORDS = [
   'subject line',
+  'blank line',
+  'body lines',
   'body optional',
   'provide subject',
   'ensure lines',
+  '72 chars',
+  '72 characters',
+  '< 72',
+  '<=72',
+  '≤72',
   'no placeholders',
   'respond with instructions',
   'count characters',
@@ -34,6 +41,10 @@ const containsInstructionalLanguage = (text = '') => {
     return false;
   }
   const lower = text.toLowerCase();
+  const hasFormatArtifact = /blank\s+lin(?:e|es)|(?:<|<=|≤)?\s*72\s*(?:chars?|characters?)/i.test(text);
+  if (hasFormatArtifact) {
+    return true;
+  }
   return COMMIT_INSTRUCTION_KEYWORDS.some((keyword) => lower.includes(keyword));
 };
 
@@ -49,7 +60,7 @@ export const PLACEHOLDER_COMMIT_PATTERNS = [
   /^commit message$/i
 ];
 
-export const COMMIT_SYSTEM_PROMPT = 'You are an experienced engineer reviewing git diffs. Explain what changed and why in clear, natural language. Reference files or behaviors when it helps, and never repeat the instructions or talk about formatting.';
+export const COMMIT_SYSTEM_PROMPT = 'You are an experienced engineer reviewing staged git changes. Produce a concrete commit draft and return only valid JSON with keys "subject" and "body". Keep the subject imperative and specific to the actual staged changes.';
 
 export const looksLikeCommitMessage = (text = '') => {
   if (!text) {

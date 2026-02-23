@@ -21,6 +21,10 @@ describe('containsInstructionalLanguage', () => {
   test('detects instruction keywords in phrases', () => {
     expect(containsInstructionalLanguage('Ensure the subject line stays short.')).toBe(true);
   });
+
+  test('detects formatting artifacts about blank lines and 72-char limits', () => {
+    expect(containsInstructionalLanguage('Then blank line, then body lines < 72 chars each')).toBe(true);
+  });
 });
 
 describe('isDescriptiveCommitMessage', () => {
@@ -156,6 +160,11 @@ describe('extractCommitCandidateFromText', () => {
 
   test('returns empty string when every segment is filtered out', () => {
     expect(extractCommitCandidateFromText('Fix')).toBe('');
+  });
+
+  test('rejects formatting-instruction text as a commit candidate', () => {
+    const payload = 'Then blank line, then body lines < 72 chars each';
+    expect(extractCommitCandidateFromText(payload)).toBe('');
   });
 });
 

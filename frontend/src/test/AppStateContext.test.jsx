@@ -1435,6 +1435,50 @@ describe('AppStateContext', () => {
     })
   })
 
+  test('clearStagedChanges keeps status unset when previous status is not a string', async () => {
+    const defaultFetchImpl = fetch.getMockImplementation()
+    fetch.mockImplementation((url = '', options = {}) => {
+      if (typeof url === 'string' && url.includes('/branches/stage') && options?.method === 'DELETE') {
+        return Promise.resolve(mockApiResponse({
+          success: true,
+          overview: {
+            workingBranches: [
+              {
+                name: 'feature/statusless',
+                stagedFiles: []
+              }
+            ]
+          }
+        }))
+      }
+      return defaultFetchImpl ? defaultFetchImpl(url, options) : Promise.resolve(mockApiResponse({ success: true }))
+    })
+
+    const { result } = renderUseAppState()
+
+    await act(async () => {
+      result.current.syncBranchOverview('proj-statusless', {
+        workingBranches: [
+          {
+            name: 'feature/statusless',
+            stagedFiles: [{ path: 'src/only.js', timestamp: 'now' }]
+          }
+        ]
+      })
+    })
+
+    await act(async () => {
+      await result.current.clearStagedChanges('proj-statusless')
+    })
+
+    await waitFor(() => {
+      const branch = result.current.workingBranches['proj-statusless']
+      expect(branch.commits).toBe(0)
+      expect(typeof branch.status).not.toBe('string')
+      expect(branch.status).not.toBe('active')
+    })
+  })
+
   test('handles API fetch failure gracefully', async () => {
     const fallbackProjects = [{ id: 'cached', name: 'Cached' }]
     localStorage.setItem('projects', JSON.stringify(fallbackProjects))

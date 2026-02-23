@@ -82,6 +82,7 @@ const PreviewPanel = () => {
   const testActionsRef = useRef(testActions);
   const projectIdRef = useRef(currentProject?.id ?? null);
   const lastAutomationFocusedPathRef = useRef('');
+  const lastHandledEditorFocusKeyRef = useRef('');
 
   const getLatestStagedFilePath = useCallback(() => {
     const stagedFiles = workspaceChanges?.[currentProject?.id]?.stagedFiles;
@@ -153,6 +154,10 @@ const PreviewPanel = () => {
 
   useEffect(() => {
     projectIdRef.current = currentProject?.id ?? null;
+  }, [currentProject?.id]);
+
+  useEffect(() => {
+    lastHandledEditorFocusKeyRef.current = '';
   }, [currentProject?.id]);
 
   useEffect(() => {
@@ -251,6 +256,23 @@ const PreviewPanel = () => {
     if (!editorFocusRequest || editorFocusRequest.projectId !== currentProject?.id) {
       return;
     }
+
+    const requestKey = editorFocusRequest.requestedAt
+      ? `at:${editorFocusRequest.requestedAt}`
+      : [
+          editorFocusRequest.projectId,
+          editorFocusRequest.filePath || '',
+          editorFocusRequest.source || '',
+          editorFocusRequest.highlight || '',
+          editorFocusRequest.commitSha || ''
+        ].join('|');
+
+    if (requestKey && requestKey === lastHandledEditorFocusKeyRef.current) {
+      return;
+    }
+
+    lastHandledEditorFocusKeyRef.current = requestKey;
+
     if (activeTab !== 'files') {
       setActiveTab('files', { source: 'automation' });
     }
@@ -473,6 +495,7 @@ const PreviewPanel = () => {
       pendingTestRunRef.current = {
         source: typeof options?.source === 'string' ? options.source : 'automation',
         autoCommit: Boolean(options?.autoCommit),
+        forceRun: Boolean(options?.forceRun),
         returnToCommits: Boolean(options?.returnToCommits)
       };
     }
@@ -647,10 +670,17 @@ const PreviewPanel = () => {
           </button>
           <button
             data-testid="commits-tab"
-            className={`tab ${activeTab === 'commits' ? 'active' : ''}`}
+            className={`tab ${activeTab === 'commits' ? 'active' : ''} ${hasBranchNotification ? 'with-indicator' : ''}`.trim()}
             onClick={() => setActiveTab('commits', { source: 'user' })}
           >
             Commits
+            {hasBranchNotification && (
+              <span
+                className="tab-indicator"
+                data-testid="commits-spot-indicator"
+                aria-label="Commits tab has pending changes"
+              />
+            )}
           </button>
           <button
             data-testid="git-tab"

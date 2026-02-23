@@ -124,6 +124,7 @@ export const createBranchWorkflowCommits = (core) => {
       max_tokens: 120,
       temperature: 0,
       __lucidcoderDisableToolBridge: true,
+      __lucidcoderForceMinimalToolBridge: true,
       __lucidcoderPhase: 'changelog',
       __lucidcoderRequestType: 'changelog_entry'
     };
@@ -698,10 +699,47 @@ export const createBranchWorkflowCommits = (core) => {
       throw withStatusCode(new Error('commitSha is required'), 400);
     }
 
+    let parentCount = 1;
     try {
-      await runProjectGit(context, ['revert', '--no-edit', normalizedSha]);
+      const parentsResult = await runProjectGit(context, [
+        'show',
+        normalizedSha,
+        '--quiet',
+        '--pretty=format:%P'
+      ]);
+      const parentShas = String(parentsResult?.stdout || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      parentCount = parentShas.length;
+    } catch {
+      parentCount = 1;
+    }
+
+    const revertArgs = parentCount > 1
+      ? ['revert', '--no-edit', '-m', '1', normalizedSha]
+      : ['revert', '--no-edit', normalizedSha];
+
+    try {
+      await runProjectGit(context, revertArgs);
     } catch (error) {
-      console.warn(`[CommitHistory] Failed to revert commit ${normalizedSha}: ${error.message}`);
+      const message = String(error?.message || 'revert failed');
+      const isInitialCommit = /initial\s+commit|root\s+commit|cannot\s+revert\s+(?:a\s+)?root\s+commit/i.test(message);
+      const isNoOpRevert = /nothing to commit|no changes added to commit|previous cherry-pick is now empty|nothing to revert/i.test(message);
+
+      if (isInitialCommit) {
+        throw withStatusCode(new Error('Initial commit cannot be reverted automatically'), 400);
+      }
+
+      if (isNoOpRevert) {
+        await runProjectGit(context, ['revert', '--abort']).catch(() => null);
+        return {
+          reverted: normalizedSha,
+          noop: true
+        };
+      }
+
+      console.warn(`[CommitHistory] Failed to revert commit ${normalizedSha}: ${message}`);
       throw withStatusCode(new Error(`Failed to revert commit: ${error.message}`), 500);
     }
 
@@ -868,6 +906,34 @@ export const createBranchWorkflowCommits = (core) => {
       } else {
         throw withStatusCode(new Error('Latest test run must pass before merging'), 400);
       }
+    }
+
+    const hasMergeableChanges = async () => {
+      if (context.gitReady) {
+        try {
+          const countResult = await runProjectGit(context, ['rev-list', '--count', `main..${branch.name}`]);
+          const countRaw = typeof countResult?.stdout === 'string'
+            ? countResult.stdout.trim()
+            : String(countResult?.stdout ?? '').trim();
+          const count = Number.parseInt(countRaw, 10);
+          if (Number.isFinite(count)) {
+            return count > 0;
+          }
+        } catch {
+          // Fall back to other signals.
+        }
+      }
+
+      const aheadCount = Number(branch?.ahead_commits);
+      if (context.gitReady && Number.isFinite(aheadCount)) {
+        return aheadCount > 0;
+      }
+
+      return true;
+    };
+
+    if (!allowCssOnlyMerge && !(await hasMergeableChanges())) {
+      throw withStatusCode(new Error('No mergeable changes on this branch'), 400);
     }
 
     let enforcementError = null;
