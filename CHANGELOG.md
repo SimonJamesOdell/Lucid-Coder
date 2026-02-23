@@ -1,3 +1,11 @@
+## 0.8.0 (2026-02-23)
+- Improve test auto-fix behavior in `ChatPanel` by detecting missing dependency/import failures and queuing workspace package-install jobs (with deduplication) instead of repeatedly thrashing test-fix goal loops.
+- Harden commit/test handoff flows in `TestTab` and `CommitsTab`, including proof-submission error handling, revert/noop status handling, and branch-proof guard-path reliability for continue-to-commit workflows.
+- Strengthen goal-automation resilience across `processGoal`, `goalHandlers`, and automation utilities: safer framework-analysis context handling, pause/cancel/sibling-advance edge paths, and additional scope/reflection guard coverage.
+- Refine frontend orchestration utilities (`PreviewPanel`, `GoalsPanel`, `frameworkOrchestrator`, `useCommitComposer`, `useSubmitProof`) to close remaining branch-edge behavior around focus routing keys, already-missing goal clears, structured draft detection, and null-safe proof submission.
+- Expand backend reliability and coverage around agent/orchestrator and branch-workflow paths (`agentRequestHandler`, `agentOrchestrator`, `goalStore`, `promptHeuristics`, `questionToolAgent`, `commitsApi`, `llm-client`) with targeted tests for fallback, error, and branch-resolution behavior.
+- Finalize release metadata/version artifacts for `0.8.0` (root/frontend/backend package manifests + lockfiles, shared version module, and versioning docs).
+
 ## 0.7.9 (2026-02-21)
 - Close coverage gaps: add tests for `AssetsTab`, `ChatPanel`, `FilesTab`, `reflection` utilities, `agentOrchestrator`, `promptHeuristics`, and `questionToolAgent` (frontend and backend unit/integration suites).
 - Frontend: refine `AssetsTab` (assistant asset-context persistence, image zoom/pan, upload name sanitization, rename/optimize modal flows, and live asset-update handling), `ChatPanel` (improved thinking/automation topic indicator, better suite-selection heuristics for reruns, clarification/tracking fixes), and `FilesTab` (rendering and repository-path handling fixes). Tests added to cover the UI edge branches.
