@@ -230,7 +230,7 @@ const Navigation = ({ versionLabel = null }) => {
           </DropdownItem>
 
           <DropdownItem onClick={handleOpenTestingSettings}>
-            Configure Testing
+            Configure Agent
           </DropdownItem>
         </Dropdown>
 

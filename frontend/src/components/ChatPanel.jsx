@@ -49,6 +49,90 @@ import { AUTOMATION_LOG_EVENT } from '../services/goalAutomation/automationUtils
 export { formatAgentStepMessage };
 
 const createSuiteFlags = () => ({ frontend: false, backend: false });
+const MAX_AUTOFIX_GOAL_LOOPS = 6;
+
+const buildAutofixLoopSignature = (payload = {}) => {
+  const prompt = typeof payload?.prompt === 'string' ? payload.prompt.trim() : '';
+  const childPrompts = Array.isArray(payload?.childPrompts)
+    ? payload.childPrompts
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter(Boolean)
+    : [];
+  return [prompt, ...childPrompts].join('\n---\n');
+};
+
+const isLikelyExternalPackageName = (value = '') => {
+  const name = String(value || '').trim();
+  if (!name) {
+    return false;
+  }
+  if (name.startsWith('.') || name.startsWith('/')) {
+    return false;
+  }
+  if (/^[a-z]:\\/i.test(name) || name.includes('\\')) {
+    return false;
+  }
+  if (/\.(?:jsx?|tsx?)$/i.test(name)) {
+    return false;
+  }
+  return /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name);
+};
+
+const normalizeDependencyPackageName = (packageName) => String(packageName || '').trim();
+
+const extractDependencyInstallRequests = (payload = {}, { hasBackend } = {}) => {
+  const textBlocks = [];
+  if (typeof payload?.prompt === 'string') {
+    textBlocks.push(payload.prompt);
+  }
+  if (Array.isArray(payload?.childPrompts)) {
+    for (const childPrompt of payload.childPrompts) {
+      if (typeof childPrompt === 'string') {
+        textBlocks.push(childPrompt);
+      }
+    }
+  }
+  if (payload?.failureContext && typeof payload.failureContext === 'object') {
+    try {
+      textBlocks.push(JSON.stringify(payload.failureContext));
+    } catch {
+      // ignore
+    }
+  }
+
+  const combined = textBlocks.join('\n');
+  if (!combined.trim()) {
+    return [];
+  }
+
+  const requests = [];
+  const requestKeys = new Set();
+  const addRequest = (workspace, packageName) => {
+    const normalizedWorkspace = workspace === 'backend' && hasBackend ? 'backend' : 'frontend';
+    const normalizedPackage = normalizeDependencyPackageName(packageName);
+    if (!isLikelyExternalPackageName(normalizedPackage)) {
+      return;
+    }
+    const key = `${normalizedWorkspace}:${normalizedPackage}`;
+    if (requestKeys.has(key)) {
+      return;
+    }
+    requestKeys.add(key);
+    requests.push({ workspace: normalizedWorkspace, packageName: normalizedPackage });
+  };
+
+  const importFailurePattern = /Failed to resolve import\s+["']([^"']+)["']/gi;
+  for (const match of combined.matchAll(importFailurePattern)) {
+    addRequest('frontend', match[1]);
+  }
+
+  const contractDependencyPattern = /(frontend|backend)\/package\.json[^\n,)]*\(\s*add\s+([@a-z0-9._/-]+)\s+dependency\s*\)/gi;
+  for (const match of combined.matchAll(contractDependencyPattern)) {
+    addRequest(match[1], match[2]);
+  }
+
+  return requests;
+};
 
 const hasAnySuiteFlag = (flags) => Boolean(flags?.frontend || flags?.backend);
 
@@ -181,6 +265,20 @@ const formatAutomationRunMessage = (phase, suites, hasBackend) => {
   return isRerun ? 'Re-running frontend tests…' : 'Starting frontend tests…';
 };
 
+const shouldPreservePreviewForShortCircuit = (result) => {
+  if (!result || typeof result !== 'object') {
+    return false;
+  }
+
+  const styleScope = result?.meta?.styleScope || result?.parent?.metadata?.styleScope;
+  const styleScopeMode = typeof styleScope?.mode === 'string' ? styleScope.mode.trim().toLowerCase() : '';
+  if (styleScopeMode === 'global' || styleScopeMode === 'targeted') {
+    return true;
+  }
+
+  return result?.parent?.metadata?.styleOnly === true;
+};
+
 const ChatMessagesPane = React.memo(({
   messages,
   isSending,
@@ -227,11 +325,9 @@ const ChatMessagesPane = React.memo(({
         )}
         {isSending ? (
           <div className="chat-typing" data-testid="chat-typing">
-            {thinkingAutomationTopic || thinkingTopic ? (
-              <span className="chat-typing__topic" data-testid="chat-typing-topic">
-                Thinking about: {thinkingAutomationTopic || thinkingTopic}
-              </span>
-            ) : null}
+            <span className="chat-typing__topic" data-testid="chat-typing-topic">
+              Thinking about task
+            </span>
             <span className="chat-typing__dots" aria-hidden="true">
               <span />
               <span />
@@ -293,12 +389,15 @@ const ChatPanel = ({
     syncBranchOverview,
     workingBranches,
     jobState,
-    projectProcesses
+    projectProcesses,
+    testingSettings
   } = useAppState();
   const inputRef = useRef(null);
   const filePickerRef = useRef(null);
   const autoFixInFlightRef = useRef(false);
   const autoFixCancelRef = useRef(false);
+  const autoFixLoopGuardRef = useRef({ signature: '', count: 0 });
+  const autoFixDependencyInstallRef = useRef(new Set());
   const lastAutomatedStagedPathsRef = useRef(new Set());
   const lastProjectIdRef = useRef(null);
   const messagesRef = useRef([]);
@@ -598,6 +697,7 @@ const ChatPanel = ({
       return;
     }
     lastProjectIdRef.current = projectId;
+    autoFixDependencyInstallRef.current = new Set();
     if (!projectId) {
       setMessages([]);
       return;
@@ -998,11 +1098,14 @@ const ChatPanel = ({
   }, [createMessage, isTestEnv, prefersReducedMotion, scrollMessagesToBottomIfEnabled]);
 
   const runAgentRequestStream = useCallback(async ({ projectId, prompt }) => {
+    const parsedMaxSteps = Number.parseInt(testingSettings?.maxSteps, 10);
+    const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : undefined;
     let result = null;
     let streamError = null;
     await agentRequestStream({
       projectId,
       prompt,
+      maxSteps,
       onChunk: appendStreamingChunk,
       onComplete: (payload) => {
         result = payload;
@@ -1021,7 +1124,7 @@ const ChatPanel = ({
     }
 
     return result;
-  }, [appendStreamingChunk]);
+  }, [appendStreamingChunk, testingSettings]);
 
   const handleAgentResult = useCallback(async (result, { streamedAnswer = false, prompt, resolvedPrompt } = {}) => {
     if (!result) {
@@ -1058,6 +1161,8 @@ const ChatPanel = ({
     }
 
     if (result.kind === 'feature') {
+      const preservePreviewTab = shouldPreservePreviewForShortCircuit(result);
+
       if (result.planOnly) {
         await handlePlanOnlyFeature(
           currentProject.id,
@@ -1067,7 +1172,7 @@ const ChatPanel = ({
           setGoalCount,
           createMessage,
           setMessages,
-          { requestEditorFocus, syncBranchOverview }
+          { requestEditorFocus, syncBranchOverview, preservePreviewTab }
         );
         return;
       }
@@ -1082,7 +1187,7 @@ const ChatPanel = ({
         setGoalCount,
         createMessage,
         setMessages,
-        { requestEditorFocus, syncBranchOverview, touchTracker: executionTouchTracker }
+        { requestEditorFocus, syncBranchOverview, touchTracker: executionTouchTracker, preservePreviewTab }
       );
 
       if (execution?.needsClarification) {
@@ -1131,12 +1236,30 @@ const ChatPanel = ({
       }
 
       if (execution?.success === true && typeof startAutomationJob === 'function') {
+        if (preservePreviewTab) {
+          setMessages((prev) => [
+            ...prev,
+            createMessage(
+              'assistant',
+              execution?.styleShortcutChangeApplied
+                ? 'Style shortcut applied. Staying on Preview. Commits tab has pending changes.'
+                : 'Style shortcut completed, but no stylesheet changes were applied.',
+              { variant: 'status' }
+            )
+          ]);
+          return;
+        }
+
         const skipCssTests = await shouldSkipAutomationTests();
         if (skipCssTests) {
           setPreviewPanelTab?.('commits', { source: 'automation' });
           setMessages((prev) => [
             ...prev,
-            createMessage('assistant', 'CSS-only update detected. Skipping automated test run and moving to commit stage.', { variant: 'status' })
+            createMessage(
+              'assistant',
+              'CSS-only update detected. Skipping automated test run and moving to commit stage.',
+              { variant: 'status' }
+            )
           ]);
           return;
         }
@@ -1241,7 +1364,19 @@ const ChatPanel = ({
 
     const buildConversationContext = () => {
       const recent = (messagesRef.current || [])
-        .filter((msg) => msg?.sender && msg?.text && msg.variant !== 'status')
+        .filter((msg) => {
+          if (!msg?.sender || !msg?.text || msg.variant === 'status') {
+            return false;
+          }
+          const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+          if (!text) {
+            return false;
+          }
+          const isAssistantError =
+            msg.sender === 'assistant' &&
+            (msg.variant === 'error' || /^Error processing goal:/i.test(text));
+          return !isAssistantError;
+        })
         .slice(-4);
       if (!recent.length) {
         return '';
@@ -1310,9 +1445,18 @@ const ChatPanel = ({
     setThinkingTopic(trimmed);
     setIsSending(true);
 
+    const isClarificationSubmit = Boolean(pendingClarification)
+      && (origin === 'clarification' || origin === 'clarification-cached');
+
     if (currentProject?.id) {
       try {
-        if (pendingClarification) {
+        if (pendingClarification && !isClarificationSubmit) {
+          setPendingClarification(null);
+          setClarificationAnswers([]);
+          setClarificationPaused(false);
+        }
+
+        if (isClarificationSubmit) {
           try {
             const existingGoals = await fetchGoals(currentProject.id, { includeArchived: false });
             const staleGoals = Array.isArray(existingGoals)
@@ -1327,7 +1471,7 @@ const ChatPanel = ({
           }
         }
 
-        const resolvedPrompt = pendingClarification
+        const resolvedPrompt = isClarificationSubmit
           ? [
             (() => {
               const originalRequest = typeof pendingClarification.prompt === 'string'
@@ -1396,7 +1540,7 @@ const ChatPanel = ({
             .filter(Boolean)
             .join('\n\n');
 
-        if (pendingClarification) {
+        if (isClarificationSubmit) {
           setPendingClarification(null);
         }
 
@@ -1456,6 +1600,92 @@ const ChatPanel = ({
 
     if (!prompt || !currentProject?.id) {
       return;
+    }
+
+    const dependencyInstallRequests = extractDependencyInstallRequests(payload, { hasBackend });
+    if (dependencyInstallRequests.length > 0 && typeof startAutomationJob === 'function') {
+      const queued = [];
+      const failed = [];
+
+      for (const request of dependencyInstallRequests) {
+        const requestKey = `${currentProject.id}:${request.workspace}:${request.packageName}`;
+        if (autoFixDependencyInstallRef.current.has(requestKey)) {
+          continue;
+        }
+        autoFixDependencyInstallRef.current.add(requestKey);
+        try {
+          await startAutomationJob(`${request.workspace}:add-package`, {
+            projectId: currentProject.id,
+            payload: {
+              packageName: request.packageName
+            }
+          });
+          queued.push(`${request.workspace}:${request.packageName}`);
+        } catch (error) {
+          failed.push({ request, message: error?.message || 'Failed to queue dependency install job.' });
+        }
+      }
+
+      if (queued.length > 0) {
+        setMessages((prev) => [
+          ...prev,
+          createMessage(
+            'assistant',
+            `Detected missing dependencies from failing output. Queued install job(s): ${queued.join(', ')}.`,
+            { variant: 'status' }
+          )
+        ]);
+        return;
+      }
+
+      if (failed.length > 0) {
+        const firstFailure = failed[0];
+        setMessages((prev) => [
+          ...prev,
+          createMessage(
+            'assistant',
+            `Dependency install job failed for ${firstFailure.request.workspace}:${firstFailure.request.packageName}. ${firstFailure.message}`,
+            { variant: 'error' }
+          )
+        ]);
+        return;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        createMessage(
+          'assistant',
+          'Dependency install is already queued for this missing package. Waiting for it to complete before retrying auto-fix.',
+          { variant: 'status' }
+        )
+      ]);
+      return;
+    }
+
+    const loopSignature = buildAutofixLoopSignature(payload);
+    if (origin === 'automation') {
+      const currentGuard = autoFixLoopGuardRef.current;
+      if (currentGuard.signature === loopSignature) {
+        currentGuard.count += 1;
+      } else {
+        currentGuard.signature = loopSignature;
+        currentGuard.count = 1;
+      }
+
+      if (currentGuard.count > MAX_AUTOFIX_GOAL_LOOPS) {
+        setAutofixHaltFlag(true);
+        setMessages((prev) => [
+          ...prev,
+          createMessage(
+            'assistant',
+            `Auto-fix stopped after ${MAX_AUTOFIX_GOAL_LOOPS} repeated attempts for the same failing tests. Please review logs and fix manually, or rerun tests after making targeted changes.`,
+            { variant: 'error' }
+          )
+        ]);
+        return;
+      }
+    } else {
+      autoFixLoopGuardRef.current = { signature: loopSignature, count: 1 };
     }
 
     if (autoFixInFlightRef.current) {
@@ -1541,6 +1771,7 @@ const ChatPanel = ({
           requestEditorFocus,
           syncBranchOverview,
           testFailureContext: childPromptMetadata ? null : failureContext,
+          tolerateTestStageParseFailure: true,
           shouldPause: () => autoFixHaltedRef.current,
           shouldCancel: () => autoFixCancelRef.current
         }
@@ -1565,6 +1796,7 @@ const ChatPanel = ({
       if (typeof startAutomationJob === 'function') {
         const skipCssTests = await shouldSkipAutomationTests();
         if (skipCssTests) {
+          autoFixLoopGuardRef.current = { signature: '', count: 0 };
           setPreviewPanelTab?.('commits', { source: origin === 'automation' ? 'automation' : 'user' });
           setMessages((prev) => [
             ...prev,
@@ -1598,6 +1830,7 @@ const ChatPanel = ({
         });
 
         if (!hasAnySuiteFlag(suitesToRun)) {
+          autoFixLoopGuardRef.current = { signature: '', count: 0 };
           setPreviewPanelTab?.('commits', { source: origin === 'automation' ? 'automation' : 'user' });
           setMessages((prev) => [
             ...prev,
@@ -1664,6 +1897,7 @@ const ChatPanel = ({
     hasBackend,
     markTestRunIntent,
     requestEditorFocus,
+    setAutofixHaltFlag,
     setPreviewPanelTab,
     shouldSkipAutomationTests,
     startAutomationJob,
@@ -2130,11 +2364,16 @@ Object.assign(ChatPanel.__testHooks, {
     delete ChatPanel.__testHooks.latestInstance;
   },
   suiteHelpers: {
+    buildAutofixLoopSignature,
     classifyPathSuites,
     deriveSuitesFromStagedDiff,
+    isLikelyExternalPackageName,
+    normalizeDependencyPackageName,
     extractFailingSuitesFromFixPayload,
+    extractDependencyInstallRequests,
     resolveSuitesToRun,
-    formatAutomationRunMessage
+    formatAutomationRunMessage,
+    shouldPreservePreviewForShortCircuit
   }
 });
 

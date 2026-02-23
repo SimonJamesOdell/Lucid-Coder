@@ -248,11 +248,18 @@ export const clearStagedChanges = async ({
       const nextFiles = normalizedPath
         ? existingFiles.filter((entry) => normalizeRepoPath(entry.path) !== normalizedPath)
         : [];
+      const nextAhead = nextFiles.length;
+      const previousStatus = typeof prev[projectId].status === 'string' ? prev[projectId].status : '';
+      const nextStatus = nextAhead === 0 && previousStatus === 'ready-for-merge'
+        ? 'active'
+        : previousStatus;
       return {
         ...prev,
         [projectId]: {
           ...prev[projectId],
           commits: nextFiles.length,
+          ahead: nextAhead,
+          ...(nextStatus ? { status: nextStatus } : {}),
           stagedFiles: nextFiles,
           merged: prev[projectId].merged || false
         }

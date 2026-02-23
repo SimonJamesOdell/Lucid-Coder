@@ -109,7 +109,7 @@ router.post('/cleanup/stream', async (req, res) => {
 
 router.post('/request', async (req, res) => {
   try {
-    const { projectId, prompt } = req.body || {};
+    const { projectId, prompt, maxSteps } = req.body || {};
 
     if (!projectId) {
       return res.status(400).json({ error: 'projectId is required' });
@@ -118,7 +118,7 @@ router.post('/request', async (req, res) => {
       return res.status(400).json({ error: 'prompt is required' });
     }
 
-    const result = await handleAgentRequest({ projectId, prompt });
+    const result = await handleAgentRequest({ projectId, prompt, maxSteps });
     res.status(200).json(result);
   } catch (error) {
     console.error('[Agent] Request failed:', error.message || error);
@@ -131,7 +131,7 @@ router.post('/request', async (req, res) => {
 
 router.post('/request/stream', async (req, res) => {
   try {
-    const { projectId, prompt } = req.body || {};
+    const { projectId, prompt, maxSteps } = req.body || {};
 
     if (!projectId) {
       return res.status(400).json({ error: 'projectId is required' });
@@ -148,7 +148,7 @@ router.post('/request/stream', async (req, res) => {
     }
     res.write('retry: 1000\n\n');
 
-    const result = await handleAgentRequest({ projectId, prompt });
+    const result = await handleAgentRequest({ projectId, prompt, maxSteps });
 
     if (result?.kind === 'question' && typeof result.answer === 'string' && result.answer.length > 0) {
       for (let index = 0; index < result.answer.length; index += STREAM_CHUNK_SIZE) {

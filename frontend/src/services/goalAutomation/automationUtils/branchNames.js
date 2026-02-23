@@ -1,6 +1,18 @@
 export const extractBranchName = (raw, fallbackName) => {
   const fallback = String(fallbackName).trim();
 
+  const isMeaningfulKebab = (value) => {
+    const trimmed = String(value || '').trim().toLowerCase();
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)+$/.test(trimmed)) {
+      return false;
+    }
+    const parts = trimmed.split('-');
+    if (parts.length < 2 || parts.length > 5) {
+      return false;
+    }
+    return parts.every((part) => /[a-z]/.test(part));
+  };
+
   const slugify = (value) =>
     value
       .toLowerCase()
@@ -17,14 +29,21 @@ export const extractBranchName = (raw, fallbackName) => {
   const quoted = text.match(/['"]([a-z0-9]+(?:-[a-z0-9]+)+)['"]/i);
   if (quoted?.[1]) {
     const candidate = slugify(quoted[1]);
-    if (candidate) return candidate;
+    if (candidate && isMeaningfulKebab(candidate)) {
+      return candidate;
+    }
   }
 
   const tokens = text.match(/[a-z0-9]+(?:-[a-z0-9]+)+/gi) || [];
-  const token = tokens.map((t) => slugify(t)).find(Boolean);
-  if (token) return token;
+  const token = tokens
+    .map((t) => slugify(t))
+    .find((candidate) => isMeaningfulKebab(candidate));
+  if (token) {
+    return token;
+  }
 
-  return slugify(text) || fallback;
+  const slugged = slugify(text);
+  return isMeaningfulKebab(slugged) ? slugged : fallback;
 };
 
 export const parseBranchNameFromLLMText = (text) => {
@@ -41,7 +60,21 @@ export const parseBranchNameFromLLMText = (text) => {
     }
   }
 
-  return trimmed;
+  const quoted = trimmed.match(/["']([a-z0-9]+(?:-[a-z0-9]+)+)["']/i);
+  if (quoted?.[1]) {
+    return quoted[1].trim();
+  }
+
+  if (/^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const isPlainPhrase = /^[a-z0-9 ]+$/i.test(trimmed) && /[a-z]/i.test(trimmed);
+  if (isPlainPhrase) {
+    return trimmed;
+  }
+
+  return '';
 };
 
 export const extractBranchPromptContext = (prompt) => {
@@ -89,7 +122,7 @@ export const isValidBranchName = (name) => {
   if (trimmed === 'kebab-case') return false;
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)+$/.test(trimmed)) return false;
   const parts = trimmed.split('-');
-  return parts.length >= 2 && parts.length <= 5;
+  return parts.length >= 2 && parts.length <= 5 && parts.every((part) => /[a-z]/.test(part));
 };
 
 export const buildFallbackBranchNameFromPrompt = (prompt, fallbackName) => {
@@ -101,11 +134,11 @@ export const buildFallbackBranchNameFromPrompt = (prompt, fallbackName) => {
 
   const stopwords = new Set([
     'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by',
-    'can', 'could', 'do', 'does', 'for', 'from', 'have', 'has', 'had',
+    'can', 'could', 'do', 'does', 'for', 'from', 'give', 'have', 'has', 'had',
     'how', 'i', 'if', 'in', 'into', 'is', 'it', "it's", 'its',
-    'let', "let's", 'make', 'of', 'on', 'or', 'our', 'please',
+    'let', "let's", 'make', 'me', 'need', 'of', 'on', 'or', 'our', 'please',
     'should', 'so', 'some', 'that', 'the', 'their', 'then', 'there',
-    'this', 'to', 'up', 'we', 'with', 'would', 'you', 'your'
+    'this', 'to', 'up', 'want', 'we', 'with', 'would', 'you', 'your'
   ]);
 
   const words = raw
@@ -140,11 +173,11 @@ export const isBranchNameRelevantToPrompt = (branchName, prompt) => {
 
   const stopwords = new Set([
     'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by',
-    'can', 'could', 'do', 'does', 'for', 'from', 'have', 'has', 'had',
+    'can', 'could', 'do', 'does', 'for', 'from', 'give', 'have', 'has', 'had',
     'how', 'i', 'if', 'in', 'into', 'is', 'it', "it's", 'its',
-    'let', "let's", 'make', 'of', 'on', 'or', 'our', 'please',
+    'let', "let's", 'make', 'me', 'need', 'of', 'on', 'or', 'our', 'please',
     'should', 'so', 'some', 'that', 'the', 'their', 'then', 'there',
-    'this', 'to', 'up', 'we', 'with', 'would', 'you', 'your'
+    'this', 'to', 'up', 'want', 'we', 'with', 'would', 'you', 'your'
   ]);
 
   const tokenize = (value) => normalize(value)

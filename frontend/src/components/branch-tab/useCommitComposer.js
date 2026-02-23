@@ -106,6 +106,71 @@ const parseCommitText = (text = '') => {
   };
 };
 
+const parseStructuredCommitDraft = (text = '') => {
+  if (!text || typeof text !== 'string') {
+    return null;
+  }
+
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const stripCodeFence = (value) => value
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+
+  const normalized = stripCodeFence(trimmed);
+  const candidates = [normalized];
+  const firstBrace = normalized.indexOf('{');
+  const lastBrace = normalized.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(normalized.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        continue;
+      }
+
+      const subject = typeof parsed.subject === 'string' ? parsed.subject.trim().slice(0, 72) : '';
+      const body = typeof parsed.body === 'string' ? parsed.body.trim() : '';
+      const noCommit = parsed.noCommit === true || String(subject).toUpperCase() === 'NO_COMMIT';
+
+      return { subject, body, noCommit };
+    } catch {
+      // Keep scanning candidate formats.
+    }
+  }
+
+  return null;
+};
+
+const looksLikeStructuredDraftArtifact = (text = '') => {
+  if (!text || typeof text !== 'string') {
+    return false;
+  }
+
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const hasStructuredKeys = /["'](?:subject|body|noCommit)["']\s*:/i.test(trimmed);
+  if (!hasStructuredKeys) {
+    return false;
+  }
+
+  if (/^\{[\s\S]*\}$/m.test(trimmed)) {
+    return true;
+  }
+
+  return trimmed.startsWith('{') || trimmed.includes('{"subject"') || trimmed.includes("{'subject'");
+};
+
 let commitTextParser = parseCommitText;
 
 const buildDiffExcerpt = (commitContext, files) => {
@@ -270,7 +335,7 @@ export const useCommitComposer = ({ project }) => {
         promptSections.push(`Notes: ${noteLines.join(' ')}`);
       }
       promptSections.push(
-        'Write a git commit message with a short imperative subject line (≤72 characters), followed by a blank line and optional body lines (each ≤72 characters) describing the purpose or impact. Mention key files when useful and avoid meta commentary or instructions. IMPORTANT: Only describe changes that are supported by the staged files summary and diff excerpts above; do not invent extra files, features, or refactors. If the diff is unclear, keep the message generic.'
+        'Create a commit draft describing only the staged changes above. Output MUST be valid JSON only (no prose, no code fences) with this exact shape: {"subject":"...","body":"..."}. The subject must be imperative, specific, and <=72 characters. Body is optional, but if present keep lines concise (<=72 chars each). Do not repeat these instructions and do not invent files/features not present in the staged summary/diff.'
       );
 
       const buildPrompt = (attempt, previousSuggestion) => {
@@ -280,7 +345,7 @@ export const useCommitComposer = ({ project }) => {
         return [
           ...promptSections,
           `Previous attempt was unusable:\n${previousSuggestion}`,
-          'Respond again with only the git commit message (subject line ≤72 characters plus optional body lines ≤72 characters). Avoid instructions, bullet lists, or commentary.'
+          'Try again and return ONLY valid JSON: {"subject":"...","body":"..."}. No prose, no bullets, no code fences, no instruction text.'
         ].join('\n\n');
       };
 
@@ -310,10 +375,26 @@ export const useCommitComposer = ({ project }) => {
           finalError = 'AI response did not include a usable commit message. Please edit manually.';
           continue;
         }
-        if (suggestion.toUpperCase() === 'NO_COMMIT') {
+
+        const structuredDraft = parseStructuredCommitDraft(suggestion);
+        if (suggestion.toUpperCase() === 'NO_COMMIT' || structuredDraft?.noCommit) {
           setCommitMessageError('AI could not produce a commit message. Please write one manually.');
           return;
         }
+
+        if (structuredDraft?.subject && isDescriptiveCommitMessage(structuredDraft.subject)) {
+          handleCommitMessageChange(branchName, {
+            subject: structuredDraft.subject,
+            body: structuredDraft.body
+          });
+          return;
+        }
+
+        if (looksLikeStructuredDraftArtifact(suggestion)) {
+          finalError = 'AI response returned malformed structured JSON. Please edit manually.';
+          continue;
+        }
+
         const candidate = extractCommitCandidateFromText(suggestion)
           .replace(/^["'\s]+/, '')
           .replace(/["'\s]+$/, '');
@@ -378,6 +459,8 @@ Object.assign(useCommitComposer.__testHooks, {
   persistDraftsToStorage,
   parseCommitText,
   buildDiffExcerpt,
+  parseStructuredCommitDraft,
+  looksLikeStructuredDraftArtifact,
   normalizeDraftValue,
   normalizeDraftMap
 });

@@ -234,7 +234,7 @@ describe('AssetsTab', () => {
     });
   });
 
-  test.skip('clicking Upload triggers the hidden file picker click handler', async () => {
+  test('clicking Upload triggers the hidden file picker click handler', async () => {
     const user = userEvent.setup();
     mockAxios.get.mockResolvedValue(assetsResponse([]));
 

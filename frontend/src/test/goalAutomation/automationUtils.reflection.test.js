@@ -7,6 +7,7 @@ const {
   buildScopeReflectionPrompt,
   buildEditsPrompt,
   parseScopeReflectionResponse,
+  validateExecutionContractGate,
   validateEditsAgainstReflection,
   parseEditsFromLLM,
   normalizeMentionPath,
@@ -310,6 +311,32 @@ describe('parseScopeReflectionResponse', () => {
     });
   });
 
+  it('disables strict targeted style enforcement when structured target hints are empty', () => {
+    const llmResponse = {
+      data: {
+        response: JSON.stringify({
+          reasoning: 'style tweak',
+          styleScope: {
+            mode: 'targeted',
+            enforceTargetScoping: true,
+            forbidGlobalSelectors: true,
+            targetHints: []
+          }
+        })
+      }
+    };
+
+    const reflection = parseScopeReflectionResponse(llmResponse);
+
+    expect(reflection.styleScope).toEqual({
+      mode: 'targeted',
+      targetLevel: 'component',
+      enforceTargetScoping: false,
+      forbidGlobalSelectors: false,
+      targetHints: []
+    });
+  });
+
   it('does not coerce styleScope from prompt text and uses structured response only', () => {
     const llmResponse = {
       data: {
@@ -482,7 +509,7 @@ describe('validateEditsAgainstReflection', () => {
     expect(result).toMatchObject({
       type: 'forbidden-area',
       path: 'backend/services/jobRunner.js',
-      rule: 'backend/services/'
+      rule: 'backend/services'
     });
   });
 
@@ -516,6 +543,33 @@ describe('validateEditsAgainstReflection', () => {
     const edits = [{ path: 'frontend/src/components/App.jsx' }];
 
     expect(validateEditsAgainstReflection(edits, reflection)).toBeNull();
+  });
+
+  it('enforces mustChange execution-contract areas during implementation stage', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustChange: ['frontend/src/components'],
+      mustAvoid: []
+    };
+    const edits = [{ path: 'frontend/src/styles/app.css' }];
+
+    const result = validateEditsAgainstReflection(edits, reflection, { stage: 'implementation' });
+
+    expect(result).toMatchObject({
+      type: 'execution-contract-must-change-missing',
+      rule: 'execution-contract-must-change'
+    });
+  });
+
+  it('does not enforce mustChange execution-contract areas during tests stage', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustChange: ['frontend/src/components'],
+      mustAvoid: []
+    };
+    const edits = [{ path: 'frontend/src/__tests__/App.test.jsx' }];
+
+    expect(validateEditsAgainstReflection(edits, reflection, { stage: 'tests' })).toBeNull();
   });
 
   it('rejects style-scoped edits when required selected assets are not referenced', () => {
@@ -623,6 +677,168 @@ describe('validateEditsAgainstReflection', () => {
     expect(editMentionsRequiredAssetPaths({ type: 'modify', path: 'frontend/src/App.jsx' }, [])).toBe(false);
   });
 
+  it('rejects oversized implementation plans that touch too many files', () => {
+    const edits = Array.from({ length: 7 }, (_, index) => ({
+      type: 'modify',
+      path: `frontend/src/components/C${index}.jsx`,
+      replacements: [{ search: 'a', replace: 'b' }]
+    }));
+
+    const result = validateEditsAgainstReflection(edits, { testsNeeded: true, mustAvoid: [] }, { stage: 'implementation' });
+
+    expect(result).toMatchObject({
+      type: 'overscoped-edit-plan',
+      rule: 'execution-contract-max-touched-files'
+    });
+  });
+
+  it('rejects mixed workspace implementation plans when mustChange targets one workspace', () => {
+    const result = validateEditsAgainstReflection(
+      [
+        { type: 'modify', path: 'frontend/src/App.jsx', replacements: [{ search: 'x', replace: 'y' }] },
+        { type: 'modify', path: 'backend/server.js', replacements: [{ search: 'x', replace: 'y' }] }
+      ],
+      {
+        testsNeeded: true,
+        mustChange: ['frontend/src/components'],
+        mustAvoid: []
+      },
+      { stage: 'implementation' }
+    );
+
+    expect(result).toMatchObject({
+      type: 'mixed-workspace-edit-plan',
+      rule: 'execution-contract-single-workspace'
+    });
+  });
+
+  it('scores focused plans higher than broad mixed-scope plans', () => {
+    const focused = __reflectionTestHooks.scoreEditPlanConfidence({
+      edits: [
+        { type: 'modify', path: 'frontend/src/components/App.jsx', replacements: [{ search: 'x', replace: 'y' }] }
+      ],
+      reflection: {
+        testsNeeded: true,
+        mustChange: ['frontend/src/components'],
+        mustAvoid: ['backend']
+      },
+      normalizeRepoPath: (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+/, ''),
+      stage: 'implementation'
+    });
+
+    const broad = __reflectionTestHooks.scoreEditPlanConfidence({
+      edits: [
+        { type: 'modify', path: 'frontend/src/components/App.jsx', replacements: [{ search: 'x', replace: 'y' }] },
+        { type: 'modify', path: 'backend/server.js', replacements: [{ search: 'x', replace: 'y' }] },
+        { type: 'modify', path: 'frontend/src/styles/app.css', replacements: [{ search: 'x', replace: 'y' }] }
+      ],
+      reflection: {
+        testsNeeded: true,
+        mustChange: ['frontend/src/components'],
+        mustAvoid: ['backend']
+      },
+      normalizeRepoPath: (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+/, ''),
+      stage: 'implementation'
+    });
+
+    expect(focused.score).toBeGreaterThan(broad.score);
+    expect(focused.label).toBe('high');
+    expect(broad.label).toBe('low');
+  });
+
+  it('returns low confidence defaults when edits are missing', () => {
+    const score = __reflectionTestHooks.scoreEditPlanConfidence({
+      edits: [],
+      reflection: { testsNeeded: true, mustChange: [], mustAvoid: [] },
+      normalizeRepoPath: (value) => value,
+      stage: 'implementation'
+    });
+
+    expect(score).toEqual({
+      score: 0,
+      label: 'low',
+      metrics: {
+        touchedFiles: 0,
+        mustChangeSatisfied: false,
+        forbiddenTouches: 0,
+        mixedWorkspaceTouches: 0,
+        stage: 'implementation'
+      }
+    });
+  });
+
+  it('applies touched-file penalties for medium and broad plans', () => {
+    const normalize = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    const medium = __reflectionTestHooks.scoreEditPlanConfidence({
+      edits: [
+        { path: 'frontend/src/A.jsx' },
+        { path: 'frontend/src/B.jsx' },
+        { path: 'frontend/src/C.jsx' },
+        { path: 'frontend/src/D.jsx' }
+      ],
+      reflection: { testsNeeded: true, mustChange: [], mustAvoid: [] },
+      normalizeRepoPath: normalize,
+      stage: 'implementation'
+    });
+    const broad = __reflectionTestHooks.scoreEditPlanConfidence({
+      edits: Array.from({ length: 7 }, (_, index) => ({ path: `frontend/src/F${index}.jsx` })),
+      reflection: { testsNeeded: true, mustChange: [], mustAvoid: [] },
+      normalizeRepoPath: normalize,
+      stage: 'implementation'
+    });
+
+    expect(medium.score).toBe(0.8);
+    expect(medium.label).toBe('high');
+    expect(broad.score).toBe(0.55);
+    expect(broad.label).toBe('medium');
+  });
+
+  it('penalizes confidence when must-change prefixes are not touched', () => {
+    const normalize = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    const score = __reflectionTestHooks.scoreEditPlanConfidence({
+      edits: [{ path: 'frontend/src/App.jsx' }],
+      reflection: {
+        testsNeeded: true,
+        mustChange: ['backend/routes'],
+        mustAvoid: []
+      },
+      normalizeRepoPath: normalize,
+      stage: 'implementation'
+    });
+
+    expect(score.metrics.mustChangeSatisfied).toBe(false);
+    expect(score.score).toBe(0.4);
+    expect(score.label).toBe('low');
+  });
+
+  it('handles non-string and unknown workspace paths when scoring mixed-workspace edits', () => {
+    const normalize = (value) => {
+      if (value === 'NON_STRING_SENTINEL') {
+        return { nonStringPath: true };
+      }
+      return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    };
+
+    const score = __reflectionTestHooks.scoreEditPlanConfidence({
+      edits: [
+        { path: 'frontend/src/App.jsx' },
+        { path: 'docs/README.md' },
+        { path: 'NON_STRING_SENTINEL' }
+      ],
+      reflection: {
+        testsNeeded: true,
+        mustChange: ['frontend/src', 'shared/utils', 'docs/notes'],
+        mustAvoid: []
+      },
+      normalizeRepoPath: normalize,
+      stage: 'implementation'
+    });
+
+    expect(score.metrics.mixedWorkspaceTouches).toBe(0);
+    expect(score.metrics.mustChangeSatisfied).toBe(true);
+    expect(score.score).toBe(1);
+  });
+
   it('normalizes asset paths in helper hooks for truthy and falsy inputs', () => {
     const { normalizeAssetPathForMatch } = __reflectionTestHooks;
 
@@ -642,6 +858,37 @@ describe('validateEditsAgainstReflection', () => {
     );
 
     expect(result).toBe(true);
+  });
+});
+
+describe('validateExecutionContractGate', () => {
+  it('fails closed when execution contract is missing', () => {
+    const result = validateExecutionContractGate(null, { stage: 'implementation' });
+
+    expect(result).toMatchObject({
+      type: 'execution-contract-invalid',
+      rule: 'execution-contract-required-fields'
+    });
+  });
+
+  it('accepts execution contracts with required structured fields', () => {
+    const result = validateExecutionContractGate(
+      {
+        testsNeeded: true,
+        mustChange: [],
+        mustAvoid: [],
+        mustHave: []
+      },
+      { stage: 'implementation' }
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('skips validation for tests stage', () => {
+    const result = validateExecutionContractGate(null, { stage: 'tests' });
+
+    expect(result).toBeNull();
   });
 });
 
@@ -797,20 +1044,42 @@ describe('__automationUtilsTestHooks helpers', () => {
     ]));
   });
 
-  it('normalizes explicit repo paths and ensures a trailing slash prefix', () => {
+  it('normalizes explicit file paths as exact prefixes without forcing a trailing slash', () => {
     const { deriveReflectionPathPrefixes } = __automationUtilsTestHooks;
 
     const prefixes = deriveReflectionPathPrefixes(['frontend/src/components/Panel.jsx']);
 
-    expect(prefixes).toContain('frontend/src/components/Panel.jsx/');
+    expect(prefixes).toContain('frontend/src/components/Panel.jsx');
+    expect(prefixes).not.toContain('frontend/src/components/Panel.jsx/');
   });
 
-  it('preserves prefixes that already include a trailing slash', () => {
+  it('preserves directory prefixes and includes both exact and nested matches', () => {
     const { deriveReflectionPathPrefixes } = __automationUtilsTestHooks;
 
     const prefixes = deriveReflectionPathPrefixes(['frontend/src/utils/']);
 
+    expect(prefixes).toContain('frontend/src/utils');
     expect(prefixes).toContain('frontend/src/utils/');
+  });
+
+  it('normalizes accidental trailing slashes on file paths from reflection output', () => {
+    const { deriveReflectionPathPrefixes } = __automationUtilsTestHooks;
+
+    const prefixes = deriveReflectionPathPrefixes(['frontend/src/pages/Contact.jsx/']);
+
+    expect(prefixes).toContain('frontend/src/pages/Contact.jsx');
+    expect(prefixes).not.toContain('frontend/src/pages/Contact.jsx/');
+  });
+
+  it('strips annotation text like "(or create if missing)" from reflection file paths', () => {
+    const { deriveReflectionPathPrefixes } = __automationUtilsTestHooks;
+
+    const prefixes = deriveReflectionPathPrefixes([
+      'frontend/src/setupTests.js (or create if missing).'
+    ]);
+
+    expect(prefixes).toContain('frontend/src/setupTests.js');
+    expect(prefixes).not.toContain('frontend/src/setupTests.js (or create if missing)');
   });
 
   it('treats falsy values as non-test paths', () => {

@@ -35,15 +35,16 @@ export async function ensureBranch(projectId, prompt, setPreviewPanelTab, create
       automationLog('ensureBranch:generatedName', { generatedName });
 
       const createResponse = await axios.post(`/api/projects/${projectId}/branches`, {
-        name: generatedName,
-        description: String(branchPrompt || '').trim().slice(0, 200) || undefined
+        name: generatedName
       });
 
       const branchName = createResponse.data?.branch?.name || generatedName;
 
       automationLog('ensureBranch:created', { branchName });
 
-      setPreviewPanelTab?.('branches', { source: 'automation' });
+      if (!options?.preservePreviewTab) {
+        setPreviewPanelTab?.('branches', { source: 'automation' });
+      }
 
       if (typeof options?.syncBranchOverview === 'function') {
         try {

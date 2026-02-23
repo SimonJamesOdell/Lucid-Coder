@@ -138,7 +138,23 @@ describe('requestBranchNameFromLLM', () => {
     expect(systemContent).toContain('Return ONLY a single JSON object');
     expect(systemContent).toContain('changed-background-blue');
     expect(systemContent).toContain('Prefer using words');
+    expect(systemContent).toContain('remove request-voice words like give/me/please/can-you/we-need/i-want');
     expect(systemContent).not.toMatch(/\b2-5\b/);
+  });
+
+  it('falls back when LLM returns prose that only mentions kebab-case tokens', async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        response: 'We should return JSON and use kebab-case naming. Suggested words: nav-bar top-fixed.'
+      }
+    });
+
+    const result = await requestBranchNameFromLLM({
+      prompt: 'Add a top fixed navigation bar',
+      fallbackName: 'fallback-name'
+    });
+
+    expect(result).toBe('fallback-name');
   });
 });
 
@@ -716,5 +732,32 @@ describe('buildEditsPrompt', () => {
     expect(userContent).toContain('Framework: unknown');
     expect(userContent).toContain('Decision Confidence: 0%');
     expect(userContent).toContain('Generation Guidance: Follow standard practices');
+  });
+
+  it('serializes execution contract styleScope with null mode and targetLevel when missing', () => {
+    const prompt = buildEditsPrompt({
+      projectInfo: 'Project: Demo',
+      fileTreeContext: '',
+      goalPrompt: 'Adjust visual spacing',
+      stage: 'implementation',
+      scopeReflection: {
+        testsNeeded: true,
+        mustChange: [],
+        mustAvoid: [],
+        mustHave: [],
+        styleScope: {
+          mode: '',
+          targetLevel: '',
+          enforceTargetScoping: false,
+          forbidGlobalSelectors: false,
+          targetHints: []
+        }
+      }
+    });
+
+    const userContent = prompt.messages.find((msg) => msg.role === 'user')?.content || '';
+    expect(userContent).toContain('"styleScope": {');
+    expect(userContent).toContain('"mode": null');
+    expect(userContent).toContain('"targetLevel": null');
   });
 });

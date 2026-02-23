@@ -2636,6 +2636,35 @@ describe('LLM Client Tests', () => {
       makeSpy.mockRestore();
     });
 
+    test('uses minimal tool bridge as the initial payload when explicitly forced', async () => {
+      const responsePayload = {
+        data: {
+          choices: [{ message: { content: 'Forced minimal bridge path' } }]
+        }
+      };
+
+      const makeSpy = vi
+        .spyOn(client, 'makeAPIRequest')
+        .mockResolvedValueOnce(responsePayload);
+
+      const result = await client.generateResponse(messages, {
+        __lucidcoderForceMinimalToolBridge: true,
+        __lucidcoderDisableToolBridge: true,
+        __lucidcoderDisableDedup: true
+      });
+
+      expect(result).toBe('Forced minimal bridge path');
+      const firstCallPayload = makeSpy.mock.calls?.[0]?.[2];
+      expect(firstCallPayload).toEqual(expect.objectContaining({ __lucidcoderToolBridge: true }));
+      expect(firstCallPayload?.tools).toEqual(expect.any(Array));
+      expect(firstCallPayload?.tool_choice).toEqual({
+        type: 'function',
+        function: { name: 'respond_with_text' }
+      });
+
+      makeSpy.mockRestore();
+    });
+
     test('falls back to full tool bridge when tool_choice none repeats after minimal retry', async () => {
       const responsePayload = {
         data: {

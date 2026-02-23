@@ -15,7 +15,9 @@ import {
   normalizeRepoPath,
   buildScopeReflectionPrompt,
   parseScopeReflectionResponse,
-  validateEditsAgainstReflection
+  validateExecutionContractGate,
+  validateEditsAgainstReflection,
+  scoreEditPlanConfidence
 } from './automationUtils';
 
 const buildScopeViolationError = (violation) => {
@@ -119,6 +121,7 @@ const buildFileOpRetryContext = (error, knownPathsSet) => {
 };
 
 const isTestFilePath = (path) => /__tests__\//.test(path) || /\.(test|spec)\.[jt]sx?$/.test(path);
+const isStylesheetPath = (path) => /\.(css|scss|sass|less)$/i.test(path);
 
 const buildCoverageScope = (entries) => {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -243,6 +246,36 @@ export async function processGoal(
 ) {
   let cleanupApprovalListener = null;
   try {
+    const updatePreviewPanelTab = (tab, payload) => {
+      if (options?.preservePreviewTab) {
+        return;
+      }
+      setPreviewPanelTab?.(tab, payload);
+    };
+
+    const validateShortcutStyleScope = (edits) => {
+      if (!options?.preservePreviewTab || !Array.isArray(edits)) {
+        return null;
+      }
+
+      for (const edit of edits) {
+        const normalizedPath = normalizeRepoPath(edit?.path);
+        if (!normalizedPath) {
+          continue;
+        }
+        if (!isStylesheetPath(normalizedPath)) {
+          return {
+            type: 'style-shortcut-scope',
+            path: normalizedPath,
+            rule: 'style-shortcut-scope',
+            message: 'Style shortcut edits must be limited to stylesheet files (.css/.scss/.sass/.less).'
+          };
+        }
+      }
+
+      return null;
+    };
+
     const scopeReflectionGloballyDisabled =
       typeof globalThis !== 'undefined' && globalThis.__LUCIDCODER_DISABLE_SCOPE_REFLECTION === true;
     const allowEmptyStageEdits =
@@ -269,8 +302,17 @@ export async function processGoal(
     // [FAILURE PREVENTION: Framework Analysis]
     // Early project profiling to prevent dependency confusion and inform code generation
     let frameworkAnalysis = null;
+    const projectContext = options?.project && typeof options.project === 'object'
+      ? options.project
+      : {
+          id: projectId,
+          path: projectPath
+        };
     try {
-      frameworkAnalysis = await orchestrator.analyzeProject(goal?.prompt || '');
+      frameworkAnalysis = await orchestrator.analyzeProject(goal?.prompt || '', {
+        project: projectContext,
+        projectInfo
+      });
       if (frameworkAnalysis.success) {
         automationLog('processGoal:framework', {
           projectId,
@@ -380,18 +422,20 @@ export async function processGoal(
 
       const outcomeNote = describeInstructionOnlyOutcome(type);
 
-      setPreviewPanelTab?.('goals', { source: 'automation' });
+      updatePreviewPanelTab('goals', { source: 'automation' });
 
-      const finalGoals = await fetchGoals(projectId);
-      setGoalCount(Array.isArray(finalGoals) ? finalGoals.length : 0);
-      notifyGoalsUpdated(projectId);
+      if (!options?.preservePreviewTab) {
+        const finalGoals = await fetchGoals(projectId);
+        setGoalCount(Array.isArray(finalGoals) ? finalGoals.length : 0);
+        notifyGoalsUpdated(projectId);
 
-      /* c8 ignore next */
-      const completionLabel = formatGoalLabel(goal?.title || goal?.prompt || 'Goal');
-      setMessages((prev) => [
-        ...prev,
-        createMessage('assistant', `Completed (${outcomeNote}): ${completionLabel}`, { variant: 'status' })
-      ]);
+        /* c8 ignore next */
+        const completionLabel = formatGoalLabel(goal?.title || goal?.prompt || 'Goal');
+        setMessages((prev) => [
+          ...prev,
+          createMessage('assistant', `Completed (${outcomeNote}): ${completionLabel}`, { variant: 'status' })
+        ]);
+      }
 
       return { success: true, skippedReason: type };
     };
@@ -502,6 +546,7 @@ export async function processGoal(
       typeof options?.enableScopeReflection === 'boolean'
         ? options.enableScopeReflection
         : !scopeReflectionGloballyDisabled;
+    const executionContractGateEnabled = scopeReflectionEnabled;
     let scopeReflection = null;
     const cloneScopeReflection = (reflection) => {
       if (!reflection || typeof reflection !== 'object') {
@@ -547,7 +592,9 @@ export async function processGoal(
       scopeReflection.testsNeeded = false;
     }
 
-    const testsStageEnabled = styleOnlyGoal && !testFailureContext
+    const testsStageEnabled = options?.preservePreviewTab
+      ? false
+      : styleOnlyGoal && !testFailureContext
       ? false
       : scopeReflection?.testsNeeded !== false;
     const requiredAssetPaths = Array.isArray(scopeReflection?.requiredAssetPaths)
@@ -569,11 +616,14 @@ export async function processGoal(
     setGoalCount(Array.isArray(updatedGoals) ? updatedGoals.length : 0);
     notifyGoalsUpdated(projectId);
 
-    setPreviewPanelTab?.('files', { source: 'automation' });
+    updatePreviewPanelTab('files', { source: 'automation' });
 
     let lastFocusedPath = '';
     const onFileApplied = async (filePath) => {
       markTouchTrackerForPath(touchTracker, filePath);
+      if (options?.preservePreviewTab) {
+        return;
+      }
       if (!requestEditorFocus || !filePath || filePath === lastFocusedPath) {
         return;
       }
@@ -722,10 +772,16 @@ export async function processGoal(
             throw buildScopeViolationError(coverageViolation);
           }
 
-          const scopeViolation = validateEditsAgainstReflection(edits, scopeReflection);
+          const scopeViolation = validateEditsAgainstReflection(edits, scopeReflection, { stage: 'tests' });
           if (scopeViolation) {
             throw buildScopeViolationError(scopeViolation);
           }
+
+          const testsPlanConfidence = scoreEditPlanConfidence(edits, scopeReflection, { stage: 'tests' });
+          automationLog('processGoal:llm:tests:planConfidence', {
+            attempt,
+            ...testsPlanConfidence
+          });
 
           if (!(await waitWhilePaused())) {
             return { success: false, cancelled: true };
@@ -749,7 +805,18 @@ export async function processGoal(
           if (error instanceof SyntaxError) {
             console.error('Failed to parse LLM response:', error);
             automationLog('processGoal:llm:tests:parseError', { attempt, message: error?.message });
+            testsRetryContext = {
+              message:
+                'Previous attempt returned malformed JSON. Return ONLY valid JSON with an "edits" array and no prose or markdown fences.',
+              path: testsRetryContext?.path || null,
+              scopeWarning: testsRetryContext?.scopeWarning || null
+            };
             if (attempt === lastTestsAttempt) {
+              if (options?.tolerateTestStageParseFailure) {
+                automationLog('processGoal:llm:tests:parseError:tolerated', { attempt, message: error?.message });
+                testsAttemptSucceeded = true;
+                break;
+              }
               throw error;
             }
             continue;
@@ -822,10 +889,20 @@ export async function processGoal(
         automationLog('processGoal:llm:tests:abort', { message: 'Unable to parse edits after retries' });
       }
     } else {
+      const skipReason = options?.preservePreviewTab
+        ? 'preserve-preview-tab'
+        : styleOnlyGoal && !testFailureContext
+        ? 'style-only-goal'
+        : 'scope-reflection';
+      const skipNote = skipReason === 'scope-reflection'
+        ? 'Reflection determined tests are unnecessary'
+        : skipReason === 'style-only-goal'
+        ? 'Style-only goal does not require automated test generation stage'
+        : 'Preview-preserving flow skips automated test generation stage';
       automationLog('processGoal:llm:tests:skipped', {
         goalId: goal?.id,
-        reason: 'scope-reflection',
-        note: 'Reflection determined tests are unnecessary'
+        reason: skipReason,
+        note: skipNote
       });
     }
 
@@ -853,6 +930,14 @@ export async function processGoal(
       if (skipImplementationStage) {
         break;
       }
+
+      if (executionContractGateEnabled) {
+        const executionContractViolation = validateExecutionContractGate(scopeReflection, { stage: 'implementation' });
+        if (executionContractViolation) {
+          throw buildScopeViolationError(executionContractViolation);
+        }
+      }
+
       if (!(await waitWhilePaused())) {
         return { success: false, cancelled: true };
       }
@@ -898,7 +983,14 @@ export async function processGoal(
             preview: typeof raw === 'string' ? raw.slice(0, 500) : ''
           });
           const mustChange = Array.isArray(scopeReflection?.mustChange) ? scopeReflection.mustChange : [];
-          if (allowEmptyStageEdits || (attempt === lastImplAttempt && mustChange.length === 0 && !hasRequiredAssetPaths)) {
+          const allowNoOpCompletion = allowEmptyStageEdits
+            || (
+              attempt === lastImplAttempt
+              && mustChange.length === 0
+              && !hasRequiredAssetPaths
+              && !options?.preservePreviewTab
+            );
+          if (allowNoOpCompletion) {
             implAttemptSucceeded = true;
             implRetryContext = null;
             setMessages((prev) => [
@@ -915,10 +1007,21 @@ export async function processGoal(
           throw buildScopeViolationError(coverageViolation);
         }
 
-        const scopeViolation = validateEditsAgainstReflection(edits, scopeReflection);
+        const shortcutViolation = validateShortcutStyleScope(edits);
+        if (shortcutViolation) {
+          throw buildScopeViolationError(shortcutViolation);
+        }
+
+        const scopeViolation = validateEditsAgainstReflection(edits, scopeReflection, { stage: 'implementation' });
         if (scopeViolation) {
           throw buildScopeViolationError(scopeViolation);
         }
+
+        const implementationPlanConfidence = scoreEditPlanConfidence(edits, scopeReflection, { stage: 'implementation' });
+        automationLog('processGoal:llm:impl:planConfidence', {
+          attempt,
+          ...implementationPlanConfidence
+        });
 
         if (!(await waitWhilePaused())) {
           return { success: false, cancelled: true };
@@ -1027,16 +1130,21 @@ export async function processGoal(
         throw new Error(
           `No repo edits were applied and none referenced the selected asset paths (${requiredAssetPaths.join(', ')}). Ensure implementation edits apply one of these assets in UI code/CSS (for example /uploads/<filename>).`
         );
+      } else {
+        throw new Error(
+          'No repo edits were applied for this goal. The LLM likely returned no usable edits (or edits were skipped). Check the browser console for [automation] logs.'
+        );
       }
-      throw new Error(
-        'No repo edits were applied for this goal. The LLM likely returned no usable edits (or edits were skipped). Check the browser console for [automation] logs.'
-      );
     }
 
     if (!(await waitWhilePaused())) {
       return { success: false, cancelled: true };
     }
-    setPreviewPanelTab?.('goals', { source: 'automation' });
+    updatePreviewPanelTab('goals', { source: 'automation' });
+
+    if (options?.preservePreviewTab && totalEditsApplied > 0) {
+      options.__styleShortcutChangeApplied = true;
+    }
 
     if (!(await safeAdvanceGoalPhase('verifying'))) {
       return { success: false, skipped: true };
@@ -1047,19 +1155,35 @@ export async function processGoal(
 
     automationLog('processGoal:phase', { goalId: goal?.id, phase: 'ready' });
 
-    const finalGoals = await fetchGoals(projectId);
-    setGoalCount(Array.isArray(finalGoals) ? finalGoals.length : 0);
-    notifyGoalsUpdated(projectId);
+    if (!options?.preservePreviewTab) {
+      const finalGoals = await fetchGoals(projectId);
+      setGoalCount(Array.isArray(finalGoals) ? finalGoals.length : 0);
+      notifyGoalsUpdated(projectId);
 
-    const completionLabel = formatGoalLabel(goal?.title || goal?.prompt || 'Goal');
-    setMessages((prev) => [
-      ...prev,
-      createMessage('assistant', `Completed: ${completionLabel}`, { variant: 'status' })
-    ]);
+      const completionLabel = formatGoalLabel(goal?.title || goal?.prompt || 'Goal');
+      setMessages((prev) => [
+        ...prev,
+        createMessage('assistant', `Completed: ${completionLabel}`, { variant: 'status' })
+      ]);
+    }
 
     return { success: true };
   } catch (error) {
     const errorMsg = error.response?.data?.error || error.message || 'Unknown error';
+
+    if (
+      options?.preservePreviewTab
+      && isScopeViolationError(error)
+      && error?.__lucidcoderScopeViolation?.rule === 'style-shortcut-scope'
+    ) {
+      automationLog('processGoal:styleShortcut:skipNonStylesheetEdit', {
+        projectId,
+        goalId: goal?.id,
+        path: error?.__lucidcoderScopeViolation?.path || null,
+        message: errorMsg
+      });
+      return { success: true, skipped: true, skippedReason: 'style-shortcut-scope' };
+    }
 
     automationLog('processGoal:error', {
       projectId,

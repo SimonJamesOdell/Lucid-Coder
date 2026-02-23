@@ -217,6 +217,19 @@ describe('PreviewPanel', () => {
     expect(screen.getByTestId('git-spot-indicator')).toBeInTheDocument();
   });
 
+  test('commits tab shows indicator when branch has pending changes', async () => {
+    useAppState.mockReturnValue(createAppState({
+      currentProject: { id: 'p-1', name: 'Alpha Project' },
+      hasBranchNotification: true
+    }));
+
+    render(<PreviewPanel />);
+
+    const commitsTab = screen.getByTestId('commits-tab');
+    expect(commitsTab.className).toContain('with-indicator');
+    expect(screen.getByTestId('commits-spot-indicator')).toBeInTheDocument();
+  });
+
   test('supports registerCommitsActions null payload and cleanup', async () => {
     const user = userEvent.setup();
 
@@ -1501,6 +1514,103 @@ describe('PreviewPanel', () => {
     });
   });
 
+  test('builds editor focus key from explicit filePath and source fields when requestedAt is missing', async () => {
+    const appState = createAppState({ currentProject: { id: 288, name: 'Explicit Focus Key' } });
+    useAppState.mockReturnValue(appState);
+
+    const user = userEvent.setup();
+    const { rerender } = render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('commits-tab'));
+    expect(screen.getByTestId('mock-commits-tab')).toBeInTheDocument();
+
+    appState.editorFocusRequest = {
+      projectId: 288,
+      filePath: 'src/routes.tsx',
+      source: 'goals'
+    };
+
+    rerender(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-files-tab')).toBeInTheDocument();
+    });
+  });
+
+  test('builds editor focus key fallback when filePath and source are missing', async () => {
+    const appState = createAppState({ currentProject: { id: 289, name: 'Fallback Focus Key' } });
+    useAppState.mockReturnValue(appState);
+
+    const user = userEvent.setup();
+    const { rerender } = render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('commits-tab'));
+    expect(screen.getByTestId('mock-commits-tab')).toBeInTheDocument();
+
+    appState.editorFocusRequest = {
+      projectId: 289,
+      highlight: 'line:12'
+    };
+
+    rerender(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-files-tab')).toBeInTheDocument();
+    });
+  });
+
+  test('does not repeatedly force files tab for the same editor focus request after user returns to preview', async () => {
+    const appState = createAppState({ currentProject: { id: 188, name: 'Sticky Focus Guard' } });
+    useAppState.mockReturnValue(appState);
+
+    const user = userEvent.setup();
+    const { rerender } = render(<PreviewPanel />);
+
+    appState.editorFocusRequest = {
+      projectId: 188,
+      filePath: 'src/sticky.tsx',
+      source: 'commits'
+    };
+
+    rerender(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-files-tab')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('preview-tab'));
+    expect(screen.getByTestId('mock-preview-tab')).toBeInTheDocument();
+
+    rerender(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-preview-tab')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('mock-files-tab')).not.toBeInTheDocument();
+  });
+
+  test('switches to files tab when editor focus request provides requestedAt key', async () => {
+    const appState = createAppState({ currentProject: { id: 189, name: 'Timestamp Focus' } });
+    useAppState.mockReturnValue(appState);
+
+    const user = userEvent.setup();
+    const { rerender } = render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('commits-tab'));
+    expect(screen.getByTestId('mock-commits-tab')).toBeInTheDocument();
+
+    appState.editorFocusRequest = {
+      projectId: 189,
+      requestedAt: '2026-02-23T10:00:00.000Z'
+    };
+
+    rerender(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-files-tab')).toBeInTheDocument();
+    });
+  });
+
   test('passes process snapshots to ProcessesTab and wires refresh controls', async () => {
     const refreshProcessStatus = vi.fn();
     const restartProject = vi.fn();
@@ -1576,6 +1686,7 @@ describe('PreviewPanel', () => {
     act(() => {
       commitsTabPropsRef.current?.onRequestTestsTab?.({
         autoRun: true,
+        forceRun: true,
         source: 'automation',
         returnToCommits: true
       });
@@ -1595,6 +1706,7 @@ describe('PreviewPanel', () => {
     expect(runAllTests).toHaveBeenCalledWith({
       source: 'automation',
       autoCommit: false,
+      forceRun: true,
       returnToCommits: true
     });
   });
@@ -1613,6 +1725,7 @@ describe('PreviewPanel', () => {
     act(() => {
       commitsTabPropsRef.current?.onRequestTestsTab?.({
         autoRun: true,
+        forceRun: true,
         source: 123,
         returnToCommits: true
       });
@@ -1631,6 +1744,7 @@ describe('PreviewPanel', () => {
     expect(runAllTests).toHaveBeenCalledWith({
       source: 'automation',
       autoCommit: false,
+      forceRun: true,
       returnToCommits: true
     });
   });

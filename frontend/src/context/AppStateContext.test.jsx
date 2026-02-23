@@ -3174,6 +3174,7 @@ describe('AppStateContext integrations', () => {
     await waitFor(() => {
       expect(result.current.workspaceChanges['proj-bulk'].stagedFiles).toEqual([]);
       expect(result.current.workingBranches['proj-bulk'].commits).toBe(0);
+      expect(result.current.workingBranches['proj-bulk'].ahead).toBe(0);
     });
   });
 
@@ -3213,6 +3214,42 @@ describe('AppStateContext integrations', () => {
       const branchPaths = result.current.workingBranches['proj-target'].stagedFiles.map((file) => file.path);
       expect(branchPaths).toEqual(['src/keep.js']);
       expect(result.current.workingBranches['proj-target'].commits).toBe(1);
+      expect(result.current.workingBranches['proj-target'].ahead).toBe(1);
+    });
+  });
+
+  test('clearStagedChanges fallback demotes stale ready-for-merge status when nothing remains staged', async () => {
+    fetchMock.mockImplementation((url, options) => {
+      if (typeof url === 'string' && url.includes('/branches/stage') && options?.method === 'DELETE') {
+        return Promise.reject(new Error('temporary backend outage'));
+      }
+      return defaultFetchImpl(url, options);
+    });
+
+    const { result } = renderHook(() => useAppState(), { wrapper });
+
+    act(() => {
+      result.current.syncBranchOverview('proj-stale', {
+        workingBranches: [
+          {
+            name: 'feature/stale',
+            status: 'ready-for-merge',
+            ahead: 2,
+            stagedFiles: [{ path: 'src/one.js', timestamp: 'now' }]
+          }
+        ]
+      });
+    });
+
+    await act(async () => {
+      const response = await result.current.clearStagedChanges('proj-stale');
+      expect(response).toBeNull();
+    });
+
+    await waitFor(() => {
+      expect(result.current.workspaceChanges['proj-stale'].stagedFiles).toEqual([]);
+      expect(result.current.workingBranches['proj-stale'].ahead).toBe(0);
+      expect(result.current.workingBranches['proj-stale'].status).toBe('active');
     });
   });
 

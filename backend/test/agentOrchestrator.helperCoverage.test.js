@@ -286,6 +286,38 @@ describe('mergeGoalMetadata suppression', () => {
     expect(goal.metadata).toEqual(expect.objectContaining({ testFailure: { id: 'test-1' } }));
   });
 
+  it('suppresses clarifying questions when testFailure is boolean true', async () => {
+    const projectId = 9302;
+    const { tasks } = await createGoalFromPrompt({
+      projectId,
+      prompt: 'Investigate failing verification run',
+      extraClarifyingQuestions: ['Need more context?'],
+      metadataOverrides: {
+        testFailure: true,
+        clarifyingQuestions: ['Should be suppressed']
+      }
+    });
+
+    expect(tasks.some((task) => task.type === 'clarification')).toBe(false);
+    expect(tasks.some((task) => task.type === 'analysis')).toBe(true);
+  });
+
+  it('does not suppress clarifying questions when uncoveredLines metadata is empty', async () => {
+    const projectId = 9301;
+    const { tasks } = await createGoalFromPrompt({
+      projectId,
+      prompt: 'Plan a feature change',
+      extraClarifyingQuestions: ['Should this be available on mobile as well?'],
+      metadataOverrides: {
+        uncoveredLines: [],
+        clarifyingQuestions: ['Keep this clarifier']
+      }
+    });
+
+    expect(tasks.some((task) => task.type === 'clarification')).toBe(true);
+    expect(tasks.some((task) => task.type === 'analysis')).toBe(false);
+  });
+
   it('filters non-string and blank metadata values in acceptance criteria', async () => {
     const projectId = 931;
     const { goal } = await createGoalFromPrompt({
@@ -297,6 +329,38 @@ describe('mergeGoalMetadata suppression', () => {
     });
 
     expect(goal.metadata?.acceptanceCriteria).toEqual(['Valid']);
+  });
+
+  it('suppresses clarifying questions when testFailure is a non-empty string', async () => {
+    const projectId = 9311;
+    const { tasks } = await createGoalFromPrompt({
+      projectId,
+      prompt: 'Investigate flaky test',
+      extraClarifyingQuestions: ['Need additional logs?'],
+      metadataOverrides: {
+        testFailure: 'failed in CI',
+        clarifyingQuestions: ['Do not keep this']
+      }
+    });
+
+    expect(tasks.some((task) => task.type === 'clarification')).toBe(false);
+    expect(tasks.some((task) => task.type === 'analysis')).toBe(true);
+  });
+
+  it('suppresses clarifying questions when uncoveredLines is a positive number', async () => {
+    const projectId = 9312;
+    const { tasks } = await createGoalFromPrompt({
+      projectId,
+      prompt: 'Improve test coverage',
+      extraClarifyingQuestions: ['Should this include edge paths?'],
+      metadataOverrides: {
+        uncoveredLines: 12,
+        clarifyingQuestions: ['Do not keep this either']
+      }
+    });
+
+    expect(tasks.some((task) => task.type === 'clarification')).toBe(false);
+    expect(tasks.some((task) => task.type === 'analysis')).toBe(true);
   });
 });
 

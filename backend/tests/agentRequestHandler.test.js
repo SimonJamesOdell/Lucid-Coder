@@ -38,6 +38,22 @@ describe('agentRequestHandler', () => {
     expect(result).toEqual({ kind: 'question', answer: 'Yes, it is secure.' });
   });
 
+  it('classify calls opt into minimal tool bridge mode for strict JSON output', async () => {
+    llmClient.generateResponse.mockResolvedValue(JSON.stringify({ kind: 'question' }));
+
+    await classifyAgentRequest({ projectId: 1, prompt: 'Is the login secure?' });
+
+    expect(llmClient.generateResponse).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        __lucidcoderDisableToolBridge: true,
+        __lucidcoderForceMinimalToolBridge: true,
+        __lucidcoderPhase: 'classification',
+        __lucidcoderRequestType: 'classify'
+      })
+    );
+  });
+
   it('exposes helper guards for non-string inputs via __testing (coverage for early returns)', () => {
     expect(__testing.normalizeJsonLikeText({ value: 1 })).toEqual({ value: 1 });
     expect(__testing.stripCodeFences(123)).toBe(123);
@@ -69,6 +85,30 @@ describe('agentRequestHandler', () => {
 
     const result = await classifyAgentRequest({ projectId: 1, prompt: 'Is the login secure?' });
     expect(result).toEqual({ kind: 'question' });
+  });
+
+  it('normalizes action-answer envelopes that contain nested classification JSON', async () => {
+    llmClient.generateResponse.mockResolvedValue(
+      JSON.stringify({
+        action: 'answer',
+        answer: '{"kind":"feature"}'
+      })
+    );
+
+    const result = await classifyAgentRequest({ projectId: 1, prompt: 'Add a navbar with logo and links' });
+    expect(result).toEqual({ kind: 'feature' });
+  });
+
+  it('normalizes action-answer envelopes that contain direct kind text', async () => {
+    llmClient.generateResponse.mockResolvedValue(
+      JSON.stringify({
+        action: 'answer',
+        answer: 'small-change'
+      })
+    );
+
+    const result = await classifyAgentRequest({ projectId: 1, prompt: 'Rename this button label' });
+    expect(result).toEqual({ kind: 'small-change' });
   });
 
   it('parses responses that use curly smart quotes', async () => {
@@ -141,6 +181,16 @@ describe('agentRequestHandler', () => {
     await expect(
       classifyAgentRequest({ projectId: 1, prompt: 'Is the login secure?' })
     ).rejects.toThrow(/classification response missing or invalid kind/i);
+  });
+
+  it('exposes classification normalization helper via __testing', () => {
+    expect(__testing.normalizeClassificationResult({ kind: 'feature' })).toEqual({ kind: 'feature' });
+    expect(
+      __testing.normalizeClassificationResult({ action: 'answer', answer: '{"kind":"question"}' })
+    ).toEqual({ kind: 'question' });
+    expect(
+      __testing.normalizeClassificationResult({ action: 'answer', answer: 'feature' })
+    ).toEqual({ kind: 'feature' });
   });
 
   it('handleAgentRequest delegates questions to the tool-based agent', async () => {
@@ -291,6 +341,8 @@ describe('agentRequestHandler', () => {
   it('falls back to question agent when classification fails', async () => {
     llmClient.generateResponse.mockResolvedValueOnce('not-json').mockResolvedValueOnce('still-not-json');
 
+    orchestrator.planGoalFromPrompt.mockRejectedValueOnce(new Error('planner unavailable'));
+
     questionAgent.answerProjectQuestion.mockResolvedValue({
       answer: 'Fallback answer',
       steps: [{ type: 'action', action: 'read_file', target: 'README.md' }]
@@ -312,6 +364,8 @@ describe('agentRequestHandler', () => {
   it('classification failure uses default classificationError when failure is not an Error', async () => {
     llmClient.generateResponse.mockRejectedValueOnce('boom');
 
+    orchestrator.planGoalFromPrompt.mockRejectedValueOnce(new Error('planner unavailable'));
+
     questionAgent.answerProjectQuestion.mockResolvedValue({
       answer: 'Fallback answer',
       steps: []
@@ -332,6 +386,8 @@ describe('agentRequestHandler', () => {
   it('fallback response uses default answer/steps when question agent omits them', async () => {
     llmClient.generateResponse.mockResolvedValueOnce('not-json').mockResolvedValueOnce('still-not-json');
 
+    orchestrator.planGoalFromPrompt.mockRejectedValueOnce(new Error('planner unavailable'));
+
     questionAgent.answerProjectQuestion.mockResolvedValue({ answer: '', steps: null });
 
     const result = await handleAgentRequest({ projectId: 15, prompt: 'Explain the project' });
@@ -348,6 +404,7 @@ describe('agentRequestHandler', () => {
 
   it('returns a safe question response when classification and fallback both fail', async () => {
     llmClient.generateResponse.mockResolvedValueOnce('not-json').mockResolvedValueOnce('still-not-json');
+    orchestrator.planGoalFromPrompt.mockRejectedValueOnce(new Error('planner unavailable'));
     questionAgent.answerProjectQuestion.mockRejectedValue(new Error('fallback down'));
 
     const result = await handleAgentRequest({ projectId: 14, prompt: 'Explain the project' });
@@ -366,6 +423,7 @@ describe('agentRequestHandler', () => {
 
   it('classification fallback uses default fallbackError when thrown value is not an Error', async () => {
     llmClient.generateResponse.mockRejectedValueOnce('boom');
+    orchestrator.planGoalFromPrompt.mockRejectedValueOnce(new Error('planner unavailable'));
     questionAgent.answerProjectQuestion.mockRejectedValue('fallback boom');
 
     const result = await handleAgentRequest({ projectId: 18, prompt: 'Explain the project' });
@@ -398,6 +456,72 @@ describe('agentRequestHandler', () => {
       })
     );
     expect(String(result.answer)).toMatch(/planning failed/i);
+  });
+
+  it('uses planner fallback when classification fails due schema mismatch', async () => {
+    llmClient.generateResponse
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          action: 'answer',
+          answer: 'Below is a complete implementation example for a navbar...'
+        })
+      )
+      .mockResolvedValueOnce('still-not-kind-json');
+
+    orchestrator.planGoalFromPrompt.mockResolvedValue({
+      parent: { id: 701 },
+      children: [{ id: 702 }, { id: 703 }]
+    });
+
+    const result = await handleAgentRequest({ projectId: 44, prompt: 'Build me a top nav with dropdown pages' });
+
+    expect(orchestrator.planGoalFromPrompt).toHaveBeenCalledWith({
+      projectId: 44,
+      prompt: 'Build me a top nav with dropdown pages'
+    });
+    expect(questionAgent.answerProjectQuestion).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: 'feature',
+        parent: { id: 701 },
+        children: [{ id: 702 }, { id: 703 }],
+        message: expect.stringContaining('planner fallback'),
+        meta: expect.objectContaining({ classificationError: expect.any(String) })
+      })
+    );
+  });
+
+  it('uses simplified planner fallback when classification and planner fallback both fail', async () => {
+    llmClient.generateResponse.mockResolvedValueOnce('not-json').mockResolvedValueOnce('still-not-json');
+    orchestrator.planGoalFromPrompt.mockRejectedValueOnce(new Error('planner unavailable'));
+    planningFallback.planGoalFromPromptFallback.mockResolvedValue({
+      parent: { id: 801 },
+      children: [{ id: 802 }]
+    });
+
+    const result = await handleAgentRequest({ projectId: 45, prompt: 'Build me a top nav with dropdown pages' });
+
+    expect(orchestrator.planGoalFromPrompt).toHaveBeenCalledWith({
+      projectId: 45,
+      prompt: 'Build me a top nav with dropdown pages'
+    });
+    expect(planningFallback.planGoalFromPromptFallback).toHaveBeenCalledWith({
+      projectId: 45,
+      prompt: 'Build me a top nav with dropdown pages'
+    });
+    expect(questionAgent.answerProjectQuestion).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: 'feature',
+        parent: { id: 801 },
+        children: [{ id: 802 }],
+        message: expect.stringContaining('simplified fallback'),
+        meta: expect.objectContaining({
+          classificationError: expect.any(String),
+          plannerFallbackError: 'planner unavailable'
+        })
+      })
+    );
   });
 
   it('falls back to a simplified plan when the LLM planner fails', async () => {

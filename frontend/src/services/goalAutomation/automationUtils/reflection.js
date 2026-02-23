@@ -61,6 +61,136 @@ export const deriveStyleScopeContract = (_goalPrompt) => {
   return null;
 };
 
+const hasRequiredExecutionContractShape = (reflection) => (
+  reflection
+  && typeof reflection === 'object'
+  && !Array.isArray(reflection)
+  && Array.isArray(reflection.mustChange)
+  && Array.isArray(reflection.mustAvoid)
+  && Array.isArray(reflection.mustHave)
+  && typeof reflection.testsNeeded === 'boolean'
+);
+
+export const validateExecutionContractGate = ({
+  reflection,
+  stage = 'implementation'
+}) => {
+  if (stage !== 'implementation') {
+    return null;
+  }
+
+  if (!hasRequiredExecutionContractShape(reflection)) {
+    return {
+      type: 'execution-contract-invalid',
+      path: null,
+      rule: 'execution-contract-required-fields',
+      message:
+        'Execution contract is missing required structured fields (mustChange, mustAvoid, mustHave, testsNeeded). Regenerate scope reflection before implementation edits.'
+    };
+  }
+
+  return null;
+};
+
+const classifyWorkspaceFromPath = (normalizedPath) => {
+  if (typeof normalizedPath !== 'string' || !normalizedPath) {
+    return null;
+  }
+  if (normalizedPath.startsWith('frontend/')) {
+    return 'frontend';
+  }
+  if (normalizedPath.startsWith('backend/')) {
+    return 'backend';
+  }
+  if (normalizedPath.startsWith('shared/')) {
+    return 'shared';
+  }
+  return null;
+};
+
+const deriveSingleRequiredWorkspace = (mustChangePrefixes = []) => {
+  const workspaces = new Set(
+    mustChangePrefixes
+      .map((prefix) => classifyWorkspaceFromPath(prefix))
+      .filter(Boolean)
+      .filter((workspace) => workspace !== 'shared')
+  );
+  return workspaces.size === 1 ? Array.from(workspaces)[0] : null;
+};
+
+export const scoreEditPlanConfidence = ({ edits, reflection, normalizeRepoPath, stage = 'implementation' }) => {
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return {
+      score: 0,
+      label: 'low',
+      metrics: {
+        touchedFiles: 0,
+        mustChangeSatisfied: false,
+        forbiddenTouches: 0,
+        mixedWorkspaceTouches: 0,
+        stage
+      }
+    };
+  }
+
+  const normalizedPaths = edits
+    .map((edit) => normalizeRepoPath(edit?.path))
+    .filter(Boolean);
+
+  const touchedFiles = new Set(normalizedPaths).size;
+  const mustChangePrefixes = stage === 'implementation'
+    ? deriveReflectionPathPrefixes(reflection?.mustChange || [], normalizeRepoPath)
+    : [];
+  const avoidPrefixes = deriveReflectionPathPrefixes(reflection?.mustAvoid || [], normalizeRepoPath);
+
+  const mustChangeSatisfied = mustChangePrefixes.length === 0 || normalizedPaths.some((path) => (
+    mustChangePrefixes.some((prefix) => path.startsWith(prefix))
+  ));
+
+  const forbiddenTouches = normalizedPaths.filter((path) => (
+    avoidPrefixes.some((prefix) => path.startsWith(prefix))
+  )).length;
+
+  const requiredWorkspace = deriveSingleRequiredWorkspace(mustChangePrefixes);
+  const mixedWorkspaceTouches = requiredWorkspace
+    ? normalizedPaths.filter((path) => {
+      const workspace = classifyWorkspaceFromPath(path);
+      return workspace && workspace !== 'shared' && workspace !== requiredWorkspace;
+    }).length
+    : 0;
+
+  let score = 1;
+  if (touchedFiles > 6) {
+    score -= 0.45;
+  } else if (touchedFiles > 3) {
+    score -= 0.2;
+  }
+  if (!mustChangeSatisfied) {
+    score -= 0.35;
+  }
+  if (forbiddenTouches > 0) {
+    score -= 0.35;
+  }
+  if (mixedWorkspaceTouches > 0) {
+    score -= 0.25;
+  }
+
+  const normalizedScore = Math.max(0, Math.min(1, Number(score.toFixed(2))));
+  const label = normalizedScore >= 0.75 ? 'high' : normalizedScore >= 0.5 ? 'medium' : 'low';
+
+  return {
+    score: normalizedScore,
+    label,
+    metrics: {
+      touchedFiles,
+      mustChangeSatisfied,
+      forbiddenTouches,
+      mixedWorkspaceTouches,
+      stage
+    }
+  };
+};
+
 const editTouchesGlobalSelectors = (edit = {}) => {
   if (edit?.type === 'upsert') {
     return typeof edit?.content === 'string' && GLOBAL_SELECTOR_REGEX.test(edit.content);
@@ -105,10 +235,31 @@ export const normalizeReflectionList = (value) => {
 
 export const deriveReflectionPathPrefixes = (entries, normalizeRepoPath) => {
   const prefixes = new Set();
+
+  const sanitizePathEntry = (value) => {
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    return value
+      .trim()
+      .replace(/^["'`]+|["'`]+$/g, '')
+      .replace(/\s*\((?:[^)]*?(?:if\s+missing|or\s+create)[^)]*)\)\s*/gi, ' ')
+      .replace(/[.;:,]+$/g, '')
+      .replace(/\/+\.$/, '')
+      .trim();
+  };
+
   for (const entry of entries) {
-    const normalized = normalizeRepoPath(entry);
+    const normalized = normalizeRepoPath(sanitizePathEntry(entry));
     if (normalized) {
-      prefixes.add(normalized.endsWith('/') ? normalized : `${normalized}/`);
+      const trimmedPath = normalized.replace(/\/+$/g, '');
+      if (trimmedPath) {
+        prefixes.add(trimmedPath);
+        if (!/\.[a-z0-9]+$/i.test(trimmedPath)) {
+          prefixes.add(`${trimmedPath}/`);
+        }
+      }
       continue;
     }
 
@@ -194,11 +345,16 @@ export const parseScopeReflectionResponse = ({
     const isGlobalLevel = targetLevel === 'global';
     const isPageLevel = targetLevel === 'page';
     const targetHints = normalizeReflectionList(value.targetHints || []);
+    const hasUsableTargetHints = targetHints.length > 0;
     return {
       mode: isGlobalLevel ? 'global' : mode,
       targetLevel,
-      enforceTargetScoping: isGlobalLevel ? false : value.enforceTargetScoping === true,
-      forbidGlobalSelectors: (isGlobalLevel || isPageLevel) ? false : value.forbidGlobalSelectors === true,
+      enforceTargetScoping: (isGlobalLevel || !hasUsableTargetHints)
+        ? false
+        : value.enforceTargetScoping === true,
+      forbidGlobalSelectors: (isGlobalLevel || isPageLevel || !hasUsableTargetHints)
+        ? false
+        : value.forbidGlobalSelectors === true,
       targetHints
     };
   };
@@ -276,17 +432,50 @@ export const isTestFilePath = (path) => {
   return /__tests__\//.test(path) || /\.(test|spec)\.[jt]sx?$/.test(path);
 };
 
-export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRepoPath }) => {
+export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRepoPath, stage = 'implementation' }) => {
   if (!reflection || !Array.isArray(edits) || edits.length === 0) {
     return null;
   }
 
   const avoidPrefixes = deriveReflectionPathPrefixes(reflection.mustAvoid || [], normalizeRepoPath);
+  const mustChangePrefixes = stage === 'implementation'
+    ? deriveReflectionPathPrefixes(reflection.mustChange || [], normalizeRepoPath)
+    : [];
+  let hasRequiredMustChangeEdit = mustChangePrefixes.length === 0;
   const styleScope = reflection?.styleScope && typeof reflection.styleScope === 'object'
     ? reflection.styleScope
     : null;
   const requiredAssetPaths = normalizeReflectionList(reflection?.requiredAssetPaths || []);
   let hasRequiredAssetReference = requiredAssetPaths.length === 0;
+  const touchedPaths = edits
+    .map((edit) => normalizeRepoPath(edit?.path))
+    .filter(Boolean);
+  const touchedFilesCount = new Set(touchedPaths).size;
+  const MAX_TOUCHED_FILES_PER_STAGE = stage === 'tests' ? 10 : 6;
+  if (stage === 'implementation' && touchedFilesCount > MAX_TOUCHED_FILES_PER_STAGE) {
+    return {
+      type: 'overscoped-edit-plan',
+      path: touchedPaths[0],
+      rule: 'execution-contract-max-touched-files',
+      message: `Implementation edit plan touches ${touchedFilesCount} files. Keep implementation edits focused to ${MAX_TOUCHED_FILES_PER_STAGE} or fewer files per attempt.`
+    };
+  }
+
+  const requiredWorkspace = deriveSingleRequiredWorkspace(mustChangePrefixes);
+  if (stage === 'implementation' && requiredWorkspace) {
+    const crossWorkspacePath = touchedPaths.find((path) => {
+      const workspace = classifyWorkspaceFromPath(path);
+      return workspace && workspace !== 'shared' && workspace !== requiredWorkspace;
+    });
+    if (crossWorkspacePath) {
+      return {
+        type: 'mixed-workspace-edit-plan',
+        path: crossWorkspacePath,
+        rule: 'execution-contract-single-workspace',
+        message: `Execution contract targets ${requiredWorkspace} scope, but edits also touched ${crossWorkspacePath}. Keep this attempt within one workspace.`
+      };
+    }
+  }
 
   for (const edit of edits) {
     const normalizedPath = normalizeRepoPath(edit?.path);
@@ -296,6 +485,10 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
 
     if (!hasRequiredAssetReference && editMentionsRequiredAssetPaths(edit, requiredAssetPaths)) {
       hasRequiredAssetReference = true;
+    }
+
+    if (!hasRequiredMustChangeEdit) {
+      hasRequiredMustChangeEdit = mustChangePrefixes.some((prefix) => normalizedPath.startsWith(prefix));
     }
 
     if (reflection.testsNeeded === false && isTestFilePath(normalizedPath)) {
@@ -345,6 +538,16 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
     }
   }
 
+  if (!hasRequiredMustChangeEdit) {
+    const requiredLabel = mustChangePrefixes.slice(0, 3).join(', ');
+    return {
+      type: 'execution-contract-must-change-missing',
+      path: mustChangePrefixes[0],
+      rule: 'execution-contract-must-change',
+      message: `Execution contract requires implementation edits in: ${requiredLabel}.`
+    };
+  }
+
   if (styleScope && requiredAssetPaths.length > 0 && !hasRequiredAssetReference) {
     return {
       type: 'required-asset-reference-missing',
@@ -359,5 +562,7 @@ export const validateEditsAgainstReflection = ({ edits, reflection, normalizeRep
 
 export const __reflectionTestHooks = {
   normalizeAssetPathForMatch,
-  editMentionsRequiredAssetPaths
+  editMentionsRequiredAssetPaths,
+  scoreEditPlanConfidence,
+  hasRequiredExecutionContractShape
 };

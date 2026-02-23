@@ -113,6 +113,13 @@ describe('goalsApi helpers', () => {
     mockedAxios.post.mockResolvedValue({ data: { ok: true } });
     await agentRequest({ projectId: 'proj-1', prompt: 'Assist' });
     expect(mockedAxios.post).toHaveBeenCalledWith('/api/agent/request', { projectId: 'proj-1', prompt: 'Assist' });
+
+    await agentRequest({ projectId: 'proj-1', prompt: 'Assist', maxSteps: 18.9 });
+    expect(mockedAxios.post).toHaveBeenCalledWith('/api/agent/request', {
+      projectId: 'proj-1',
+      prompt: 'Assist',
+      maxSteps: 18
+    });
   });
 
   test('agentRequestStream validates inputs and handles response errors', async () => {
@@ -128,6 +135,18 @@ describe('goalsApi helpers', () => {
     await expect(agentRequestStream({ projectId: 'proj-1', prompt: 'Hello' })).rejects.toThrow(
       'Streaming request failed (200)'
     );
+  });
+
+  test('agentRequestStream forwards optional maxSteps in request payload', async () => {
+    fetch.mockResolvedValue({ ok: true, status: 200, body: null });
+
+    await expect(agentRequestStream({ projectId: 'proj-1', prompt: 'Hello', maxSteps: 12.7 })).rejects.toThrow(
+      'Streaming request failed (200)'
+    );
+
+    expect(fetch).toHaveBeenCalledWith('/api/agent/request/stream', expect.objectContaining({
+      body: JSON.stringify({ projectId: 'proj-1', prompt: 'Hello', maxSteps: 12 })
+    }));
   });
 
   test('agentRequestStream emits chunk, done, and error events', async () => {

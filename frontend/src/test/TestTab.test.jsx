@@ -548,7 +548,7 @@ describe('TestTab', () => {
     const completedAt = new Date(Date.now() + 100).toISOString();
 
     useAppState
-      .mockReturnValueOnce(buildContext({
+      .mockReturnValue(buildContext({
         getJobsForProject: vi.fn().mockReturnValue([
           {
             id: 'front-stable',
@@ -648,7 +648,7 @@ describe('TestTab', () => {
     const cancelAutomationJob = vi.fn().mockResolvedValue({});
 
     useAppState
-      .mockReturnValueOnce(buildContext({
+      .mockReturnValue(buildContext({
         cancelAutomationJob,
         getJobsForProject: vi.fn().mockReturnValue([
           {
@@ -1400,6 +1400,165 @@ describe('TestTab', () => {
     });
   });
 
+  test('surfaces commit-failed modal when continue-to-commits flow throws response payload error', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    const stagedFiles = [{ path: 'src/App.jsx' }];
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/manual-proof-catch',
+        stagedFiles,
+        testsRequired: false,
+        status: 'active'
+      }
+    };
+
+    const contextFirst = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: createdAt },
+      workingBranches,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-manual-catch', type: 'frontend:test', status: 'running', logs: [], createdAt },
+        { id: 'back-manual-catch', type: 'backend:test', status: 'running', logs: [], createdAt }
+      ])
+    });
+
+    const contextSecond = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: completedAt },
+      workingBranches,
+      syncBranchOverview: vi.fn(() => {
+        throw { response: { data: { error: 'Proof catch branch triggered' } } };
+      }),
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-manual-catch', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+        { id: 'back-manual-catch', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+      ])
+    });
+
+    useAppState
+      .mockReturnValueOnce(contextFirst)
+      .mockReturnValueOnce(contextSecond);
+
+    const view = render(<TestTab project={baseProject} />);
+    view.rerender(<TestTab project={baseProject} />);
+
+    await screen.findByTestId('modal-content');
+    expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Continue to commits');
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      const modal = screen.getByTestId('modal-content');
+      expect(within(modal).getByText('Commit failed')).toBeInTheDocument();
+      expect(within(modal).getByText('Proof catch branch triggered')).toBeInTheDocument();
+    });
+  });
+
+  test('surfaces commit-failed modal when continue-to-commits flow throws message-only error', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    const stagedFiles = [{ path: 'src/App.jsx' }];
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/manual-proof-message',
+        stagedFiles,
+        testsRequired: false,
+        status: 'active'
+      }
+    };
+
+    const contextFirst = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: createdAt },
+      workingBranches,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-manual-message', type: 'frontend:test', status: 'running', logs: [], createdAt },
+        { id: 'back-manual-message', type: 'backend:test', status: 'running', logs: [], createdAt }
+      ])
+    });
+
+    const contextSecond = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: completedAt },
+      workingBranches,
+      syncBranchOverview: vi.fn(() => {
+        throw new Error('Proof message branch triggered');
+      }),
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-manual-message', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+        { id: 'back-manual-message', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+      ])
+    });
+
+    useAppState
+      .mockReturnValueOnce(contextFirst)
+      .mockReturnValueOnce(contextSecond);
+
+    const view = render(<TestTab project={baseProject} />);
+    view.rerender(<TestTab project={baseProject} />);
+
+    await screen.findByTestId('modal-content');
+    await userEvent.click(screen.getByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      const modal = screen.getByTestId('modal-content');
+      expect(within(modal).getByText('Commit failed')).toBeInTheDocument();
+      expect(within(modal).getByText('Proof message branch triggered')).toBeInTheDocument();
+    });
+  });
+
+  test('surfaces default proof fallback when continue-to-commits flow throws empty error object', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    const stagedFiles = [{ path: 'src/App.jsx' }];
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/manual-proof-fallback',
+        stagedFiles,
+        testsRequired: false,
+        status: 'active'
+      }
+    };
+
+    const contextFirst = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: createdAt },
+      workingBranches,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-manual-fallback', type: 'frontend:test', status: 'running', logs: [], createdAt },
+        { id: 'back-manual-fallback', type: 'backend:test', status: 'running', logs: [], createdAt }
+      ])
+    });
+
+    const contextSecond = buildContext({
+      testRunIntent: { source: 'manual', updatedAt: completedAt },
+      workingBranches,
+      syncBranchOverview: vi.fn(() => {
+        throw {};
+      }),
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-manual-fallback', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+        { id: 'back-manual-fallback', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+      ])
+    });
+
+    useAppState
+      .mockReturnValueOnce(contextFirst)
+      .mockReturnValueOnce(contextSecond);
+
+    const view = render(<TestTab project={baseProject} />);
+    view.rerender(<TestTab project={baseProject} />);
+
+    await screen.findByTestId('modal-content');
+    await userEvent.click(screen.getByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      const modal = screen.getByTestId('modal-content');
+      expect(within(modal).getByText('Commit failed')).toBeInTheDocument();
+      expect(within(modal).getByText('Failed to record branch test proof')).toBeInTheDocument();
+    });
+  });
+
   test('commits immediately when the initial commit attempt succeeds (no proof required)', async () => {
     const createdAt = new Date(Date.now() + 50).toISOString();
     const completedAt = new Date(Date.now() + 100).toISOString();
@@ -1536,6 +1695,113 @@ describe('TestTab', () => {
     expect(axios.post).toHaveBeenCalledTimes(1);
   });
 
+  test('shows response data proof error when proof recording fails with API error payload', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    axios.post.mockRejectedValueOnce({ response: { data: { error: 'Proof endpoint rejected payload' } } });
+
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/proof-api-error',
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    const jobs = [
+      { id: 'front-proof-api-error', type: 'frontend:test', status: 'succeeded', command: 'npm', args: ['run', 'test'], cwd: '/tmp/project', logs: [], createdAt, completedAt },
+      { id: 'back-proof-api-error', type: 'backend:test', status: 'succeeded', command: 'npm', args: ['run', 'test'], cwd: '/tmp/project', logs: [], createdAt, completedAt }
+    ];
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', updatedAt: createdAt },
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue(jobs.map((job) => ({ ...job, status: 'running', completedAt: undefined })))
+      }))
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', updatedAt: completedAt },
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue(jobs)
+      }));
+
+    const view = render(<TestTab project={baseProject} />);
+    view.rerender(<TestTab project={baseProject} />);
+
+    await screen.findByTestId('modal-content');
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('modal-confirm'));
+
+    const modal = await screen.findByTestId('modal-content');
+    expect(within(modal).getByText('Proof endpoint rejected payload')).toBeInTheDocument();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  test('shows proof error from response payload and surfaces commit-failed modal state', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    axios.post.mockRejectedValueOnce({ response: { data: { error: 'Proof failed in catch branch' } } });
+
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/proof-catch-branch',
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    const jobs = [
+      { id: 'front-proof-catch-branch', type: 'frontend:test', status: 'succeeded', command: 'npm', args: ['run', 'test'], cwd: '/tmp/project', logs: [], createdAt, completedAt },
+      { id: 'back-proof-catch-branch', type: 'backend:test', status: 'succeeded', command: 'npm', args: ['run', 'test'], cwd: '/tmp/project', logs: [], createdAt, completedAt }
+    ];
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', updatedAt: createdAt },
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue(jobs.map((job) => ({ ...job, status: 'running', completedAt: undefined })))
+      }))
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', updatedAt: completedAt },
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue(jobs)
+      }));
+
+    const view = render(<TestTab project={baseProject} />);
+    view.rerender(<TestTab project={baseProject} />);
+
+    await screen.findByTestId('modal-content');
+    await userEvent.click(screen.getByTestId('modal-confirm'));
+
+    const modal = await screen.findByTestId('modal-content');
+    expect(within(modal).getByText('Commit failed')).toBeInTheDocument();
+    expect(within(modal).getByText('Proof failed in catch branch')).toBeInTheDocument();
+  });
+
+  test('proof suite label resolves to backend when only backend results are available', async () => {
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    useAppState.mockReturnValue(buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'only-backend-result',
+          type: 'backend:test',
+          status: 'succeeded',
+          logs: [],
+          createdAt: completedAt,
+          completedAt
+        }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    const hooks = await waitForInstanceHooks();
+    expect(hooks.getProofSuiteLabel()).toBe('backend');
+  });
+
   test('submitProofIfNeeded returns false when branch is already ready for merge', async () => {
     const now = new Date().toISOString();
     const workingBranches = {
@@ -1585,7 +1851,7 @@ describe('TestTab', () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  test('submitProofIfNeeded ignores non-automation test sources', async () => {
+  test('submitProofIfNeeded allows proof recording for non-automation test sources', async () => {
     const now = new Date().toISOString();
     const workingBranches = {
       [baseProject.id]: {
@@ -1608,8 +1874,10 @@ describe('TestTab', () => {
     render(<TestTab project={baseProject} />);
     const hooks = await waitForInstanceHooks();
 
-    expect(await hooks.submitProofIfNeeded()).toBe(false);
-    expect(axios.post).not.toHaveBeenCalled();
+    axios.post.mockResolvedValue({ data: { overview: { workingBranches: [] } } });
+
+    expect(await hooks.submitProofIfNeeded()).toBe(true);
+    expect(axios.post).toHaveBeenCalledTimes(1);
   });
 
   test('submitProofIfNeeded requires both test suites to succeed', async () => {
@@ -1637,6 +1905,42 @@ describe('TestTab', () => {
 
     expect(await hooks.submitProofIfNeeded()).toBe(false);
     expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('submitProofIfNeeded records frontend-only proof when backend job is absent', async () => {
+    const now = new Date().toISOString();
+    const workingBranches = {
+      [baseProject.id]: {
+        name: 'feature/frontend-only-proof',
+        stagedFiles: [{ path: 'src/App.jsx' }]
+      }
+    };
+
+    const jobs = [
+      { id: 'front-only-proof', type: 'frontend:test', status: 'succeeded', command: 'npm', args: ['run', 'test'], cwd: '/tmp/project', logs: [], createdAt: now, completedAt: now }
+    ];
+
+    axios.post.mockResolvedValue({ data: { overview: { workingBranches: [] } } });
+
+    useAppState.mockReturnValue(buildContext({
+      testRunIntent: { source: 'automation', updatedAt: now },
+      workingBranches,
+      getJobsForProject: vi.fn().mockReturnValue(jobs)
+    }));
+
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    await expect(hooks.submitProofIfNeeded()).resolves.toBe(true);
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post).toHaveBeenCalledWith(
+      `/api/projects/${baseProject.id}/branches/${encodeURIComponent('feature/frontend-only-proof')}/tests/proof`,
+      expect.objectContaining({
+        jobIds: ['front-only-proof'],
+        frontendJobId: 'front-only-proof',
+        backendJobId: null
+      })
+    );
   });
 
   test('submitProofIfNeeded skips duplicate proofs for the same job ids', async () => {
@@ -2199,7 +2503,7 @@ describe('TestTab', () => {
     await waitFor(() => {
       const modal = screen.getByTestId('modal-content');
       expect(within(modal).getByText('Tests required before commit')).toBeInTheDocument();
-      expect(within(modal).getByText('Run backend tests again before committing this branch so the server can record a passing proof.')).toBeInTheDocument();
+      expect(within(modal).getByText('Run frontend and backend tests again before committing this branch so the server can record a passing proof.')).toBeInTheDocument();
     });
     expect(onRequestCommitsTab).not.toHaveBeenCalled();
   });
@@ -2460,7 +2764,7 @@ describe('TestTab', () => {
     await waitFor(() => {
       const modal = screen.getByTestId('modal-content');
       expect(within(modal).getByText('Tests required before commit')).toBeInTheDocument();
-      expect(within(modal).getByText('Run backend tests again before committing this branch so the server can record a passing proof.')).toBeInTheDocument();
+      expect(within(modal).getByText('Run frontend and backend tests again before committing this branch so the server can record a passing proof.')).toBeInTheDocument();
     });
     expect(axios.post).toHaveBeenCalledTimes(2);
     expect(axios.post).toHaveBeenNthCalledWith(1, proofUrl, expect.any(Object));
@@ -3108,7 +3412,7 @@ describe('TestTab', () => {
 
     const modal = await screen.findByTestId('modal-content');
     expect(within(modal).getByText('Tests required before commit')).toBeInTheDocument();
-    expect(within(modal).getByText('Run backend tests again before committing this branch so the server can record a passing proof.')).toBeInTheDocument();
+    expect(within(modal).getByText('Run frontend and backend tests again before committing this branch so the server can record a passing proof.')).toBeInTheDocument();
     expect(onRequestCommitsTab).not.toHaveBeenCalled();
   });
 
@@ -5283,6 +5587,68 @@ describe('TestTab', () => {
 
       expect(consoleSpy).toHaveBeenCalledWith('All tests previously succeeded with no file changes - skipping test runs');
       expect(startAutomationJob).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('runAllTests forceRun executes all visible suites even when skip optimization would skip', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const startAutomationJob = vi.fn().mockResolvedValue({});
+      const markTestRunIntent = vi.fn();
+      const pastTime = new Date(Date.now() - 10000).toISOString();
+
+      const workingBranches = {
+        [baseProject.id]: {
+          name: 'feature/test',
+          stagedFiles: [{ path: 'src/App.jsx', timestamp: new Date(Date.now() - 20000).toISOString() }]
+        }
+      };
+
+      useAppState.mockReturnValue(buildContext({
+        startAutomationJob,
+        markTestRunIntent,
+        workingBranches,
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-passed',
+            type: 'frontend:test',
+            status: 'succeeded',
+            completedAt: pastTime,
+            logs: []
+          },
+          {
+            id: 'back-passed',
+            type: 'backend:test',
+            status: 'succeeded',
+            completedAt: pastTime,
+            logs: []
+          }
+        ])
+      }));
+
+      const registerTestActions = vi.fn();
+      render(<TestTab project={baseProject} registerTestActions={registerTestActions} />);
+
+      let runAllTests;
+      await waitFor(() => {
+        const payload = registerTestActions.mock.calls
+          .map(([value]) => value)
+          .find((value) => value && typeof value.runAllTests === 'function');
+        runAllTests = payload?.runAllTests;
+        expect(typeof runAllTests).toBe('function');
+      });
+
+      await act(async () => {
+        await runAllTests({ source: 'automation', forceRun: true, returnToCommits: true });
+      });
+
+      expect(markTestRunIntent).toHaveBeenCalledWith('automation', {
+        autoCommit: false,
+        returnToCommits: true
+      });
+      expect(startAutomationJob).toHaveBeenCalledTimes(2);
+      expect(startAutomationJob).toHaveBeenCalledWith('frontend:test', { projectId: baseProject.id });
+      expect(startAutomationJob).toHaveBeenCalledWith('backend:test', { projectId: baseProject.id });
+      expect(consoleSpy).not.toHaveBeenCalledWith('All tests previously succeeded with no file changes - skipping test runs');
       consoleSpy.mockRestore();
     });
 

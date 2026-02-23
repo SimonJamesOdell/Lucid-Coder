@@ -22,6 +22,7 @@ const PORT_MAP = {
 const READY_REVEAL_DELAY_MS = 500;
 const LOADING_OVERLAY_FADE_MS = 280;
 const START_REVEAL_DELAY_MS = 1500;
+const BRIDGE_READY_FALLBACK_MS = 1800;
 
 const PreviewTab = forwardRef(
   (
@@ -78,6 +79,7 @@ const PreviewTab = forwardRef(
   const reloadDebounceRef = useRef(null);        // 300 ms debounce for soft-reloads
   const readyRevealTimeoutRef = useRef(null);    // delayed transition to ready phase
   const loadingOverlayFadeTimeoutRef = useRef(null); // fade-out cleanup timeout
+  const bridgeReadyFallbackTimeoutRef = useRef(null); // fallback when bridge ready signal is missing
 
   // ── Refs ──────────────────────────────────────────────────────────────
   const proxyPlaceholderFirstSeenRef = useRef(0);
@@ -153,7 +155,8 @@ const PreviewTab = forwardRef(
       reloadTimeoutRef,
       reloadDebounceRef,
       readyRevealTimeoutRef,
-      loadingOverlayFadeTimeoutRef
+      loadingOverlayFadeTimeoutRef,
+      bridgeReadyFallbackTimeoutRef
     ]) {
       if (ref.current) { clearTimeout(ref.current); ref.current = null; }
     }
@@ -192,6 +195,50 @@ const PreviewTab = forwardRef(
       setIsLoadingOverlayVisible(false);
     }, LOADING_OVERLAY_FADE_MS);
   };
+
+  const revealPreviewReady = useCallback(({ immediate = false } = {}) => {
+    setPreviewPhase('ready');
+    if (immediate) {
+      hideLoadingOverlay();
+    } else {
+      fadeOutLoadingOverlay();
+    }
+  }, [fadeOutLoadingOverlay, hideLoadingOverlay]);
+
+  const scheduleReadyReveal = useCallback(({ immediate = false } = {}) => {
+    if (readyRevealTimeoutRef.current) {
+      clearTimeout(readyRevealTimeoutRef.current);
+      readyRevealTimeoutRef.current = null;
+    }
+
+    if (immediate) {
+      revealPreviewReady({ immediate: true });
+      return;
+    }
+
+    const revealDelayMs = isManualStartPending ? START_REVEAL_DELAY_MS : READY_REVEAL_DELAY_MS;
+    if (revealDelayMs <= 0) {
+      revealPreviewReady({ immediate: true });
+      return;
+    }
+
+    readyRevealTimeoutRef.current = setTimeout(() => {
+      readyRevealTimeoutRef.current = null;
+      revealPreviewReady({ immediate: false });
+    }, revealDelayMs);
+  }, [isManualStartPending, revealPreviewReady]);
+
+  const startBridgeReadyFallback = useCallback(() => {
+    if (bridgeReadyFallbackTimeoutRef.current) {
+      clearTimeout(bridgeReadyFallbackTimeoutRef.current);
+      bridgeReadyFallbackTimeoutRef.current = null;
+    }
+
+    bridgeReadyFallbackTimeoutRef.current = setTimeout(() => {
+      bridgeReadyFallbackTimeoutRef.current = null;
+      scheduleReadyReveal({ immediate: false });
+    }, BRIDGE_READY_FALLBACK_MS);
+  }, [scheduleReadyReveal]);
 
   const stopIframeContent = () => {
     try {
@@ -681,15 +728,18 @@ const PreviewTab = forwardRef(
         onPreviewNavigated?.(href, { source: 'message', type: payload.type });
       }
 
-      setPreviewPhase('ready');
-      fadeOutLoadingOverlay();
+      if (bridgeReadyFallbackTimeoutRef.current) {
+        clearTimeout(bridgeReadyFallbackTimeoutRef.current);
+        bridgeReadyFallbackTimeoutRef.current = null;
+      }
+      scheduleReadyReveal({ immediate: false });
     };
 
     window.addEventListener('message', handleMessage);
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, [getExpectedPreviewOrigin, onPreviewNavigated]);
+  }, [getExpectedPreviewOrigin, onPreviewNavigated, scheduleReadyReveal]);
 
   const renderContextMenu = () => {
     if (!previewContextMenu) {
@@ -916,25 +966,15 @@ const PreviewTab = forwardRef(
     setPreviewFailureDetails(null);
     showLoadingOverlay();
 
-    const revealReady = ({ immediate = false } = {}) => {
-      setPreviewPhase('ready');
-      if (immediate) {
-        hideLoadingOverlay();
-      } else {
-        fadeOutLoadingOverlay();
+    if (ignoreSuppression) {
+      if (bridgeReadyFallbackTimeoutRef.current) {
+        clearTimeout(bridgeReadyFallbackTimeoutRef.current);
+        bridgeReadyFallbackTimeoutRef.current = null;
       }
-    };
-
-    const revealDelayMs = ignoreSuppression
-      ? 0
-      : (isManualStartPending ? START_REVEAL_DELAY_MS : READY_REVEAL_DELAY_MS);
-    if (revealDelayMs <= 0) {
-      revealReady({ immediate: true });
+      scheduleReadyReveal({ immediate: true });
     } else {
-      readyRevealTimeoutRef.current = setTimeout(() => {
-        readyRevealTimeoutRef.current = null;
-        revealReady({ immediate: false });
-      }, revealDelayMs);
+      setPreviewPhase('loading');
+      startBridgeReadyFallback();
     }
 
     autoRecoverAttemptRef.current = 0;

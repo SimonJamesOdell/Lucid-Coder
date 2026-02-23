@@ -94,10 +94,19 @@ const CommitsTab = ({
   // We treat "proven" (ready-for-merge) as the source of truth that a passing test
   // run has been recorded for this branch. A passing status alone is not sufficient.
   const testsSatisfiedForMerge = Boolean(testsRequired === false || (branchIsProven && testsPassed));
+  const hasMergeableChanges = useMemo(() => {
+    const aheadRaw = activeWorkingBranch?.ahead;
+    const aheadCount = Number(aheadRaw);
+    if (Number.isFinite(aheadCount)) {
+      return aheadCount > 0;
+    }
+    return true;
+  }, [activeWorkingBranch?.ahead]);
 
   const branchReadyToMerge = Boolean(
     activeBranchName
     && activeBranchName !== 'main'
+    && hasMergeableChanges
     && !hasStagedFiles
     && testsSatisfiedForMerge
     && activeWorkingBranch?.status !== 'merged'
@@ -151,6 +160,7 @@ const CommitsTab = ({
   }, [
     activeWorkingBranch,
     activeBranchName,
+    hasMergeableChanges,
     branchReadyToMerge,
     mergeBlockedBannerMessage,
     testsPassed,
@@ -176,6 +186,7 @@ const CommitsTab = ({
 
     onRequestTestsTab({
       autoRun: true,
+      forceRun: true,
       source: 'automation',
       returnToCommits: true
     });
@@ -647,7 +658,7 @@ const CommitsTab = ({
     }
 
     try {
-      setError(null);
+      setMergeActionError(null);
       setStatusMessage(null);
       setRevertingSha(sha);
       const response = await axios.post(
@@ -657,13 +668,17 @@ const CommitsTab = ({
         const nextCommits = response.data?.commits || commits;
         applyCommits(nextCommits);
         const shortSha = sha.slice(0, 7);
-        setStatusMessage(`Reverted ${shortSha}`);
+        if (response.data?.noop) {
+          setStatusMessage(`No changes to revert for ${shortSha}`);
+        } else {
+          setStatusMessage(`Reverted ${shortSha}`);
+        }
       } else {
-        setError(response.data?.error || 'Failed to revert commit');
+        setMergeActionError(response.data?.error || 'Failed to revert commit');
       }
     } catch (err) {
       console.error('Error reverting commit:', err);
-      setError(err.response?.data?.error || 'Failed to revert commit');
+      setMergeActionError(err.response?.data?.error || 'Failed to revert commit');
     } finally {
       setRevertingSha(null);
       closeConfirmModal();

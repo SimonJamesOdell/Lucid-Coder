@@ -543,4 +543,86 @@ describe('useCommitComposer', () => {
       expect(result.current.getCommitSubjectForBranch('feature/login')).toBe('Subject from AI');
     });
   });
+
+  test('handleCommitMessageAutofill accepts structured JSON commit drafts directly', async () => {
+    mockedAxios.get.mockResolvedValue({ data: { success: true, context: { files: [] } } });
+    mockedAxios.post.mockResolvedValue({
+      data: {
+        response: '{"subject":"Add navigation bar component","body":"Render top-level nav links in App shell."}'
+      }
+    });
+
+    const { result } = renderComposer();
+
+    await act(async () => {
+      await result.current.handleCommitMessageAutofill('feature/navigation', [{ path: 'src/App.jsx' }]);
+    });
+
+    await waitFor(() => {
+      expect(result.current.getCommitSubjectForBranch('feature/navigation')).toBe('Add navigation bar component');
+      expect(result.current.getCommitBodyForBranch('feature/navigation')).toBe('Render top-level nav links in App shell.');
+    });
+  });
+
+  test('handleCommitMessageAutofill rejects malformed structured JSON drafts instead of saving raw JSON text', async () => {
+    mockedAxios.get.mockResolvedValue({ data: { success: true, context: { files: [] } } });
+    mockedAxios.post.mockResolvedValue({
+      data: {
+        response: '{"subject":"Add navigation bar with dropdown and page routing","body":"-'
+      }
+    });
+
+    const { result } = renderComposer();
+
+    await act(async () => {
+      await result.current.handleCommitMessageAutofill('feature/navigation', [{ path: 'src/App.jsx' }]);
+    });
+
+    await waitFor(() => {
+      expect(result.current.getCommitSubjectForBranch('feature/navigation')).toBe('');
+      expect(result.current.getCommitBodyForBranch('feature/navigation')).toBe('');
+      expect(result.current.commitMessageError).toBe('AI response returned malformed structured JSON. Please edit manually.');
+    });
+  });
+
+  test('parseStructuredCommitDraft returns null for non-string and blank input', () => {
+    const { parseStructuredCommitDraft } = useCommitComposer.__testHooks;
+    expect(parseStructuredCommitDraft(null)).toBeNull();
+    expect(parseStructuredCommitDraft('   ')).toBeNull();
+  });
+
+  test('parseStructuredCommitDraft ignores non-object JSON payloads', () => {
+    const { parseStructuredCommitDraft } = useCommitComposer.__testHooks;
+    expect(parseStructuredCommitDraft('["not","an","object"]')).toBeNull();
+    expect(parseStructuredCommitDraft('42')).toBeNull();
+  });
+
+  test('parseStructuredCommitDraft parses fenced JSON and supports NO_COMMIT subject sentinel', () => {
+    const { parseStructuredCommitDraft } = useCommitComposer.__testHooks;
+    const parsed = parseStructuredCommitDraft('```json\n{"subject":"NO_COMMIT","body":"skip"}\n```');
+    expect(parsed).toEqual({ subject: 'NO_COMMIT', body: 'skip', noCommit: true });
+  });
+
+  test('parseStructuredCommitDraft defaults subject/body when fields are non-strings', () => {
+    const { parseStructuredCommitDraft } = useCommitComposer.__testHooks;
+    const parsed = parseStructuredCommitDraft('{"subject":123,"body":false,"noCommit":false}');
+    expect(parsed).toEqual({ subject: '', body: '', noCommit: false });
+  });
+
+  test('parseStructuredCommitDraft can recover from surrounding non-JSON wrapper text', () => {
+    const { parseStructuredCommitDraft } = useCommitComposer.__testHooks;
+    const parsed = parseStructuredCommitDraft('Result:\n{"subject":"Ship login","body":"Add tests."}\nThanks');
+    expect(parsed).toEqual({ subject: 'Ship login', body: 'Add tests.', noCommit: false });
+  });
+
+  test('looksLikeStructuredDraftArtifact handles key and shape detection edges', () => {
+    const { looksLikeStructuredDraftArtifact } = useCommitComposer.__testHooks;
+    expect(looksLikeStructuredDraftArtifact('')).toBe(false);
+    expect(looksLikeStructuredDraftArtifact('   ')).toBe(false);
+    expect(looksLikeStructuredDraftArtifact('subject: plain text only')).toBe(false);
+    expect(looksLikeStructuredDraftArtifact('Result: {"subject":"hello"}')).toBe(true);
+    expect(looksLikeStructuredDraftArtifact('{"subject":"hello"')).toBe(true);
+    expect(looksLikeStructuredDraftArtifact("{'subject':'hello'}")).toBe(true);
+    expect(looksLikeStructuredDraftArtifact("prefix {'subject':'hello'} suffix")).toBe(true);
+  });
 });

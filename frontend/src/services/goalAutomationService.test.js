@@ -85,9 +85,9 @@ describe('goalAutomationService', () => {
         }
         if (url === '/api/projects/42/branches') {
           expect(payload).toEqual(expect.objectContaining({
-            name: 'changed-hero-background-image',
-            description: 'Set hero background image to sunset'
+            name: 'changed-hero-background-image'
           }));
+          expect(payload).not.toHaveProperty('description');
           return Promise.resolve({ data: { branch: { name: 'changed-hero-background-image' } } });
         }
       });
@@ -266,6 +266,51 @@ describe('goalAutomationService', () => {
       );
 
       expect(result).toEqual({ name: 'add-top-navigation-bar' });
+    });
+
+    test('ignores numeric range fragments and extracts meaningful kebab branch names', async () => {
+      axios.get.mockResolvedValue({ data: { workingBranches: [] } });
+      axios.post.mockImplementation((url) => {
+        if (url === '/api/llm/generate') {
+          return Promise.resolve({
+            data: {
+              content: 'Use 2-5 words total. Suggested branch: changed-navbar-links'
+            }
+          });
+        }
+        if (url === '/api/projects/42/branches') {
+          return Promise.resolve({ data: { branch: { name: 'changed-navbar-links' } } });
+        }
+      });
+
+      const result = await ensureBranch(
+        42,
+        'Add navbar links',
+        undefined,
+        mockCreateMessage,
+        mockSetMessages
+      );
+
+      expect(result).toEqual({ name: 'changed-navbar-links' });
+    });
+
+    test('falls back when llm output only contains numeric range tokens', async () => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(56789);
+      axios.get.mockResolvedValue({ data: { workingBranches: [] } });
+      axios.post.mockImplementation((url, payload) => {
+        if (url === '/api/llm/generate') {
+          return Promise.resolve({ data: { content: '2-5' } });
+        }
+        if (url === '/api/projects/42/branches') {
+          expect(payload).toEqual(expect.objectContaining({ name: 'feature-56789' }));
+          return Promise.resolve({ data: {} });
+        }
+      });
+
+      const result = await ensureBranch(42, 'Test', undefined, mockCreateMessage, mockSetMessages);
+
+      expect(result).toEqual({ name: 'feature-56789' });
+      nowSpy.mockRestore();
     });
 
     test('slugifies the LLM-provided branch phrase before creating branch', async () => {
@@ -864,6 +909,69 @@ describe('goalAutomationService', () => {
       const safeContent = safePrompt.messages[1].content;
       expect(safeContent).toContain('Router Library Available: YES (react-router-dom installed)');
       expect(safeContent).toContain('Safe to use router API');
+    });
+
+    test('buildEditsPrompt includes no-op prevention guidance for targeted style scope without hints', () => {
+      const prompt = __testOnly.buildEditsPrompt({
+        projectInfo: 'Project Foo',
+        fileTreeContext: '',
+        goalPrompt: 'make the background blue',
+        stage: 'implementation',
+        scopeReflection: {
+          reasoning: 'style update',
+          mustChange: [],
+          mustAvoid: [],
+          mustHave: [],
+          testsNeeded: false,
+          styleScope: {
+            mode: 'targeted',
+            targetLevel: 'component',
+            enforceTargetScoping: false,
+            forbidGlobalSelectors: false,
+            targetHints: []
+          }
+        }
+      });
+
+      const userContent = prompt.messages[1].content;
+      expect(userContent).toContain('Structured target hints are unavailable. Do not no-op.');
+      expect(userContent).toContain('apply a minimal page-level stylesheet update');
+    });
+
+    test('buildEditsPrompt includes structured execution contract from reflection fields', () => {
+      const prompt = __testOnly.buildEditsPrompt({
+        projectInfo: 'Project Foo',
+        fileTreeContext: '',
+        goalPrompt: 'make the background blue',
+        stage: 'implementation',
+        scopeReflection: {
+          reasoning: 'style update',
+          mustChange: ['frontend/src/styles/app.css'],
+          mustAvoid: ['backend/'],
+          mustHave: ['Background is blue'],
+          testsNeeded: false,
+          requiredAssetPaths: ['uploads/background.png'],
+          styleScope: {
+            mode: 'global',
+            targetLevel: 'page',
+            enforceTargetScoping: false,
+            forbidGlobalSelectors: false,
+            targetHints: ['app-shell']
+          }
+        }
+      });
+
+      const systemContent = prompt.messages[0].content;
+      const userContent = prompt.messages[1].content;
+
+      expect(systemContent).toContain('Execution contract');
+      expect(userContent).toContain('Execution contract (source of truth):');
+      expect(userContent).toContain('"stage": "implementation"');
+      expect(userContent).toContain('"testsNeeded": false');
+      expect(userContent).toContain('"mustChange": [');
+      expect(userContent).toContain('"requiredAssetPaths": [');
+      expect(userContent).toContain('"mode": "global"');
+      expect(userContent).toContain('"targetLevel": "page"');
     });
 
     test('applyEdits uses fallback rewrite error message when caught error loses its message', async () => {

@@ -39,11 +39,11 @@ const buildBranchName = (prompt = '') => {
   // Example: "let's have a navigation bar at the top" -> "navigation-bar-top".
   const stopwords = new Set([
     'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'could',
-    'do', 'does', 'for', 'from', 'have', 'has', 'had', 'how', 'i', 'if',
+    'do', 'does', 'for', 'from', 'give', 'have', 'has', 'had', 'how', 'i', 'if',
     'in', 'into', 'is', 'it', "it's", 'its', 'let', "let's", 'make',
-    'of', 'on', 'or', 'our', 'please', 'should', 'so', 'some', 'that',
+    'me', 'need', 'of', 'on', 'or', 'our', 'please', 'should', 'so', 'some', 'that',
     'the', 'their', 'then', 'there', 'this', 'to', 'up', 'we',
-    'with', 'would', 'you', 'your'
+    'want', 'with', 'would', 'you', 'your'
   ]);
 
   const tokens = raw

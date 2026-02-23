@@ -5,6 +5,9 @@ describe('ClarificationTracker', () => {
   test('hashIntent handles keyword mappings and fallbacks', () => {
     expect(ClarificationTracker.hashIntent('Should we use react-router-dom?')).toBe('router_usage')
     expect(ClarificationTracker.hashIntent('Login + auth flow?')).toBe('auth_pattern')
+    expect(ClarificationTracker.hashIntent('Should the dropdown open on hover, click, or both?')).toBe('interaction_mode')
+    expect(ClarificationTracker.hashIntent('Do you prefer the products dropdown to open on hover or on click?')).toBe('interaction_mode')
+    expect(ClarificationTracker.hashIntent('Should the navigation bar be black?')).not.toBe('router_usage')
     expect(ClarificationTracker.hashIntent('')).toBe('intent_empty')
     expect(ClarificationTracker.hashIntent(null)).toBe('intent_empty')
     expect(ClarificationTracker.hashIntent('tiny')).toMatch(/^intent_/)

@@ -37,9 +37,10 @@ export class ClarificationTracker {
 
     // Map common patterns to categories
     const patterns = [
-      { regex: /router|routing|navigation|link/, key: 'router_usage' },
+      { regex: /(dropdown|menu).*(hover|click|tap)|(hover|click|tap).*(dropdown|menu)|\bhover\b.*\bclick\b|\bclick\b.*\bhover\b/, key: 'interaction_mode' },
+      { regex: /react\s*-?\s*router|router\s*-?\s*dom|\brouter\b|\brouting\b|\broute\b|client\s*-?\s*side\s+routing/, key: 'router_usage' },
       { regex: /auth|login|permission/, key: 'auth_pattern' },
-      { regex: /style|css|color|design/, key: 'styling_approach' },
+      { regex: /style|css|color|design|css\s*-?\s*in\s*-?\s*js|styled\s*components/, key: 'styling_approach' },
       { regex: /form|input|validation/, key: 'form_approach' },
       { regex: /data|fetch|api|call/, key: 'data_fetching' },
       { regex: /test|coverage/, key: 'testing_approach' }

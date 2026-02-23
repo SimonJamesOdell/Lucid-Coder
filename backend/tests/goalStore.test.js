@@ -135,6 +135,12 @@ describe('goalStore', () => {
     expect(goal.branchName).toMatch(/^agent\/navigation-bar-top-[a-f0-9]+/);
   });
 
+  test('builds professional branch names by removing imperative filler phrases', async () => {
+    const goal = await createGoal({ projectId: 8, prompt: 'give me navigation bar' });
+    expect(goal.branchName).toMatch(/^agent\/navigation-bar-[a-f0-9]+/);
+    expect(goal.branchName).not.toContain('give-me');
+  });
+
   test('stores null metadata when createGoal receives non-object metadata', async () => {
     const goal = await createGoal({ projectId: 9, prompt: 'Non-object metadata', metadata: 'nope' });
     expect(goal.metadata).toBe(null);

@@ -381,6 +381,35 @@ describe('CommitsTab', () => {
     });
   });
 
+  test('shows noop revert status when backend reports no changes to revert', async () => {
+    axios.get
+      .mockResolvedValueOnce({ data: { success: true, commits: baseCommits } })
+      .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } })
+      .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[1]) } });
+
+    axios.post.mockResolvedValue({
+      data: {
+        success: true,
+        noop: true,
+        commits: baseCommits
+      }
+    });
+
+    const user = userEvent.setup();
+    await renderCommitsTab();
+
+    await user.click(await screen.findByTestId('commit-revert'));
+    await waitFor(() => {
+      expect(screen.getByTestId('modal-content')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      expect(screen.getByText('No changes to revert for def9876')).toBeInTheDocument();
+    });
+  });
+
   test('selecting two commits and squashing posts to the squash endpoint', async () => {
     const squashedCommit = {
       ...baseCommits[0],
@@ -1078,6 +1107,29 @@ describe('CommitsTab', () => {
     });
   });
 
+  test('revert failure shows inline error without hiding commits layout', async () => {
+    axios.get
+      .mockResolvedValueOnce({ data: { success: true, commits: baseCommits } })
+      .mockResolvedValueOnce({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+
+    const revertError = new Error('revert exploded');
+    revertError.response = { data: { error: 'Failed to revert commit' } };
+    axios.post.mockRejectedValueOnce(revertError);
+
+    const user = userEvent.setup();
+    await renderCommitsTab();
+
+    await user.click(await screen.findByTestId('commit-revert'));
+    await waitFor(() => expect(screen.getByTestId('modal-content')).toBeInTheDocument());
+    await user.click(screen.getByTestId('modal-confirm'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to revert commit')).toBeInTheDocument();
+      expect(screen.getByTestId('commits-list')).toBeInTheDocument();
+      expect(screen.getByTestId('commit-details-panel')).toBeInTheDocument();
+    });
+  });
+
   test('handleOpenFileFromCommit ignores empty file paths via test API', async () => {
     const testApiRef = { current: null };
     axios.get
@@ -1757,6 +1809,32 @@ describe('CommitsTab', () => {
     });
   });
 
+  test('hides merge CTA when branch has no mergeable commits (ahead=0) even if ready-for-merge', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-login',
+        status: 'ready-for-merge',
+        lastTestStatus: 'passed',
+        ahead: 0,
+        stagedFiles: []
+      }
+    };
+
+    axios.get.mockImplementation((url) => {
+      if (url === `/api/projects/${mockProject.id}/commits`) {
+        return Promise.resolve({ data: { success: true, commits: baseCommits } });
+      }
+      if (url.startsWith(`/api/projects/${mockProject.id}/commits/`)) {
+        return Promise.resolve({ data: { success: true, commit: buildCommitDetail(baseCommits[0]) } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+
+    await renderCommitsTab();
+
+    expect(screen.queryByTestId('commit-merge')).not.toBeInTheDocument();
+  });
+
   test('handleMergeBranch exits immediately when prerequisites are missing via test API', async () => {
     const testApiRef = { current: null };
     await renderCommitsTab({ project: null }, { testApiRef, skipFetchWait: true });
@@ -2135,6 +2213,7 @@ describe('CommitsTab', () => {
     await user.click(screen.getByTestId('commit-start-tests'));
     expect(onRequestTestsTab).toHaveBeenCalledWith({
       autoRun: true,
+      forceRun: true,
       source: 'automation',
       returnToCommits: true
     });
@@ -2754,6 +2833,8 @@ describe('CommitsTab', () => {
 
     await renderCommitsTab({}, { testApiRef });
     await waitFor(() => expect(testApiRef.current?.handleSquashSelectedCommits).toBeTypeOf('function'));
+    await screen.findByTestId('commit-def9876');
+    await screen.findByTestId('commit-abc1234');
 
     await act(async () => {
       await testApiRef.current.handleSquashSelectedCommits({

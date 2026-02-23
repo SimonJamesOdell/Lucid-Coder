@@ -219,13 +219,123 @@ describe('commitsApi history/details coverage', () => {
   });
 
   it('revertCommit returns reverted sha on success and throws 500 on failure', async () => {
-    runProjectGit.mockResolvedValueOnce({ stdout: '' });
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === 'show abc --quiet --pretty=format:%P') {
+        return { stdout: 'parent123\n' };
+      }
+      if (cmd === 'revert --no-edit abc') {
+        return { stdout: '' };
+      }
+      if (cmd === 'show def --quiet --pretty=format:%P') {
+        return { stdout: 'parent456\n' };
+      }
+      if (cmd === 'revert --no-edit def') {
+        throw new Error('revert failed');
+      }
+      return { stdout: '' };
+    });
+
     const { revertCommit } = api();
 
     await expect(revertCommit(projectId, 'abc')).resolves.toEqual({ reverted: 'abc' });
 
-    runProjectGit.mockRejectedValueOnce(new Error('revert failed'));
     await expect(revertCommit(projectId, 'def'))
       .rejects.toMatchObject({ statusCode: 500, message: expect.stringMatching(/Failed to revert commit/i) });
+  });
+
+  it('revertCommit handles failures without an explicit error message', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === 'show nomsg --quiet --pretty=format:%P') {
+        return { stdout: 'parent123\n' };
+      }
+      if (cmd === 'revert --no-edit nomsg') {
+        throw {};
+      }
+      return { stdout: '' };
+    });
+
+    const { revertCommit } = api();
+    await expect(revertCommit(projectId, 'nomsg')).rejects.toMatchObject({
+      statusCode: 500,
+      message: expect.stringMatching(/Failed to revert commit/i)
+    });
+  });
+
+  it('revertCommit uses mainline parent when reverting merge commits', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === 'show merge123 --quiet --pretty=format:%P') {
+        return { stdout: 'parentA parentB\n' };
+      }
+      if (cmd === 'revert --no-edit -m 1 merge123') {
+        return { stdout: '' };
+      }
+      return { stdout: '' };
+    });
+
+    const { revertCommit } = api();
+    await expect(revertCommit(projectId, 'merge123')).resolves.toEqual({ reverted: 'merge123' });
+  });
+
+  it('revertCommit maps initial/root commit errors to 400', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === 'show root123 --quiet --pretty=format:%P') {
+        return { stdout: '' };
+      }
+      if (cmd === 'revert --no-edit root123') {
+        throw new Error('cannot revert a root commit');
+      }
+      return { stdout: '' };
+    });
+
+    const { revertCommit } = api();
+    await expect(revertCommit(projectId, 'root123')).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/Initial commit cannot be reverted automatically/i)
+    });
+  });
+
+  it('revertCommit returns noop when revert produces no changes', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === 'show noop123 --quiet --pretty=format:%P') {
+        return { stdout: 'parent123\n' };
+      }
+      if (cmd === 'revert --no-edit noop123') {
+        throw new Error('nothing to commit, working tree clean');
+      }
+      if (cmd === 'revert --abort') {
+        return { stdout: '' };
+      }
+      return { stdout: '' };
+    });
+
+    const { revertCommit } = api();
+    await expect(revertCommit(projectId, 'noop123')).resolves.toEqual({ reverted: 'noop123', noop: true });
+  });
+
+  it('revertCommit still returns noop when revert --abort also fails', async () => {
+    runProjectGit.mockImplementation(async (_ctx, args) => {
+      const cmd = args.join(' ');
+      if (cmd === 'show noopAbort123 --quiet --pretty=format:%P') {
+        return { stdout: 'parent123\n' };
+      }
+      if (cmd === 'revert --no-edit noopAbort123') {
+        throw new Error('previous cherry-pick is now empty');
+      }
+      if (cmd === 'revert --abort') {
+        throw new Error('abort failed');
+      }
+      return { stdout: '' };
+    });
+
+    const { revertCommit } = api();
+    await expect(revertCommit(projectId, 'noopAbort123')).resolves.toEqual({
+      reverted: 'noopAbort123',
+      noop: true
+    });
   });
 });

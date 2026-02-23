@@ -18,7 +18,11 @@ describe('goalMetadata', () => {
     expect(result).toEqual(['Needs detail']);
     expect(llmClient.generateResponse).toHaveBeenCalledWith(
       expect.any(Array),
-      expect.objectContaining({ __lucidcoderPhase: 'meta_goal_clarification' })
+      expect.objectContaining({
+        __lucidcoderPhase: 'meta_goal_clarification',
+        __lucidcoderDisableToolBridge: true,
+        __lucidcoderForceMinimalToolBridge: true
+      })
     );
   });
 

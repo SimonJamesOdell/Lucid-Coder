@@ -16,6 +16,8 @@ const setPreviewPanelTab = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  axios.get.mockReset();
+  axios.post.mockReset();
   createMessage.mockClear();
   setMessages.mockClear();
   setPreviewPanelTab.mockClear();
@@ -31,7 +33,7 @@ describe('ensureBranch', () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  it('omits the description when the prompt is blank', async () => {
+  it('does not include description when creating a branch from automation', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(123456);
 
     axios.get.mockResolvedValueOnce({ data: { workingBranches: [] } });
@@ -44,15 +46,14 @@ describe('ensureBranch', () => {
     expect(axios.post).toHaveBeenCalledWith(
       '/api/projects/20/branches',
       expect.objectContaining({
-        name: 'feature-blank',
-        description: undefined
+        name: 'feature-blank'
       })
     );
 
     nowSpy.mockRestore();
   });
 
-  it('treats an undefined prompt as empty and omits the description', async () => {
+  it('treats an undefined prompt as empty and still omits branch description', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(999999);
 
     axios.get.mockResolvedValueOnce({ data: { workingBranches: [] } });
@@ -65,8 +66,7 @@ describe('ensureBranch', () => {
     expect(axios.post).toHaveBeenCalledWith(
       '/api/projects/30/branches',
       expect.objectContaining({
-        name: 'feature-undef',
-        description: undefined
+        name: 'feature-undef'
       })
     );
 
@@ -100,6 +100,26 @@ describe('ensureBranch', () => {
     expect(setPreviewPanelTab).toHaveBeenCalledWith('branches', { source: 'automation' });
     expect(syncBranchOverview).toHaveBeenCalledWith(11, { workingBranches: [{ name: 'build-something' }] });
     expect(createMessage).toHaveBeenCalledWith('assistant', 'Branch build-something created', { variant: 'status' });
+  });
+
+  it('does not switch tabs when preservePreviewTab is enabled', async () => {
+    axios.get
+      .mockResolvedValueOnce({ data: { workingBranches: [] } })
+      .mockResolvedValueOnce({ data: { workingBranches: [{ name: 'feature/style-shortcut' }] } });
+    axios.post.mockResolvedValueOnce({ data: { branch: { name: 'feature/style-shortcut' } } });
+    requestBranchNameFromLLM.mockResolvedValueOnce('feature/style-shortcut');
+
+    const result = await ensureBranch(
+      31,
+      'Make the page background green',
+      setPreviewPanelTab,
+      createMessage,
+      setMessages,
+      { preservePreviewTab: true }
+    );
+
+    expect(result).toEqual({ name: 'feature/style-shortcut' });
+    expect(setPreviewPanelTab).not.toHaveBeenCalled();
   });
 
   it('treats the overview refresh as best-effort when refresh returns no data', async () => {
@@ -175,7 +195,7 @@ describe('ensureBranch', () => {
     expect(result).toEqual({ name: 'prompt-fallback' });
     expect(axios.post).toHaveBeenCalledWith(
       '/api/projects/15/branches',
-      expect.objectContaining({ name: 'prompt-fallback', description: 'Prompt' })
+      expect.objectContaining({ name: 'prompt-fallback' })
     );
   });
 

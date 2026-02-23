@@ -31,6 +31,21 @@ describe('preview tab overlays', () => {
     expect(onFix).toHaveBeenCalled();
   });
 
+  test('PreviewLoadingOverlay applies fade-out class when fading', () => {
+    render(
+      <PreviewLoadingOverlay
+        isFadingOut={true}
+        title="Loading preview…"
+        subtitle={null}
+        isPlaceholderDetected={false}
+        reloadIframe={vi.fn()}
+        dispatchPreviewFixGoal={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('preview-loading')).toHaveClass('preview-loading--fade-out');
+  });
+
   test('PreviewErrorView shows backend logs button and opens logs modal', async () => {
     const user = userEvent.setup();
     const setShowBackendLogsModal = vi.fn();
