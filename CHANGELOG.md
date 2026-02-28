@@ -1,3 +1,13 @@
+## 0.8.1 (2026-02-28)
+- Close the remaining strict coverage gaps to restore 100% gates across the merged frontend/backend release pipeline, including targeted branch-path tests for preview routing, project/import setup, process controls, scaffolding fallbacks, and automation/reflection helpers.
+- Add backend project-layout resolution support (`projectLayout`) so routes/services can reliably handle classic split workspaces and root/unified manifests (including root backend scripts and requirements-based fallbacks) when starting projects and enqueueing install jobs.
+- Expand template-first project creation flow with a dedicated “Lucid Coder Default Template” source, template-aware git setup defaults, and persisted template clone settings coverage across project route tests.
+- Improve package/workspace manifest handling in `PackageTab` by discovering candidate manifests from file trees, supporting root `package.json` fallback paths, and collapsing workspace tabs when frontend/backend resolve to the same manifest.
+- Enhance auto-fix UX/control loops in `TestTab` and `ChatPanel` with summary pause/resume/stop controls, retry pre-message generation, safer halted-loop behavior, and stronger failure-signature/root-cause hint extraction for repeated test failures.
+- Refine Create Project setup UX around `.gitignore` guidance by moving warnings into modal flows, clarifying tracked-file impacts, and making skip behavior explicitly return to the main view without running setup.
+- Harden preview/process tab behavior for mixed LAN/loopback and stale capability states (direct open-in-new-tab preference, backend signal fallback rendering), with focused integration tests to keep coverage deterministic.
+- Strengthen goal-automation guardrails and retry resilience by improving branch-context extraction relevance checks, reflection path-alias matching (`test`/`tests`, workspace aliases), and malformed-JSON retry guidance during implementation edit generation.
+
 ## 0.8.0 (2026-02-23)
 - Improve test auto-fix behavior in `ChatPanel` by detecting missing dependency/import failures and queuing workspace package-install jobs (with deduplication) instead of repeatedly thrashing test-fix goal loops.
 - Harden commit/test handoff flows in `TestTab` and `CommitsTab`, including proof-submission error handling, revert/noop status handling, and branch-proof guard-path reliability for continue-to-commit workflows.
