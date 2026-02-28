@@ -138,7 +138,7 @@ describe('Integration Tests', () => {
     await user.click(createButton);
     await screen.findByRole('heading', { name: 'Add Project' });
 
-    await user.click(screen.getByText('Create a new project'));
+    await user.click(screen.getByText('Create a new classic project'));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
     await user.click(screen.getByRole('button', { name: 'Next' }));
@@ -246,7 +246,7 @@ describe('Integration Tests', () => {
     await user.click(screen.getByRole('button', { name: 'Add Project' }));
     await screen.findByRole('heading', { name: 'Add Project' });
 
-    await user.click(screen.getByText('Create a new project'));
+    await user.click(screen.getByText('Create a new classic project'));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
     await user.click(screen.getByRole('button', { name: 'Next' }));

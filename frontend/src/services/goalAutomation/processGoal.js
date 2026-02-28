@@ -1045,6 +1045,12 @@ export async function processGoal(
         if (error instanceof SyntaxError) {
           console.error('Failed to parse LLM response:', error);
           automationLog('processGoal:llm:impl:parseError', { attempt, message: error?.message });
+          implRetryContext = {
+            message:
+              'Previous attempt returned malformed JSON. Return ONLY valid JSON with an "edits" array and no prose or markdown fences.',
+            path: implRetryContext?.path || null,
+            scopeWarning: implRetryContext?.scopeWarning || null
+          };
           if (attempt === lastImplAttempt) {
             throw error;
           }

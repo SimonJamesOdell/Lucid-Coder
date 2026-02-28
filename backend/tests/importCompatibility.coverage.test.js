@@ -48,6 +48,35 @@ describe('importCompatibility coverage', () => {
     expect(framework).toBe('unknown');
   });
 
+  test('buildStructurePlan handles malformed root package scripts safely', async () => {
+    await fs.writeFile(path.join(tempDir, 'package.json'), '{ bad json', 'utf8');
+
+    const structure = await __compatibilityInternals.buildStructurePlan(tempDir);
+
+    expect(structure).toEqual(expect.objectContaining({
+      needsMove: true,
+      reason: 'frontend files are at project root'
+    }));
+  });
+
+  test('buildStructurePlan treats root backend:start script as backend-aware project', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({
+        name: 'root-backend-start',
+        scripts: { 'backend:start': 'node backend/server.js' }
+      }),
+      'utf8'
+    );
+
+    const structure = await __compatibilityInternals.buildStructurePlan(tempDir);
+
+    expect(structure).toEqual(expect.objectContaining({
+      needsMove: false,
+      reason: 'root project uses backend scripts'
+    }));
+  });
+
   test('applyCompatibility updates Vite dev script with host flag', async () => {
     await writePackageJson(tempDir, {
       name: 'vite-app',
@@ -256,6 +285,40 @@ describe('importCompatibility coverage', () => {
 
     const result = await applyProjectStructure(tempDir);
     expect(result).toMatchObject({ applied: false });
+  });
+
+  test('applyProjectStructure keeps root layout when backend scripts exist in root package', async () => {
+    await writePackageJson(tempDir, {
+      name: 'root-fullstack',
+      scripts: {
+        dev: 'vite',
+        backend: 'node server.js'
+      },
+      dependencies: {}
+    });
+    await fs.writeFile(path.join(tempDir, 'server.js'), 'console.log("backend");\n');
+
+    const result = await applyProjectStructure(tempDir);
+
+    expect(result).toMatchObject({ applied: false });
+    await expect(fs.access(path.join(tempDir, 'server.js'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(tempDir, 'frontend', 'server.js'))).rejects.toThrow();
+  });
+
+  test('applyProjectStructure propagates non-ENOENT stat errors while evaluating directories', async () => {
+    await writePackageJson(tempDir, { name: 'root-app', scripts: { dev: 'vite' }, dependencies: {} });
+
+    const backendDir = path.join(tempDir, 'backend');
+    const originalStat = fs.stat;
+    const statSpy = vi.spyOn(fs, 'stat').mockImplementation(async (candidate, ...rest) => {
+      if (String(candidate) === backendDir) {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      }
+      return originalStat(candidate, ...rest);
+    });
+
+    await expect(applyProjectStructure(tempDir)).rejects.toThrow('denied');
+    statSpy.mockRestore();
   });
 
   test('resolveFrontendPackageJson prefers frontend package.json', async () => {

@@ -1,5 +1,7 @@
 export const extractBranchName = (raw, fallbackName) => {
   const fallback = String(fallbackName).trim();
+  const branchVerbs = new Set(['added', 'changed', 'fixed', 'updated', 'refactored', 'removed']);
+  const metaTokens = new Set(['try', 'again', 'retry', 'rerun', 'resume', 'attempt']);
 
   const isMeaningfulKebab = (value) => {
     const trimmed = String(value || '').trim().toLowerCase();
@@ -10,7 +12,13 @@ export const extractBranchName = (raw, fallbackName) => {
     if (parts.length < 2 || parts.length > 5) {
       return false;
     }
-    return parts.every((part) => /[a-z]/.test(part));
+    if (!parts.every((part) => /[a-z]/.test(part))) {
+      return false;
+    }
+
+    const contentParts = branchVerbs.has(parts[0]) ? parts.slice(1) : parts;
+
+    return contentParts.some((part) => !metaTokens.has(part));
   };
 
   const slugify = (value) =>
@@ -83,6 +91,13 @@ export const extractBranchPromptContext = (prompt) => {
     return '';
   }
 
+  const isRetryOnlyText = (value) => {
+    /* c8 ignore next */
+    const normalized = String(value ?? '').trim().toLowerCase();
+    const compact = normalized.replace(/[^a-z0-9]+/g, ' ').trim();
+    return /^(try again|retry|rerun|resume|continue|do it again|run it again)( please)?$/.test(compact);
+  };
+
   const extractMatch = (pattern) => {
     const match = raw.match(pattern);
     if (!match?.[1]) {
@@ -91,19 +106,44 @@ export const extractBranchPromptContext = (prompt) => {
     return String(match[1]).trim();
   };
 
+  const firstNonEmptyLine = (value) => String(value || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean) || '';
+
   const directCurrentRequest = extractMatch(/(?:^|\n)\s*Current request:\s*([\s\S]+)$/i);
-  if (directCurrentRequest) {
-    return directCurrentRequest.split('\n').map((line) => line.trim()).find(Boolean);
-  }
+  const currentRequestLine = firstNonEmptyLine(directCurrentRequest);
 
   const directUserAnswer = extractMatch(/(?:^|\n)\s*User answer:\s*([\s\S]+)$/i);
-  if (directUserAnswer) {
-    return directUserAnswer.split('\n').map((line) => line.trim()).find(Boolean);
+  if (directUserAnswer && !currentRequestLine) {
+    return firstNonEmptyLine(directUserAnswer);
   }
 
   const originalRequest = extractMatch(
     /(?:^|\n)\s*Original request:\s*([\s\S]+?)(?:\n\s*Clarification questions:|$)/i
   );
+  if (currentRequestLine && !isRetryOnlyText(currentRequestLine)) {
+    return currentRequestLine;
+  }
+
+  if (currentRequestLine && isRetryOnlyText(currentRequestLine) && originalRequest) {
+    if (/\b(Current request|User answer):/i.test(originalRequest)) {
+      const nested = extractBranchPromptContext(originalRequest);
+      if (nested && nested !== originalRequest) {
+        return nested;
+      }
+    }
+
+    const originalLine = firstNonEmptyLine(originalRequest);
+    if (originalLine && !isRetryOnlyText(originalLine)) {
+      return originalLine;
+    }
+  }
+
+  if (directUserAnswer) {
+    return firstNonEmptyLine(directUserAnswer);
+  }
+
   if (originalRequest) {
     if (/\b(Current request|User answer):/i.test(originalRequest)) {
       const nested = extractBranchPromptContext(originalRequest);
@@ -111,10 +151,10 @@ export const extractBranchPromptContext = (prompt) => {
         return nested;
       }
     }
-    return originalRequest.split('\n').map((line) => line.trim()).find(Boolean);
+    return firstNonEmptyLine(originalRequest);
   }
 
-  return raw.split('\n').map((line) => line.trim()).find(Boolean);
+  return firstNonEmptyLine(raw);
 };
 
 export const isValidBranchName = (name) => {
@@ -166,6 +206,8 @@ export const buildFallbackBranchNameFromPrompt = (prompt, fallbackName) => {
 };
 
 export const isBranchNameRelevantToPrompt = (branchName, prompt) => {
+  const metaTokens = new Set(['try', 'again', 'retry', 'rerun', 'resume', 'attempt']);
+  const branchVerbs = new Set(['added', 'changed', 'fixed', 'updated', 'refactored', 'removed']);
   const normalize = (value) => String(value || '')
     .toLowerCase()
     .replace(/\//g, ' ')
@@ -189,6 +231,14 @@ export const isBranchNameRelevantToPrompt = (branchName, prompt) => {
 
   const promptTokens = new Set(tokenize(prompt));
   const branchTokens = new Set(tokenize(branchName));
+
+  const branchTokenList = Array.from(branchTokens);
+  const contentBranchTokens = branchVerbs.has(branchTokenList[0])
+    ? branchTokenList.slice(1)
+    : branchTokenList;
+  if (contentBranchTokens.length > 0 && contentBranchTokens.every((token) => metaTokens.has(token))) {
+    return false;
+  }
 
   if (promptTokens.size === 0 || branchTokens.size === 0) {
     return true;

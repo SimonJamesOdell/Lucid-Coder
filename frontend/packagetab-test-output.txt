@@ -1,0 +1,14 @@
+
+> lucidcoder-frontend@0.8.0 test
+> vitest run src/test/PackageTab.test.jsx
+
+
+[7m[1m[36m RUN [39m[22m[27m [36mv1.6.1[39m [90mC:/Users/simon/lucidcoder/frontend[39m
+
+ [32mÔ£ô[39m src/test/PackageTab.test.jsx [2m ([22m[2m38 tests[22m[2m)[22m[33m 3228[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m38 passed[39m[22m[90m (38)[39m
+[2m   Start at [22m 16:32:18
+[2m   Duration [22m 5.69s[2m (transform 233ms, setup 673ms, collect 312ms, tests 3.23s, environment 721ms, prepare 259ms)[22m
+

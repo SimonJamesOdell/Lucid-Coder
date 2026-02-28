@@ -6,6 +6,7 @@ import jobsRoutes, { __testables } from '../routes/jobs.js';
 import { getProject, getTestingSettings, getProjectTestingSettings } from '../database.js';
 import { startJob, listJobsForProject, getJob, cancelJob } from '../services/jobRunner.js';
 import { describeBranchCssOnlyStatus } from '../services/branchWorkflow.js';
+import { resolveProjectLayout } from '../services/projectLayout.js';
 
 vi.mock('../database.js', () => ({
   getProject: vi.fn(),
@@ -22,6 +23,10 @@ vi.mock('../services/jobRunner.js', () => ({
 
 vi.mock('../services/branchWorkflow.js', () => ({
   describeBranchCssOnlyStatus: vi.fn()
+}));
+
+vi.mock('../services/projectLayout.js', () => ({
+  resolveProjectLayout: vi.fn()
 }));
 
 const fsAccessMock = vi.fn();
@@ -102,6 +107,13 @@ describe('Jobs Routes', () => {
     startJob.mockImplementation((job) => ({ id: `job-${++jobCounter}`, ...job }));
     describeBranchCssOnlyStatus.mockReset();
     describeBranchCssOnlyStatus.mockResolvedValue({ isCssOnly: false });
+    resolveProjectLayout.mockImplementation(async () => ({
+      frontendWorkspacePath: existingPaths.has(normalizePath(FRONTEND_DIR)) ? FRONTEND_DIR : null,
+      backendWorkspacePath: existingPaths.has(normalizePath(BACKEND_DIR)) ? BACKEND_DIR : null,
+      frontendWorkspaceManifestPath: existingPaths.has(normalizePath(FRONTEND_PACKAGE)) ? FRONTEND_PACKAGE : null,
+      backendWorkspaceManifestPath: existingPaths.has(normalizePath(BACKEND_PACKAGE)) ? BACKEND_PACKAGE : null,
+      hasBackendRequirements: existingPaths.has(normalizePath(BACKEND_REQUIREMENTS))
+    }));
   });
 
   it('treats missing target paths as non-existent', async () => {

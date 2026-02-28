@@ -104,6 +104,7 @@ const shouldSuppressStderr = (chunk) => {
 const shouldEmitConsoleOutput = () => process.env.VITE_VERBOSE_TEST_LOGS === 'true'
 
 configure({
+  reactStrictMode: false,
   getElementError: (message, container) => {
     if (shouldEmitConsoleOutput() && container) {
       const domSnapshot = prettyDOM(container)

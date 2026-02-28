@@ -39,6 +39,17 @@ describe('automationUtils coverage helpers', () => {
     expect(extractBranchPromptContext(prompt)).toBe('Current request:');
   });
 
+  test('extractBranchPromptContext ignores retry-only current request and uses original actionable request', () => {
+    const prompt = [
+      'Current request: try again',
+      'Original request: Add validation to App test flow',
+      'Clarification questions:',
+      '- none'
+    ].join('\n');
+
+    expect(extractBranchPromptContext(prompt)).toBe('Add validation to App test flow');
+  });
+
   test('buildFallbackBranchNameFromPrompt returns fallback when prompt is empty', () => {
     expect(buildFallbackBranchNameFromPrompt('', 'feature-123')).toBe('feature-123');
     expect(buildFallbackBranchNameFromPrompt('   ', 'feature-123')).toBe('feature-123');
@@ -66,6 +77,12 @@ describe('automationUtils coverage helpers', () => {
   test('isBranchNameRelevantToPrompt checks for token overlap when prompt is specific', () => {
     expect(isBranchNameRelevantToPrompt('feature/added-login-button', 'Add login button to header')).toBe(true);
     expect(isBranchNameRelevantToPrompt('feature/updated-readme', 'Add login button to header')).toBe(false);
+  });
+
+  test('isBranchNameRelevantToPrompt rejects meta-only retry branch names', () => {
+    expect(isBranchNameRelevantToPrompt('try-again', 'retry')).toBe(false);
+    expect(isBranchNameRelevantToPrompt('fixed-try-again', 'retry')).toBe(false);
+    expect(isBranchNameRelevantToPrompt('fixed-retry-button', 'retry')).toBe(true);
   });
 
   test('automationLog emits empty banner text for blank labels', () => {

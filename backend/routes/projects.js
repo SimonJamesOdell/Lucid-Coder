@@ -87,6 +87,36 @@ import {
 } from './projects/helpers.js';
 
 const router = express.Router();
+const WINDOWS_DELETE_SETTLE_DELAY_MS = Number(process.env.LUCIDCODER_WINDOWS_DELETE_SETTLE_DELAY_MS) || 900;
+const LUCID_CODER_DEFAULT_TEMPLATE_ID = 'lucid-coder-default';
+const TEMPLATE_REMOTE_BY_ID = Object.freeze({
+  [LUCID_CODER_DEFAULT_TEMPLATE_ID]: 'https://github.com/SimonJamesOdell/Lucid-Coder-Default-Template.git'
+});
+
+const normalizeTemplateGitWorkflowMode = (value) => {
+  const normalized = safeTrim(value).toLowerCase();
+  if (normalized === 'global' || normalized === 'custom' || normalized === 'local') {
+    return normalized;
+  }
+  return 'local';
+};
+
+const buildTemplateProjectGitSettings = ({ body = {}, globalGitSettings = {} }) => {
+  const workflowMode = normalizeTemplateGitWorkflowMode(body.gitWorkflowMode);
+  const provider = safeTrim(body.gitProvider) || safeTrim(globalGitSettings?.provider) || 'github';
+  const defaultBranch = safeTrim(body.gitDefaultBranch) || safeTrim(globalGitSettings?.defaultBranch) || 'main';
+  const username = safeTrim(body.gitUsername) || safeTrim(globalGitSettings?.username) || '';
+  const token = workflowMode === 'custom' ? safeTrim(body.gitToken) : '';
+
+  return {
+    workflow: workflowMode === 'local' ? 'local' : 'cloud',
+    provider,
+    remoteUrl: '',
+    defaultBranch,
+    ...(username ? { username } : {}),
+    ...(token ? { token } : {})
+  };
+};
 
 // buildCloneUrl and stripGitCredentials imported from ../utils/gitUrl.js
 
@@ -497,7 +527,11 @@ router.post('/', async (req, res) => {
     // Determine if this is a "connect existing repo" flow
     const gitCloudMode = safeTrim(req.body.gitCloudMode);
     const gitRemoteUrl = safeTrim(req.body.gitRemoteUrl);
-    const isCloneFlow = gitCloudMode === 'connect' && Boolean(gitRemoteUrl);
+    const projectTemplate = safeTrim(req.body.projectTemplate).toLowerCase();
+    const templateRemoteUrl = TEMPLATE_REMOTE_BY_ID[projectTemplate] || '';
+    const isTemplateCloneFlow = Boolean(templateRemoteUrl);
+    const isCloneFlow = isTemplateCloneFlow || (gitCloudMode === 'connect' && Boolean(gitRemoteUrl));
+    const resolvedCloneRemoteUrl = isTemplateCloneFlow ? templateRemoteUrl : gitRemoteUrl;
     const requireGitIgnoreApproval = req.body?.requireGitIgnoreApproval !== false;
     const gitIgnoreApproved = req.body?.gitIgnoreApproved === true;
 
@@ -521,6 +555,12 @@ router.post('/', async (req, res) => {
       const project = await createProject(dbProjectData);
 
       if (isCloneFlow && project?.id) {
+        if (isTemplateCloneFlow) {
+          await saveProjectGitSettings(project.id, buildTemplateProjectGitSettings({
+            body: req.body,
+            globalGitSettings: gitSettings
+          }));
+        } else {
         const gitProvider = safeTrim(req.body.gitProvider) || safeTrim(gitSettings?.provider) || 'github';
         const gitDefaultBranch = safeTrim(req.body.gitDefaultBranch) || safeTrim(gitSettings?.defaultBranch) || 'main';
         const gitUsername = safeTrim(req.body.gitUsername) || safeTrim(gitSettings?.username) || '';
@@ -528,11 +568,12 @@ router.post('/', async (req, res) => {
         await saveProjectGitSettings(project.id, {
           workflow: 'cloud',
           provider: gitProvider,
-          remoteUrl: stripGitCredentials(gitRemoteUrl),
+          remoteUrl: stripGitCredentials(resolvedCloneRemoteUrl),
           defaultBranch: gitDefaultBranch,
           ...(gitUsername ? { username: gitUsername } : {}),
           ...(gitToken ? { token: gitToken } : {})
         });
+        }
       }
 
       const enhancedProject = {
@@ -561,13 +602,15 @@ router.post('/', async (req, res) => {
 
     if (isCloneFlow) {
       // Clone existing remote repository instead of scaffolding
-      const gitProvider = safeTrim(req.body.gitProvider) || safeTrim(gitSettings?.provider) || 'github';
+      const gitProvider = isTemplateCloneFlow
+        ? 'github'
+        : (safeTrim(req.body.gitProvider) || safeTrim(gitSettings?.provider) || 'github');
       const gitDefaultBranch = safeTrim(req.body.gitDefaultBranch) || safeTrim(gitSettings?.defaultBranch) || 'main';
       const gitUsername = safeTrim(req.body.gitUsername) || safeTrim(gitSettings?.username) || '';
       const gitToken = safeTrim(req.body.gitToken) || '';
 
       const cloneOptions = {
-        remoteUrl: gitRemoteUrl,
+        remoteUrl: resolvedCloneRemoteUrl,
         provider: gitProvider,
         defaultBranch: gitDefaultBranch,
         username: gitUsername,
@@ -605,6 +648,15 @@ router.post('/', async (req, res) => {
     }
 
     const awaitingSetup = Boolean(result?.setupRequired);
+
+    if (isTemplateCloneFlow) {
+      try {
+        await runGitCommand(projectPath, ['remote', 'remove', 'origin'], { allowFailure: true });
+      } catch (error) {
+        console.warn('Failed to detach template origin remote:', error?.message);
+      }
+    }
+
     const processPorts = extractProcessPorts(result.processes);
     
     // Save to database with enhanced data
@@ -622,6 +674,12 @@ router.post('/', async (req, res) => {
 
     // Save project git settings when cloning from a remote
     if (isCloneFlow && project?.id) {
+      if (isTemplateCloneFlow) {
+        await saveProjectGitSettings(project.id, buildTemplateProjectGitSettings({
+          body: req.body,
+          globalGitSettings: gitSettings
+        }));
+      } else {
       const gitProvider = safeTrim(req.body.gitProvider) || safeTrim(gitSettings?.provider) || 'github';
       const gitDefaultBranch = result.branch || safeTrim(req.body.gitDefaultBranch) || safeTrim(gitSettings?.defaultBranch) || 'main';
       const gitUsername = safeTrim(req.body.gitUsername) || safeTrim(gitSettings?.username) || '';
@@ -629,11 +687,12 @@ router.post('/', async (req, res) => {
       await saveProjectGitSettings(project.id, {
         workflow: 'cloud',
         provider: gitProvider,
-        remoteUrl: result.remote || stripGitCredentials(gitRemoteUrl),
+        remoteUrl: result.remote || stripGitCredentials(resolvedCloneRemoteUrl),
         defaultBranch: gitDefaultBranch,
         ...(gitUsername ? { username: gitUsername } : {}),
         ...(gitToken ? { token: gitToken } : {})
       });
+      }
     }
     
     // Store process information
@@ -884,6 +943,10 @@ router.delete('/:id', async (req, res) => {
       dropEntry: true,
       forcePorts: true
     });
+
+    if (process.platform === 'win32' && WINDOWS_DELETE_SETTLE_DELAY_MS > 0) {
+      await new Promise((resolve) => setTimeout(resolve, WINDOWS_DELETE_SETTLE_DELAY_MS));
+    }
     
     // Delete from database
     const success = await deleteProject(project.id);
@@ -903,6 +966,18 @@ router.delete('/:id', async (req, res) => {
     const runCleanup = async () => {
       const result = { success: true, failures: [] };
       try {
+        if (!cleanupTargets.length) {
+          const message = 'cleanup failed';
+          console.warn('⚠️ Warning: Could not clean up project directories:', cleanupTargets, message);
+          result.success = false;
+          result.failures = [{
+            target: null,
+            code: 'ENO_TARGETS',
+            message
+          }];
+          return result;
+        }
+
         const fs = await getFsModule();
 
         const cleanupFailures = [];
@@ -1055,6 +1130,7 @@ export {
 export {
   buildCloneUrl,
   enqueueInstallJobs,
+  buildTemplateProjectGitSettings,
   stripGitCredentials,
   extractRepoName,
   resolveImportProjectName,

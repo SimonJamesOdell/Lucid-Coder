@@ -56,19 +56,21 @@ const ProjectDetailsSection = ({
         </div>
       </div>
 
-      <TechnologySelectors
-        createLoading={createLoading}
-        projectSource={projectSource}
-        newProject={newProject}
-        frontendLanguages={frontendLanguages}
-        backendLanguages={backendLanguages}
-        getFrontendFrameworks={getFrontendFrameworks}
-        getBackendFrameworks={getBackendFrameworks}
-        onFrontendLanguageChange={onFrontendLanguageChange}
-        onFrontendFrameworkChange={onFrontendFrameworkChange}
-        onBackendLanguageChange={onBackendLanguageChange}
-        onBackendFrameworkChange={onBackendFrameworkChange}
-      />
+      {projectSource !== 'template' && (
+        <TechnologySelectors
+          createLoading={createLoading}
+          projectSource={projectSource}
+          newProject={newProject}
+          frontendLanguages={frontendLanguages}
+          backendLanguages={backendLanguages}
+          getFrontendFrameworks={getFrontendFrameworks}
+          getBackendFrameworks={getBackendFrameworks}
+          onFrontendLanguageChange={onFrontendLanguageChange}
+          onFrontendFrameworkChange={onFrontendFrameworkChange}
+          onBackendLanguageChange={onBackendLanguageChange}
+          onBackendFrameworkChange={onBackendFrameworkChange}
+        />
+      )}
     </>
   );
 };

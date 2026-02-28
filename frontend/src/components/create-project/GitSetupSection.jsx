@@ -36,12 +36,16 @@ const GitSetupSection = ({
   shouldShowGitSummary,
   gitSummaryItems
 }) => {
+  const isNewLikeSource = projectSource === 'new' || projectSource === 'template';
+
   return (
     <div className={`form-section${projectSource === 'local' ? ' form-section--full' : ''}`}>
       <h3>
         {projectSource === 'local'
           ? 'Import setup'
-          : (projectSource === 'git' ? 'Clone setup' : 'Git setup')}
+          : (projectSource === 'git'
+            ? 'Clone setup'
+            : 'Git setup')}
       </h3>
 
       {projectSource === 'local' && (
@@ -211,7 +215,7 @@ const GitSetupSection = ({
         </>
       )}
 
-      {projectSource === 'new' && (
+      {isNewLikeSource && (
         <div className="form-row">
           <div className="form-group">
             <label htmlFor="git-workflow-select">Git Workflow *</label>
@@ -240,7 +244,7 @@ const GitSetupSection = ({
         </div>
       )}
 
-      {(projectSource === 'new' ? gitWorkflowMode === 'custom' : gitConnectionMode === 'custom') && (
+      {(isNewLikeSource ? gitWorkflowMode === 'custom' : gitConnectionMode === 'custom') && (
         <div className="form-row">
           <div className="form-group">
             <label htmlFor="git-provider-select">Git Provider *</label>
@@ -282,7 +286,7 @@ const GitSetupSection = ({
         </div>
       )}
 
-      {projectSource === 'new' && (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'connect' && (
+      {isNewLikeSource && (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'connect' && (
         <div className="form-row">
           <div className="form-group" style={{ width: '100%' }}>
             <label htmlFor="git-remote-url-input">Repository URL *</label>
@@ -304,7 +308,7 @@ const GitSetupSection = ({
         </div>
       )}
 
-      {(projectSource === 'new' && (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'create')
+      {(isNewLikeSource && (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') && gitCloudMode === 'create')
         || (projectSource === 'git' && cloneCreateRemote) ? (
         <div className="form-row">
           <div className="form-group">
@@ -359,7 +363,7 @@ const GitSetupSection = ({
         </div>
       ) : null}
 
-      {projectSource === 'new' && shouldShowGitSummary && gitSummaryItems.length > 0 && (
+      {isNewLikeSource && shouldShowGitSummary && gitSummaryItems.length > 0 && (
         <div className="git-summary-card">
           <h4>Derived from repo</h4>
           {gitSummaryItems.map((item) => (

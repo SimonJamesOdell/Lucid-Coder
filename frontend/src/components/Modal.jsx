@@ -14,7 +14,8 @@ const Modal = ({
   processingMessage = '',
   confirmLoadingText = 'Working...',
   dismissOnBackdrop = true,
-  dismissOnEscape = true
+  dismissOnEscape = true,
+  contentClassName = ''
 }) => {
   useEffect(() => {
     const handleEscapeKey = (event) => {
@@ -67,7 +68,7 @@ const Modal = ({
   return (
     <div className="modal-backdrop" onClick={handleBackdropClick} data-testid="modal-backdrop">
       <div
-        className={`modal-content modal-${type}`}
+        className={`modal-content modal-${type} ${contentClassName}`.trim()}
         data-testid="modal-content"
         aria-busy={isProcessing}
       >

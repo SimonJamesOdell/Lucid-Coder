@@ -87,12 +87,9 @@ export function createPostCloneSetupHandlers({
       return;
     }
 
-    try {
-      await runPostCloneSetup(gitIgnoreSuggestion.projectId);
-    } catch (error) {
-      const message = error?.response?.data?.error || error?.message || 'Failed to complete project setup';
-      setGitIgnoreStatus({ state: 'error', error: message });
-    }
+    setGitIgnoreSuggestion(null);
+    setGitIgnoreStatus({ state: 'idle', error: '' });
+    showMain();
   };
 
   const handleContinueAfterGitIgnore = () => {

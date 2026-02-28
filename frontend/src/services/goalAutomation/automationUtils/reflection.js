@@ -233,6 +233,45 @@ export const normalizeReflectionList = (value) => {
     .slice(0, 12);
 };
 
+const deriveTestDirectoryAliases = (path) => {
+  const normalizedPath = typeof path === 'string' ? path : '';
+  if (!normalizedPath) {
+    return [];
+  }
+
+  const aliases = new Set();
+  if (/\/tests(\/|$)/.test(normalizedPath)) {
+    aliases.add(normalizedPath.replace(/\/tests(\/|$)/g, '/test$1'));
+  }
+  if (/\/test(\/|$)/.test(normalizedPath)) {
+    aliases.add(normalizedPath.replace(/\/test(\/|$)/g, '/tests$1'));
+  }
+
+  aliases.delete(normalizedPath);
+  return Array.from(aliases);
+};
+
+const deriveWorkspacePathAliases = (path) => {
+  const normalizedPath = typeof path === 'string' ? path : '';
+  if (!normalizedPath) {
+    return [];
+  }
+
+  const aliases = new Set();
+  if (normalizedPath.startsWith('src/')) {
+    aliases.add(`frontend/${normalizedPath}`);
+  }
+  if (normalizedPath.startsWith('tests/')) {
+    aliases.add(`frontend/${normalizedPath}`);
+  }
+  if (normalizedPath.startsWith('frontend/src/')) {
+    aliases.add(normalizedPath.replace(/^frontend\//, ''));
+  }
+
+  aliases.delete(normalizedPath);
+  return Array.from(aliases);
+};
+
 export const deriveReflectionPathPrefixes = (entries, normalizeRepoPath) => {
   const prefixes = new Set();
 
@@ -258,6 +297,30 @@ export const deriveReflectionPathPrefixes = (entries, normalizeRepoPath) => {
         prefixes.add(trimmedPath);
         if (!/\.[a-z0-9]+$/i.test(trimmedPath)) {
           prefixes.add(`${trimmedPath}/`);
+        }
+
+        const aliasPaths = deriveTestDirectoryAliases(trimmedPath);
+        for (const aliasPath of aliasPaths) {
+          prefixes.add(aliasPath);
+          if (!/\.[a-z0-9]+$/i.test(aliasPath)) {
+            prefixes.add(`${aliasPath}/`);
+          }
+        }
+
+        const workspaceAliases = deriveWorkspacePathAliases(trimmedPath);
+        for (const aliasPath of workspaceAliases) {
+          prefixes.add(aliasPath);
+          if (!/\.[a-z0-9]+$/i.test(aliasPath)) {
+            prefixes.add(`${aliasPath}/`);
+          }
+
+          const workspaceTestAliases = deriveTestDirectoryAliases(aliasPath);
+          for (const testAliasPath of workspaceTestAliases) {
+            prefixes.add(testAliasPath);
+            if (!/\.[a-z0-9]+$/i.test(testAliasPath)) {
+              prefixes.add(`${testAliasPath}/`);
+            }
+          }
         }
       }
       continue;
@@ -564,5 +627,7 @@ export const __reflectionTestHooks = {
   normalizeAssetPathForMatch,
   editMentionsRequiredAssetPaths,
   scoreEditPlanConfidence,
-  hasRequiredExecutionContractShape
+  hasRequiredExecutionContractShape,
+  deriveTestDirectoryAliases,
+  deriveWorkspacePathAliases
 };

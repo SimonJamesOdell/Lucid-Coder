@@ -10,6 +10,20 @@ const ProjectSourceSection = ({ projectSource, setProjectSource, setCreateError,
     <div className="form-section">
       <h3>Project Source</h3>
       <div className="radio-group">
+        <label className={`radio-card ${projectSource === 'template' ? 'selected' : ''}`}>
+          <input
+            type="radio"
+            name="projectSource"
+            value="template"
+            checked={projectSource === 'template'}
+            onChange={() => handleSourceChange('template')}
+            disabled={createLoading}
+          />
+          <div>
+            <div className="radio-title">Lucid Coder Default Template</div>
+            <div className="radio-subtitle">Create from the official Lucid Coder default project template.</div>
+          </div>
+        </label>
         <label className={`radio-card ${projectSource === 'new' ? 'selected' : ''}`}>
           <input
             type="radio"
@@ -20,7 +34,7 @@ const ProjectSourceSection = ({ projectSource, setProjectSource, setCreateError,
             disabled={createLoading}
           />
           <div>
-            <div className="radio-title">Create a new project</div>
+            <div className="radio-title">Create a new classic project</div>
             <div className="radio-subtitle">Scaffold a brand-new app with your chosen tech stack.</div>
           </div>
         </label>

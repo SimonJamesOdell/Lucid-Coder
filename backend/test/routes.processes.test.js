@@ -7,6 +7,7 @@ import os from 'os';
 
 vi.mock('../database.js', () => ({
   getProject: vi.fn(),
+  getProjectGitSettings: vi.fn(),
   getPortSettings: vi.fn(),
   updateProjectPorts: vi.fn()
 }));
@@ -32,6 +33,10 @@ const runningProcessesMock = new Map();
 
 vi.mock('../routes/projects/processManager.js', () => {
   const defaultPorts = { frontend: 5173, backend: 3000 };
+  const normalizePort = (value) => {
+    const numeric = Number.parseInt(value, 10);
+    return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+  };
   return {
     buildLogEntries: vi.fn(() => []),
     buildPortOverrideOptions: vi.fn(() => ({})),
@@ -45,7 +50,10 @@ vi.mock('../routes/projects/processManager.js', () => {
       snapshotVisible: false,
       launchType: 'manual'
     })),
-    getStoredProjectPorts: vi.fn(() => defaultPorts),
+    getStoredProjectPorts: vi.fn((project) => ({
+      frontend: normalizePort(project?.frontend_port ?? project?.frontendPort),
+      backend: normalizePort(project?.backend_port ?? project?.backendPort)
+    })),
     hasLiveProcess: vi.fn(() => true),
     parseSinceParam: vi.fn(() => null),
     resolveActivityState: vi.fn(() => 'idle'),
@@ -78,6 +86,8 @@ describe('routes/processes', () => {
     db = await import('../database.js');
     processManager = await import('../routes/projects/processManager.js');
     db.getProject.mockResolvedValue({ id: '123', name: 'Test Project' });
+    db.getProjectGitSettings.mockResolvedValue(null);
+    db.getPortSettings.mockResolvedValue({ frontendPortBase: 5100, backendPortBase: 5500 });
     app = await buildApp();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'processes-route-'));
   });
@@ -137,6 +147,344 @@ describe('routes/processes', () => {
       id: '123',
       name: 'No Path',
       path: null
+    });
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+  });
+
+  it('treats whitespace git remote URLs as non-template remotes', async () => {
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Whitespace Remote',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue({ remoteUrl: '   ' });
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+  });
+
+  it('uses configured port settings as preferred and active fallback ports', async () => {
+    processManager.getRunningProcessEntry.mockReturnValue({
+      processes: null,
+      state: 'idle',
+      snapshotVisible: false,
+      launchType: 'manual'
+    });
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Configured Ports Project',
+      path: tempDir,
+      frontendPort: null,
+      backendPort: null
+    });
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.ports?.preferred?.frontend).toBe(5100);
+    expect(res.body.ports?.active?.frontend).toBe(5100);
+    expect(res.body.lastKnownPorts?.frontend).toBe(5100);
+    expect(res.body.ports?.preferred?.backend).toBe(5500);
+    expect(res.body.ports?.active?.backend).toBe(5500);
+    expect(res.body.lastKnownPorts?.backend).toBe(5500);
+  });
+
+  it('marks backend capability true for Lucid template projects with root backend script', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({
+        name: 'lucid-template-project',
+        scripts: {
+          backend: 'node backend/server.js'
+        }
+      })
+    );
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Lucid Template Project',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue({
+      remoteUrl: 'https://github.com/SimonJamesOdell/Lucid-Coder-Default-Template.git'
+    });
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(true);
+  });
+
+  it('does not treat non-template root backend scripts as backend capability', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({
+        name: 'generic-root-project',
+        scripts: {
+          backend: 'node backend/server.js'
+        }
+      })
+    );
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Generic Root Project',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue({
+      remoteUrl: 'https://github.com/example/other-template.git'
+    });
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+  });
+
+  it('marks backend capability true when Lucid template remote is only in .git/config', async () => {
+    await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, '.git', 'config'),
+      [
+        '[core]',
+        '  repositoryformatversion = 0',
+        '[remote "origin"]',
+        '  url = https://github.com/SimonJamesOdell/Lucid-Coder-Default-Template.git',
+        '  fetch = +refs/heads/*:refs/remotes/origin/*'
+      ].join('\n')
+    );
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({
+        name: 'lucid-template-project',
+        scripts: { backend: 'node backend/server.js' }
+      })
+    );
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Lucid Template Project',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(true);
+  });
+
+  it('does not treat git config as template when remote origin section is missing', async () => {
+    await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, '.git', 'config'),
+      [
+        '[core]',
+        '  repositoryformatversion = 0',
+        '[remote "upstream"]',
+        '  url = https://github.com/SimonJamesOdell/Lucid-Coder-Default-Template.git'
+      ].join('\n')
+    );
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({ name: 'non-origin-template', scripts: { backend: 'node backend/server.js' } })
+    );
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'No Origin Remote',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+  });
+
+  it('does not treat git config as template when origin section has no url', async () => {
+    await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, '.git', 'config'),
+      [
+        '[core]',
+        '  repositoryformatversion = 0',
+        '[remote "origin"]',
+        '  fetch = +refs/heads/*:refs/remotes/origin/*'
+      ].join('\n')
+    );
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({ name: 'origin-no-url', scripts: { backend: 'node backend/server.js' } })
+    );
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Origin Missing URL',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+  });
+
+  it('does not treat blank git config content as a template remote', async () => {
+    await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, '.git', 'config'), '   \n\n  ');
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({ name: 'blank-config', scripts: { backend: 'node backend/server.js' } })
+    );
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Blank Git Config',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+  });
+
+  it('does not treat non-template .git/config remotes as backend capability', async () => {
+    await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, '.git', 'config'),
+      [
+        '[core]',
+        '  repositoryformatversion = 0',
+        '[remote "origin"]',
+        '  url = https://github.com/example/other-template.git',
+        '  fetch = +refs/heads/*:refs/remotes/origin/*'
+      ].join('\n')
+    );
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({
+        name: 'generic-root-project',
+        scripts: { backend: 'node backend/server.js' }
+      })
+    );
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Generic Root Project',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+  });
+
+  it('treats origin sections without url as non-template git config', async () => {
+    await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, '.git', 'config'),
+      [
+        '[core]',
+        '  repositoryformatversion = 0',
+        '[remote "origin"]',
+        '  fetch = +refs/heads/*:refs/remotes/origin/*'
+      ].join('\n')
+    );
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({
+        name: 'generic-root-project',
+        scripts: { backend: 'node backend/server.js' }
+      })
+    );
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Missing Origin Url',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+  });
+
+  it('handles unreadable .git/config by treating it as non-template', async () => {
+    await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+    const gitConfigPath = path.join(tempDir, '.git', 'config');
+    await fs.writeFile(
+      gitConfigPath,
+      [
+        '[remote "origin"]',
+        '  url = https://github.com/SimonJamesOdell/Lucid-Coder-Default-Template.git'
+      ].join('\n')
+    );
+    await fs.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({
+        name: 'generic-root-project',
+        scripts: { backend: 'node backend/server.js' }
+      })
+    );
+
+    const originalReadFile = fs.readFile;
+    const readFileSpy = vi.spyOn(fs, 'readFile').mockImplementation(async (candidate, ...rest) => {
+      if (String(candidate) === gitConfigPath) {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      }
+      return originalReadFile(candidate, ...rest);
+    });
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Unreadable Git Config',
+      path: tempDir
+    });
+    db.getProjectGitSettings.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.capabilities?.backend?.exists).toBe(false);
+    readFileSpy.mockRestore();
+  });
+
+  it('returns backend capability false for template metadata when project path is null', async () => {
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Template Missing Path',
+      path: null
+    });
+    db.getProjectGitSettings.mockResolvedValue({
+      remoteUrl: 'https://github.com/SimonJamesOdell/Lucid-Coder-Default-Template.git'
     });
 
     const res = await request(app)
@@ -411,6 +759,55 @@ describe('routes/processes', () => {
     warnSpy.mockRestore();
   });
 
+  it('returns 400 when start is requested for a path outside managed projects root', async () => {
+    const cleanup = await import('../routes/projects/cleanup.js');
+    cleanup.isWithinManagedProjectsRoot.mockReturnValue(false);
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Unsafe Start Path',
+      path: tempDir
+    });
+
+    const res = await request(app)
+      .post('/api/projects/123/start')
+      .expect(400);
+
+    expect(res.body).toMatchObject({ success: false, error: 'Invalid project path' });
+    cleanup.isWithinManagedProjectsRoot.mockReturnValue(true);
+  });
+
+  it('returns E2E skip-scaffolding success payload when enabled and project has no assigned ports', async () => {
+    const originalSkip = process.env.E2E_SKIP_SCAFFOLDING;
+    process.env.E2E_SKIP_SCAFFOLDING = '1';
+
+    try {
+      db.getProject.mockResolvedValue({
+        id: '123',
+        name: 'E2E Skip Project',
+        path: tempDir,
+        frontendPort: null,
+        backendPort: null
+      });
+
+      const res = await request(app)
+        .post('/api/projects/123/start')
+        .expect(200);
+
+      expect(res.body).toMatchObject({
+        success: true,
+        message: 'Project selected (E2E skip scaffolding)',
+        processes: null
+      });
+    } finally {
+      if (originalSkip === undefined) {
+        delete process.env.E2E_SKIP_SCAFFOLDING;
+      } else {
+        process.env.E2E_SKIP_SCAFFOLDING = originalSkip;
+      }
+    }
+  });
+
   it('returns 400 with details when start fails due to missing frontend package.json', async () => {
     const originalSkip = process.env.E2E_SKIP_SCAFFOLDING;
     delete process.env.E2E_SKIP_SCAFFOLDING;
@@ -530,6 +927,24 @@ describe('routes/processes', () => {
       error: 'Failed to restart project'
     });
     expect(res.body.details?.message).toBe('boom');
+  });
+
+  it('returns 400 when restart is requested for a path outside managed projects root', async () => {
+    const cleanup = await import('../routes/projects/cleanup.js');
+    cleanup.isWithinManagedProjectsRoot.mockReturnValue(false);
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Unsafe Restart Path',
+      path: tempDir
+    });
+
+    const res = await request(app)
+      .post('/api/projects/123/restart')
+      .expect(400);
+
+    expect(res.body).toMatchObject({ success: false, error: 'Invalid project path' });
+    cleanup.isWithinManagedProjectsRoot.mockReturnValue(true);
   });
 
   it('includes error name and stack when restart fails outside production', async () => {
@@ -913,5 +1328,46 @@ describe('routes/processes', () => {
       .expect(200);
 
     expect(db.updateProjectPorts).toHaveBeenCalledWith('123', { backendPort: 6002 });
+  });
+
+  it('falls back to default configured port bases when settings fetch fails', async () => {
+    processManager.getRunningProcessEntry.mockReturnValue({
+      processes: null,
+      state: 'idle',
+      snapshotVisible: false,
+      launchType: 'manual'
+    });
+    processManager.getProjectPortHints.mockReturnValue({ frontend: 6200, backend: 7200 });
+
+    db.getPortSettings.mockRejectedValue(new Error('settings unavailable'));
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Framework Hint Fallback',
+      path: tempDir,
+      frontendPort: null,
+      backendPort: null
+    });
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.ports?.preferred?.frontend).toBe(5100);
+    expect(res.body.ports?.preferred?.backend).toBe(5500);
+    expect(res.body.lastKnownPorts?.frontend).toBe(5100);
+    expect(res.body.lastKnownPorts?.backend).toBe(5500);
+  });
+
+  it('normalizes remote URLs and handles missing origin/url git config branches', async () => {
+    const { __testOnly } = await import('../routes/projects/routes.processes.js');
+
+    expect(__testOnly.normalizeRemoteUrl('')).toBe('');
+    expect(__testOnly.normalizeRemoteUrl('https://github.com/org/repo')).toBe('https://github.com/org/repo.git');
+    expect(__testOnly.normalizeRemoteUrl('https://github.com/org/repo.git')).toBe('https://github.com/org/repo.git');
+
+    expect(__testOnly.parseOriginRemoteFromGitConfig('[core]\nrepositoryformatversion = 0')).toBe('');
+    expect(
+      __testOnly.parseOriginRemoteFromGitConfig('[remote "origin"]\nfetch = +refs/heads/*:refs/remotes/origin/*')
+    ).toBe('');
   });
 });

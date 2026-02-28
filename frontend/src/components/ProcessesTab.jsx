@@ -175,7 +175,14 @@ const ProcessesTab = ({
   );
   const processes = snapshot.processes;
   const ports = snapshot.ports;
-  const hasBackend = processInfo?.capabilities?.backend?.exists ?? true;
+  const backendCapabilityExists = processInfo?.capabilities?.backend?.exists;
+  const hasBackendSignals = Boolean(
+    processes?.backend
+    || resolvePortValue(ports, 'backend')
+  );
+  const hasBackend = backendCapabilityExists === false
+    ? hasBackendSignals
+    : true;
 
   const stopEnabled = Boolean(project?.id && onStopProject);
 

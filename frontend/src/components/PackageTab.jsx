@@ -3,9 +3,20 @@ import { useAppState } from '../context/AppStateContext';
 import './PackageTab.css';
 
 const WORKSPACES = [
-  { key: 'frontend', label: 'Frontend', manifestPath: 'frontend/package.json' },
-  { key: 'backend', label: 'Backend', manifestPath: 'backend/package.json' }
+  { key: 'frontend', label: 'Frontend' },
+  { key: 'backend', label: 'Backend' }
 ];
+
+const ROOT_MANIFEST_PATH = 'package.json';
+const LEGACY_MANIFEST_PATHS = {
+  frontend: 'frontend/package.json',
+  backend: 'backend/package.json'
+};
+
+const WORKSPACE_KEYWORDS = {
+  frontend: ['frontend', 'client', 'web', 'ui', 'app'],
+  backend: ['backend', 'server', 'api']
+};
 
 // Test-only export: allows branch coverage of WORKSPACES[0]?.key fallbacks.
 export const __testWorkspaces = WORKSPACES;
@@ -15,6 +26,137 @@ const isObject = (value) => value && typeof value === 'object' && !Array.isArray
 export const resolveActionProjectId = (projectId, override) => (
   override !== undefined ? override : projectId
 );
+
+const getDefaultManifestPaths = () => ({
+  frontend: LEGACY_MANIFEST_PATHS.frontend,
+  backend: LEGACY_MANIFEST_PATHS.backend
+});
+
+const normalizeManifestPath = (value) => String(value || '')
+  .replace(/\\/g, '/')
+  .replace(/^\/+/, '')
+  .trim();
+
+const isUnifiedManifestLayout = (manifestPaths) => {
+  const frontendPath = normalizeManifestPath(manifestPaths?.frontend);
+  const backendPath = normalizeManifestPath(manifestPaths?.backend);
+
+  if (!frontendPath || !backendPath) {
+    return false;
+  }
+
+  return frontendPath === backendPath;
+};
+
+const collectManifestPathsFromTree = (nodes, bucket = []) => {
+  if (!Array.isArray(nodes)) {
+    return bucket;
+  }
+
+  nodes.forEach((node) => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+
+    const normalizedPath = normalizeManifestPath(node.path);
+    if (node.type === 'file' && normalizedPath.endsWith('/package.json')) {
+      bucket.push(normalizedPath);
+      return;
+    }
+
+    if (node.type === 'file' && normalizedPath === ROOT_MANIFEST_PATH) {
+      bucket.push(ROOT_MANIFEST_PATH);
+      return;
+    }
+
+    if (Array.isArray(node.children)) {
+      collectManifestPathsFromTree(node.children, bucket);
+    }
+  });
+
+  return bucket;
+};
+
+const scoreManifestPathForWorkspace = (manifestPath, workspaceKey) => {
+  const normalized = normalizeManifestPath(manifestPath);
+  if (!normalized || !normalized.endsWith('package.json')) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const segments = normalized.toLowerCase().split('/').filter(Boolean);
+  const folderSegments = segments.slice(0, -1);
+  const workspaceWords = WORKSPACE_KEYWORDS[workspaceKey] || [];
+  const oppositeWords = Object.entries(WORKSPACE_KEYWORDS)
+    .filter(([key]) => key !== workspaceKey)
+    .flatMap(([, words]) => words);
+
+  let score = 0;
+
+  if (normalized === LEGACY_MANIFEST_PATHS[workspaceKey]) {
+    score += 200;
+  }
+
+  if (normalized === ROOT_MANIFEST_PATH) {
+    score += 40;
+  }
+
+  workspaceWords.forEach((keyword) => {
+    if (folderSegments.includes(keyword)) {
+      score += 45;
+    }
+  });
+
+  oppositeWords.forEach((keyword) => {
+    if (folderSegments.includes(keyword)) {
+      score -= 30;
+    }
+  });
+
+  score -= folderSegments.length;
+  return score;
+};
+
+export const resolveWorkspaceManifestPaths = (fileTree = []) => {
+  const defaults = getDefaultManifestPaths();
+  const discoveredPaths = Array.from(new Set(
+    collectManifestPathsFromTree(fileTree)
+      .map(normalizeManifestPath)
+      .filter((manifestPath) => manifestPath.endsWith('package.json'))
+  ));
+
+  if (discoveredPaths.length === 0) {
+    return defaults;
+  }
+
+  const pickBestPath = (workspaceKey) => {
+    const ranked = discoveredPaths
+      .map((manifestPath) => ({ manifestPath, score: scoreManifestPathForWorkspace(manifestPath, workspaceKey) }))
+      .sort((a, b) => b.score - a.score);
+
+    return ranked[0].manifestPath;
+  };
+
+  const frontendPath = pickBestPath('frontend');
+  const backendPath = pickBestPath('backend');
+
+  return {
+    frontend: frontendPath,
+    backend: backendPath
+  };
+};
+
+const getManifestPathCandidates = (workspaceKey, manifestPaths, overrideManifestPath) => {
+  const selectedPath = normalizeManifestPath(overrideManifestPath || manifestPaths?.[workspaceKey] || LEGACY_MANIFEST_PATHS[workspaceKey]);
+  return Array.from(new Set([selectedPath, ROOT_MANIFEST_PATH].filter(Boolean)));
+};
+
+export const __packageTabTestHooks = {
+  normalizeManifestPath,
+  isUnifiedManifestLayout,
+  collectManifestPathsFromTree,
+  scoreManifestPathForWorkspace,
+  getManifestPathCandidates
+};
 
 const PackageTab = ({ project, forceProjectId }) => {
   const projectId = project?.id || null;
@@ -34,6 +176,8 @@ const PackageTab = ({ project, forceProjectId }) => {
   const [globalError, setGlobalError] = useState('');
   const [activeWorkspaceKey, setActiveWorkspaceKey] = useState(WORKSPACES[0]?.key || 'frontend');
   const [addPackageModalWorkspaceKey, setAddPackageModalWorkspaceKey] = useState(null);
+  const [manifestPaths, setManifestPaths] = useState(getDefaultManifestPaths());
+  const manifestPathsRef = useRef(getDefaultManifestPaths());
   const completedJobsRef = useRef(new Map());
   const addPackageNameInputRef = useRef(null);
 
@@ -60,7 +204,7 @@ const PackageTab = ({ project, forceProjectId }) => {
     }));
   }, []);
 
-  const fetchManifest = useCallback(async (workspaceKey) => {
+  const fetchManifest = useCallback(async (workspaceKey, overrideManifestPath) => {
     if (!projectId) {
       updateManifestState(workspaceKey, null);
       return;
@@ -75,17 +219,42 @@ const PackageTab = ({ project, forceProjectId }) => {
     setErrors((prev) => ({ ...prev, [workspaceKey]: null }));
 
     try {
-      const response = await fetch(`/api/projects/${projectId}/files/${workspace.manifestPath}`);
-      const data = await response.json();
+      const candidates = getManifestPathCandidates(workspaceKey, manifestPathsRef.current, overrideManifestPath);
+      let parsed = null;
+      const lastIndex = candidates.length - 1;
 
-      if (!response.ok || !data.success || typeof data.content !== 'string') {
-        throw new Error(data?.error || 'Failed to load package manifest');
+      for (let index = 0; index < candidates.length; index += 1) {
+        const manifestPath = candidates[index];
+        const isLastCandidate = index === lastIndex;
+        try {
+          const response = await fetch(`/api/projects/${projectId}/files/${manifestPath}`);
+          const data = await response.json();
+
+          if (!response.ok || !data.success || typeof data.content !== 'string') {
+            const message = typeof data?.error === 'string' ? data.error : '';
+            const missingManifest = response.status === 404 || /not found/i.test(message);
+            if (!isLastCandidate && missingManifest) {
+              continue;
+            }
+            throw new Error(message || 'Failed to load package manifest');
+          }
+
+          const candidateManifest = JSON.parse(data.content);
+          if (!isObject(candidateManifest)) {
+            throw new Error('Manifest is not a valid JSON object');
+          }
+
+          parsed = candidateManifest;
+          break;
+        } catch (error) {
+          const message = typeof error?.message === 'string' ? error.message : '';
+          if (!isLastCandidate && /not found/i.test(message)) {
+            continue;
+          }
+          throw error;
+        }
       }
 
-      const parsed = JSON.parse(data.content);
-      if (!isObject(parsed)) {
-        throw new Error('Manifest is not a valid JSON object');
-      }
       updateManifestState(workspaceKey, parsed);
     } catch (error) {
       console.warn('Failed to load package manifest', error);
@@ -99,7 +268,24 @@ const PackageTab = ({ project, forceProjectId }) => {
     }
   }, [projectId, updateManifestState]);
 
+  const discoverManifestPaths = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/projects/${projectId}/files`);
+      const data = await response.json();
+      if (!response.ok || !data?.success || !Array.isArray(data?.files)) {
+        throw new Error('Failed to discover manifest paths');
+      }
+
+      return resolveWorkspaceManifestPaths(data.files);
+    } catch (error) {
+      console.warn('Failed to discover manifest paths', error);
+      return getDefaultManifestPaths();
+    }
+  }, [projectId]);
+
   useEffect(() => {
+    let cancelled = false;
+
     completedJobsRef.current.clear();
     setManifests({ frontend: null, backend: null });
     setErrors({ frontend: null, backend: null });
@@ -107,15 +293,33 @@ const PackageTab = ({ project, forceProjectId }) => {
     setGlobalError('');
     setActiveWorkspaceKey(WORKSPACES[0]?.key || 'frontend');
     setAddPackageModalWorkspaceKey(null);
+    const defaultManifestPaths = getDefaultManifestPaths();
+    setManifestPaths(defaultManifestPaths);
+    manifestPathsRef.current = defaultManifestPaths;
 
     if (!projectId) {
       return;
     }
 
-    WORKSPACES.forEach(({ key }) => {
-      fetchManifest(key);
-    });
-  }, [projectId, fetchManifest]);
+    const initializeManifests = async () => {
+      const discoveredPaths = await discoverManifestPaths();
+      if (cancelled) {
+        return;
+      }
+
+      setManifestPaths(discoveredPaths);
+      manifestPathsRef.current = discoveredPaths;
+      await Promise.all(
+        WORKSPACES.map(({ key }) => fetchManifest(key, discoveredPaths[key]))
+      );
+    };
+
+    void initializeManifests();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, fetchManifest, discoverManifestPaths]);
 
   useEffect(() => {
     setAddPackageModalWorkspaceKey(null);
@@ -168,14 +372,14 @@ const PackageTab = ({ project, forceProjectId }) => {
       const previousStatus = completedJobsRef.current.get(job.id);
       if (job.status === 'succeeded' && previousStatus !== 'succeeded') {
         if (job.type.startsWith('frontend:')) {
-          fetchManifest('frontend');
+          fetchManifest('frontend', manifestPaths.frontend);
         } else if (job.type.startsWith('backend:')) {
-          fetchManifest('backend');
+          fetchManifest('backend', manifestPaths.backend);
         }
       }
       completedJobsRef.current.set(job.id, job.status);
     });
-  }, [packageJobs, projectId, fetchManifest]);
+  }, [packageJobs, projectId, fetchManifest, manifestPaths]);
 
   useEffect(() => {
     if (!PackageTab.__testHooks) {
@@ -276,7 +480,7 @@ const PackageTab = ({ project, forceProjectId }) => {
     if (loadingState[workspaceKey]) {
       return;
     }
-    fetchManifest(workspaceKey);
+    fetchManifest(workspaceKey, manifestPaths[workspaceKey]);
   };
 
   const dependencyEntries = (manifest, key) => {
@@ -363,7 +567,7 @@ const PackageTab = ({ project, forceProjectId }) => {
     );
   };
 
-  const renderWorkspace = (workspace) => {
+  const renderWorkspace = (workspace, { showWorkspaceTabs }) => {
     const manifest = manifests[workspace.key];
     const isBusy = workspaceBusy[workspace.key];
     const error = errors[workspace.key];
@@ -379,34 +583,39 @@ const PackageTab = ({ project, forceProjectId }) => {
         className="package-section"
         aria-live="polite"
         role="tabpanel"
-        aria-labelledby={activeTabId}
+        aria-labelledby={showWorkspaceTabs ? activeTabId : undefined}
+        aria-label={showWorkspaceTabs ? undefined : 'Packages'}
         data-testid={`package-workspace-panel-${workspace.key}`}
       >
         <header className="package-section-header">
-          <div
-            className="package-workspace-tabs"
-            role="tablist"
-            aria-label="Package workspaces"
-          >
-            {WORKSPACES.map((entry) => {
-              const tabId = `package-workspace-tab-${entry.key}`;
-              const isActive = entry.key === workspace.key;
-              return (
-                <button
-                  key={entry.key}
-                  id={tabId}
-                  type="button"
-                  role="tab"
-                  className={`package-workspace-tab ${isActive ? 'is-active' : ''}`.trim()}
-                  aria-selected={isActive}
-                  data-testid={`package-workspace-tab-${entry.key}`}
-                  onClick={() => setActiveWorkspaceKey(entry.key)}
-                >
-                  {entry.label}
-                </button>
-              );
-            })}
-          </div>
+          {showWorkspaceTabs ? (
+            <div
+              className="package-workspace-tabs"
+              role="tablist"
+              aria-label="Package workspaces"
+            >
+              {WORKSPACES.map((entry) => {
+                const tabId = `package-workspace-tab-${entry.key}`;
+                const isActive = entry.key === workspace.key;
+                return (
+                  <button
+                    key={entry.key}
+                    id={tabId}
+                    type="button"
+                    role="tab"
+                    className={`package-workspace-tab ${isActive ? 'is-active' : ''}`.trim()}
+                    aria-selected={isActive}
+                    data-testid={`package-workspace-tab-${entry.key}`}
+                    onClick={() => setActiveWorkspaceKey(entry.key)}
+                  >
+                    {entry.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <h3 className="package-workspace-title">Packages</h3>
+          )}
           <div className="package-section-actions">
             <button
               type="button"
@@ -546,6 +755,7 @@ const PackageTab = ({ project, forceProjectId }) => {
   };
 
   const activeWorkspace = WORKSPACES.find((workspace) => workspace.key === activeWorkspaceKey) || WORKSPACES[0];
+  const showWorkspaceTabs = !isUnifiedManifestLayout(manifestPaths);
 
   return (
     <div className="package-tab" data-testid="package-tab">
@@ -555,7 +765,7 @@ const PackageTab = ({ project, forceProjectId }) => {
         </div>
       )}
 
-      {activeWorkspace ? renderWorkspace(activeWorkspace) : null}
+      {activeWorkspace ? renderWorkspace(activeWorkspace, { showWorkspaceTabs }) : null}
     </div>
   );
 };

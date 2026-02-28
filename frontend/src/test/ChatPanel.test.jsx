@@ -199,6 +199,77 @@ describe('ChatPanel', () => {
         .toBe('hello');
     });
 
+    it('parses autofix pre-message responses and falls back on invalid JSON text', () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      expect(helpers.parseAutofixPreMessageResponse('{"comment":"  Ready to retry now  "}')).toBe('Ready to retry now');
+      expect(helpers.parseAutofixPreMessageResponse('{"message":"Message path"}')).toBe('Message path');
+      expect(helpers.parseAutofixPreMessageResponse('{"text":"Text path"}')).toBe('Text path');
+      expect(helpers.parseAutofixPreMessageResponse('{}')).toBe('');
+      expect(helpers.parseAutofixPreMessageResponse(42)).toBe('');
+      expect(helpers.parseAutofixPreMessageResponse('{invalid json')).toBe('{invalid json');
+      expect(helpers.parseAutofixPreMessageResponse('')).toBe('');
+    });
+
+    it('builds and parses a generated autofix pre-message from response content fallback', async () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      vi.spyOn(axios, 'post').mockResolvedValueOnce({ data: { content: '  Keep going — trying a focused fix now.  ' } });
+
+      const message = await helpers.requestAutofixPreMessage({
+        prompt: null,
+        origin: 'automation',
+        childPrompts: ['  first ', 7, 'second', 'third'],
+        failureContext: {
+          jobs: [{ label: ' Frontend tests ' }, { label: 42 }]
+        }
+      });
+
+      expect(message).toBe('Keep going — trying a focused fix now.');
+      expect(axios.post).toHaveBeenCalled();
+    });
+
+    it('handles failure context objects with non-array jobs during pre-message generation', async () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      vi.spyOn(axios, 'post').mockResolvedValueOnce({ data: { response: 'Ready for another pass.' } });
+
+      const message = await helpers.requestAutofixPreMessage({
+        prompt: 'Retry tests',
+        origin: 'user',
+        childPrompts: ['first'],
+        failureContext: { jobs: 'frontend:test' }
+      });
+
+      expect(message).toBe('Ready for another pass.');
+    });
+
+    it('uses origin-specific fallback when autofix pre-message request fails', async () => {
+      const helpers = ChatPanel.__testHooks?.suiteHelpers;
+      expect(helpers).toBeTruthy();
+
+      vi.spyOn(axios, 'post').mockRejectedValue(new Error('network down'));
+
+      const automationMessage = await helpers.requestAutofixPreMessage({
+        prompt: 'Fix failing tests',
+        origin: 'automation',
+        childPrompts: [],
+        failureContext: null
+      });
+      const userMessage = await helpers.requestAutofixPreMessage({
+        prompt: 'Fix failing tests',
+        origin: 'user',
+        childPrompts: [],
+        failureContext: null
+      });
+
+      expect(automationMessage).toBe(helpers.pickAutofixPreMessageFallback('automation'));
+      expect(userMessage).toBe(helpers.pickAutofixPreMessageFallback('user'));
+    });
+
     it('classifies empty, frontend, and shared paths correctly', () => {
       const helpers = ChatPanel.__testHooks?.suiteHelpers;
       expect(helpers).toBeTruthy();
@@ -714,6 +785,8 @@ describe('ChatPanel', () => {
         expect(goalAutomationService.processGoals).toHaveBeenCalledTimes(1);
       });
 
+      expect(await screen.findByText('Trying again—hopefully this pass lands the fix.')).toBeInTheDocument();
+
       expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledWith(expect.objectContaining({
         projectId: 123,
         prompt: 'Fix failing tests',
@@ -733,6 +806,95 @@ describe('ChatPanel', () => {
 
       expect(mockMarkTestRunIntent).toHaveBeenCalledWith('automation');
       expect(goalsApi.fetchGoals).toHaveBeenCalledWith(123);
+    });
+
+    it('uses an LLM-generated contextual pre-message before creating auto-fix goals', async () => {
+      axios.post.mockResolvedValueOnce({
+        data: {
+          response: 'Retrying now with a narrower scope and fresh test context.'
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests in App.test.jsx',
+            origin: 'automation',
+            failureContext: {
+              jobs: [{ label: 'Frontend tests', status: 'failed' }]
+            }
+          }
+        })
+      );
+
+      expect(await screen.findByText('Retrying now with a narrower scope and fresh test context.')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(goalsApi.createGoal).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('parses JSON pre-message payloads and normalizes quoted text', async () => {
+      axios.post.mockResolvedValueOnce({
+        data: {
+          response: '{"message":"  \"Refining   the plan and re-running the focused failing suites now.\"  "}'
+        }
+      });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests in App.test.jsx',
+            origin: 'automation',
+            childPrompts: ['Fix frontend', null, 42],
+            failureContext: 'not-an-object'
+          }
+        })
+      );
+
+      expect(await screen.findByText(/refining the plan and re-running the focused failing suites now/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(goalsApi.createMetaGoalWithChildren).toHaveBeenCalledWith(expect.objectContaining({
+          childPrompts: ['Fix frontend']
+        }));
+      });
+    });
+
+    it('falls back to normalized plain text when JSON parsing fails and falls back on request errors', async () => {
+      axios.post
+        .mockResolvedValueOnce({
+          data: {
+            response: '{bad json " Still   retrying with a tighter fix scope. "'
+          }
+        })
+        .mockRejectedValueOnce(new Error('llm unavailable'));
+
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests in App.test.jsx',
+            origin: 'automation'
+          }
+        })
+      );
+
+      expect(await screen.findByText(/still retrying with a tighter fix scope/i)).toBeInTheDocument();
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests in App.test.jsx',
+            origin: 'user'
+          }
+        })
+      );
+
+      expect(await screen.findByText('On it—starting a fix pass for the failing tests.')).toBeInTheDocument();
     });
 
     it('ignores auto-fix events when prompt is not a string', async () => {
@@ -779,6 +941,29 @@ describe('ChatPanel', () => {
         expect(window.__lucidcoderAutofixHalted).toBe(false);
       });
       expect(screen.getByTestId('chat-autofix-toggle')).toHaveTextContent('■');
+    });
+
+    it('sets autofix halt when lucidcoder:autofix-pause is dispatched', async () => {
+      window.__lucidcoderAutofixHalted = false;
+
+      render(<ChatPanel width={320} side="left" />);
+
+      expect(screen.getByTestId('chat-autofix-toggle')).toHaveTextContent('■');
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:autofix-pause'));
+
+      await waitFor(() => {
+        expect(window.__lucidcoderAutofixHalted).toBe(true);
+      });
+      expect(screen.getByTestId('chat-autofix-toggle')).toHaveTextContent('Resume');
+    });
+
+    it('clears pending actions when lucidcoder:autofix-stop is dispatched', async () => {
+      render(<ChatPanel width={320} side="left" />);
+
+      window.dispatchEvent(new CustomEvent('lucidcoder:autofix-stop'));
+
+      expect(await screen.findByText('Cleared pending agent actions.')).toBeInTheDocument();
     });
 
     it('ignores auto-fix events when prompt is whitespace-only', async () => {

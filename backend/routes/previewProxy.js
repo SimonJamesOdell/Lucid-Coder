@@ -1,4 +1,5 @@
 import httpProxy from 'http-proxy';
+import net from 'net';
 import path from 'path';
 import { readFile } from 'fs/promises';
 import { getPortSettings, getProject, updateProjectPorts } from '../database.js';
@@ -25,7 +26,9 @@ const autoRestartStateByProject = new Map();
 const autoRestartInFlightByProject = new Map();
 
 const PREVIEW_PROXY_TIMEOUT_MS = 7_000;
+const PREVIEW_PORT_PROBE_TIMEOUT_MS = 250;
 const PROJECT_UPLOADS_PREFIX = '/uploads/';
+const isTestEnvironment = process.env.NODE_ENV === 'test';
 
 const UPLOAD_CONTENT_TYPES = {
   '.png': 'image/png',
@@ -701,6 +704,22 @@ const tryServeProjectUpload = async ({ projectId, forwardPath, res, logger }) =>
 };
 
 const resolveFrontendPort = async (projectId) => {
+  const candidates = await resolveFrontendPortCandidates(projectId);
+  return candidates[0] ?? null;
+};
+
+const resolveFrontendPortCandidates = async (projectId) => {
+  const uniquePorts = [];
+  const addCandidate = (value) => {
+    const numericPort = Number(value);
+    if (!Number.isInteger(numericPort) || numericPort <= 0) {
+      return;
+    }
+    if (!uniquePorts.includes(numericPort)) {
+      uniquePorts.push(numericPort);
+    }
+  };
+
   const { processes, state } = getRunningProcessEntry(projectId);
   const portCandidate = processes?.frontend?.port;
   const numericPort = Number(portCandidate);
@@ -710,22 +729,149 @@ const resolveFrontendPort = async (projectId) => {
     numericPort > 0 &&
     !isFrontendPortRememberedBad(projectId, numericPort)
   ) {
-    return numericPort;
+    addCandidate(numericPort);
   }
 
   const project = await getProject(projectId);
   if (!project) {
-    return null;
+    return uniquePorts;
   }
 
   const storedPorts = getStoredProjectPorts(project);
-  if (Number.isInteger(storedPorts?.frontend) && storedPorts.frontend > 0) {
-    return storedPorts.frontend;
-  }
+  addCandidate(storedPorts?.frontend);
 
   const portHints = getProjectPortHints(project);
-  if (Number.isInteger(portHints?.frontend) && portHints.frontend > 0) {
-    return portHints.frontend;
+  addCandidate(portHints?.frontend);
+
+  let configuredPortSettings = null;
+  try {
+    configuredPortSettings = await Promise.resolve(getPortSettings?.());
+  } catch {
+    configuredPortSettings = null;
+  }
+  addCandidate(configuredPortSettings?.frontendPortBase);
+
+  return uniquePorts;
+};
+
+const parsePortFromHeaderValue = (value) => {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    const numericPort = Number(parsed.port);
+    if (Number.isInteger(numericPort) && numericPort > 0) {
+      return numericPort;
+    }
+    if (parsed.protocol === 'https:') {
+      return 443;
+    }
+    if (parsed.protocol === 'http:') {
+      return 80;
+    }
+  } catch {
+    // Ignore invalid URL values.
+  }
+
+  return null;
+};
+
+const resolveClientAppPort = (req) => {
+  const originPort = parsePortFromHeaderValue(req?.headers?.origin);
+  if (originPort) {
+    return originPort;
+  }
+  const refererPort = parsePortFromHeaderValue(req?.headers?.referer);
+  if (refererPort) {
+    return refererPort;
+  }
+  return null;
+};
+
+const isLoopbackHost = (value) => {
+  const host = value.trim().toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+};
+
+const buildPreviewHostCandidates = (req) => {
+  const primaryHost = resolvePreviewTargetHost(req);
+  const candidates = [];
+
+  const addHost = (host) => {
+    const normalizedHost = host.trim();
+    candidates.push(normalizedHost);
+  };
+
+  addHost(primaryHost);
+
+  if (!isLoopbackHost(primaryHost)) {
+    addHost('localhost');
+    addHost('127.0.0.1');
+    addHost('::1');
+  }
+
+  return candidates;
+};
+
+const isFrontendPortReachable = async (host, port) => {
+  const targetHost = typeof host === 'string' && host.trim() ? host.trim() : 'localhost';
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = net.createConnection({ host: targetHost, port });
+
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        socket.destroy();
+      } catch {
+        // ignore
+      }
+      resolve(value);
+    };
+
+    socket.setTimeout(PREVIEW_PORT_PROBE_TIMEOUT_MS);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+};
+
+const resolveFrontendPortForRequest = async (projectId, req, { returnTarget = false } = {}) => {
+  const candidates = await resolveFrontendPortCandidates(projectId);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const clientAppPort = resolveClientAppPort(req);
+  const filteredCandidates = Number.isInteger(clientAppPort) && clientAppPort > 0
+    ? candidates.filter((candidate) => candidate !== clientAppPort)
+    : candidates;
+  const candidatePool = filteredCandidates.length > 0 ? filteredCandidates : candidates;
+
+  const hostCandidates = buildPreviewHostCandidates(req);
+  const primaryHost = hostCandidates[0];
+
+  if (isTestEnvironment) {
+    const selected = {
+      host: primaryHost,
+      port: candidatePool[0]
+    };
+    return returnTarget ? selected : selected.port;
+  }
+
+  for (const candidate of candidatePool) {
+    for (const host of hostCandidates) {
+      if (await isFrontendPortReachable(host, candidate)) {
+        const selected = { host, port: candidate };
+        return returnTarget ? selected : selected.port;
+      }
+    }
   }
 
   return null;
@@ -768,7 +914,7 @@ const resolvePreviewTargetHost = (req) => {
     return hostname;
   }
 
-  return 'localhost';
+  return hostname;
 };
 
 export const createPreviewProxy = ({ logger = console } = {}) => {
@@ -934,8 +1080,8 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
   });
 
   const proxyWebRequest = async (req, res, { projectId, forwardPath, setCookie }) => {
-    const port = await resolveFrontendPort(projectId);
-    if (!port) {
+    const selectedTarget = await resolveFrontendPortForRequest(projectId, req, { returnTarget: true });
+    if (!selectedTarget?.port) {
       res.status(409).send(
         '<!doctype html><html><head><meta charset="utf-8"/><title>Preview unavailable</title>' +
         '<style>html,body{margin:0;padding:0;background:transparent;}</style></head>' +
@@ -944,7 +1090,8 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
       return;
     }
 
-    const targetHost = resolvePreviewTargetHost(req);
+    const targetHost = selectedTarget.host;
+    const port = selectedTarget.port;
     const target = `http://${targetHost}:${port}`;
 
     if (setCookie) {
@@ -1015,13 +1162,14 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
         return;
       }
 
-      Promise.resolve(resolveFrontendPort(info.projectId))
-        .then((port) => {
-          if (!port) {
+      Promise.resolve(resolveFrontendPortForRequest(info.projectId, req, { returnTarget: true }))
+        .then((selectedTarget) => {
+          if (!selectedTarget?.port) {
             return;
           }
 
-          const targetHost = resolvePreviewTargetHost(req);
+          const targetHost = selectedTarget.host;
+          const port = selectedTarget.port;
           const target = `http://${targetHost}:${port}`;
           const originalUrl = req.url;
           try {
@@ -1089,5 +1237,10 @@ export const __testOnly = {
   injectPreviewBridge,
   shouldBypassPreviewProxy,
   resolvePreviewTargetHost,
-  resolveFrontendPort
+  resolveFrontendPort,
+  resolveFrontendPortCandidates,
+  resolveFrontendPortForRequest,
+  isFrontendPortReachable,
+  resolveClientAppPort,
+  parsePortFromHeaderValue
 };

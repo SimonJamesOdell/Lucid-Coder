@@ -2,7 +2,12 @@ import React from 'react';
 import { describe, beforeEach, afterEach, test, expect, vi } from 'vitest';
 import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import PackageTab, { resolveActionProjectId, __testWorkspaces } from '../components/PackageTab';
+import PackageTab, {
+  resolveActionProjectId,
+  resolveWorkspaceManifestPaths,
+  __testWorkspaces,
+  __packageTabTestHooks
+} from '../components/PackageTab';
 import { useAppState } from '../context/AppStateContext';
 
 vi.mock('../context/AppStateContext', () => ({
@@ -14,6 +19,29 @@ const buildFetchResponse = (content) => ({
   json: async () => ({ success: true, content: JSON.stringify(content) })
 });
 
+const buildFilesTreeResponse = (files) => ({
+  ok: true,
+  json: async () => ({ success: true, files })
+});
+
+const buildPackageManifestTree = (manifestPaths = ['frontend/package.json', 'backend/package.json']) => {
+  return manifestPaths.map((manifestPath) => {
+    const normalized = String(manifestPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!normalized || !normalized.endsWith('package.json')) {
+      return null;
+    }
+
+    const segments = normalized.split('/');
+    const name = segments[segments.length - 1];
+    return {
+      name,
+      type: 'file',
+      path: normalized,
+      language: 'json'
+    };
+  }).filter(Boolean);
+};
+
 const createAppState = (overrides = {}) => ({
   startAutomationJob: vi.fn().mockResolvedValue({}),
   cancelAutomationJob: vi.fn().mockResolvedValue({}),
@@ -24,11 +52,17 @@ const createAppState = (overrides = {}) => ({
 const setupFetchMock = ({
   frontend = { name: 'frontend-app', dependencies: {}, devDependencies: {} },
   backend = { name: 'backend-app', dependencies: {}, devDependencies: {} },
+  root = { name: 'root-app', dependencies: {}, devDependencies: {} },
+  manifestPaths = ['frontend/package.json', 'backend/package.json'],
   frontendResponse,
-  backendResponse
+  backendResponse,
+  rootResponse
 } = {}) => {
   fetch.mockReset();
   fetch.mockImplementation((url) => {
+    if (/\/api\/projects\/\d+\/files$/.test(String(url))) {
+      return Promise.resolve(buildFilesTreeResponse(buildPackageManifestTree(manifestPaths)));
+    }
     if (url.includes('frontend/package.json')) {
       if (typeof frontendResponse === 'function') {
         return frontendResponse();
@@ -40,6 +74,12 @@ const setupFetchMock = ({
         return backendResponse();
       }
       return Promise.resolve(buildFetchResponse(backend));
+    }
+    if (url.includes('/files/package.json')) {
+      if (typeof rootResponse === 'function') {
+        return rootResponse();
+      }
+      return Promise.resolve(buildFetchResponse(root));
     }
     return Promise.resolve({
       ok: false,
@@ -97,6 +137,50 @@ describe('PackageTab', () => {
     expect(screen.getByText('express')).toBeInTheDocument();
   });
 
+  test('falls back to root package.json when workspace manifests are missing', async () => {
+    useAppState.mockReturnValue(createAppState());
+    fetch.mockReset();
+    fetch.mockImplementation((url) => {
+      if (/\/api\/projects\/\d+\/files$/.test(String(url))) {
+        return Promise.resolve(buildFilesTreeResponse(buildPackageManifestTree(['package.json'])));
+      }
+      if (String(url).includes('/files/package.json')) {
+        return Promise.resolve(buildFetchResponse({
+          name: 'root-layout-app',
+          dependencies: { react: '^18.2.0' },
+          devDependencies: {}
+        }));
+      }
+      return Promise.resolve({
+        ok: false,
+        json: async () => ({ success: false, error: 'Not found' })
+      });
+    });
+
+    render(<PackageTab project={{ id: 42, name: 'Demo' }} />);
+
+    await waitFor(() => expect(screen.getByTestId('package-list-frontend-dependencies')).toBeInTheDocument());
+    expect(screen.getByText('react')).toBeInTheDocument();
+  });
+
+  test('hides workspace selectors when frontend and backend resolve to one manifest', async () => {
+    useAppState.mockReturnValue(createAppState());
+    setupFetchMock({
+      manifestPaths: ['package.json'],
+      root: {
+        name: 'root-layout-app',
+        dependencies: { react: '^18.2.0' },
+        devDependencies: { vitest: '^1.0.0' }
+      }
+    });
+
+    render(<PackageTab project={{ id: 421, name: 'Unified Layout' }} />);
+
+    await waitFor(() => expect(screen.getByTestId('package-list-frontend-dependencies')).toBeInTheDocument());
+    expect(screen.queryByTestId('package-workspace-tab-frontend')).toBeNull();
+    expect(screen.queryByTestId('package-workspace-tab-backend')).toBeNull();
+  });
+
   test('handles missing workspaces by falling back safely (branch coverage)', () => {
     useAppState.mockReturnValue(createAppState());
 
@@ -114,6 +198,199 @@ describe('PackageTab', () => {
       __testWorkspaces.length = 0;
       __testWorkspaces.push(...original);
     }
+  });
+
+  test('manifest helper hooks normalize and score candidate paths defensively', () => {
+    expect(__packageTabTestHooks.normalizeManifestPath('\\frontend\\package.json')).toBe('frontend/package.json');
+    expect(__packageTabTestHooks.isUnifiedManifestLayout({ frontend: 'package.json', backend: 'package.json' })).toBe(true);
+    expect(__packageTabTestHooks.isUnifiedManifestLayout({ frontend: 'package.json', backend: '' })).toBe(false);
+
+    const score = __packageTabTestHooks.scoreManifestPathForWorkspace('not-a-manifest.txt', 'frontend');
+    expect(score).toBe(Number.NEGATIVE_INFINITY);
+
+    const unknownWorkspaceScore = __packageTabTestHooks.scoreManifestPathForWorkspace('custom/package.json', 'unknown-workspace');
+    expect(Number.isFinite(unknownWorkspaceScore)).toBe(true);
+
+    const candidates = __packageTabTestHooks.getManifestPathCandidates('frontend', { frontend: 'frontend/package.json' }, '/frontend/package.json');
+    expect(candidates).toEqual(['frontend/package.json', 'package.json']);
+
+    const fromManifestPaths = __packageTabTestHooks.getManifestPathCandidates('frontend', { frontend: 'frontend/package.json' }, undefined);
+    expect(fromManifestPaths).toEqual(['frontend/package.json', 'package.json']);
+
+    const fallbackCandidates = __packageTabTestHooks.getManifestPathCandidates('backend', null, null);
+    expect(fallbackCandidates).toEqual(['backend/package.json', 'package.json']);
+  });
+
+  test('resolveWorkspaceManifestPaths handles non-array and nested tree inputs', () => {
+    expect(resolveWorkspaceManifestPaths(null)).toEqual({
+      frontend: 'frontend/package.json',
+      backend: 'backend/package.json'
+    });
+
+    const resolved = resolveWorkspaceManifestPaths([
+      null,
+      {
+        type: 'folder',
+        path: 'frontend',
+        children: [
+          { type: 'file', path: '/frontend/package.json' },
+          { type: 'file', path: 'notes.txt' }
+        ]
+      }
+    ]);
+
+    expect(resolved.frontend).toBe('frontend/package.json');
+    expect(resolved.backend).toBe('frontend/package.json');
+  });
+
+  test('falls back to root manifest when workspace manifest is missing before final candidate', async () => {
+    useAppState.mockReturnValue(createAppState());
+    fetch.mockReset();
+    fetch.mockImplementation((url) => {
+      const value = String(url);
+      if (/\/api\/projects\/\d+\/files$/.test(value)) {
+        return Promise.resolve(buildFilesTreeResponse(buildPackageManifestTree(['frontend/package.json'])));
+      }
+      if (value.includes('frontend/package.json')) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          json: async () => ({ success: false, error: 'Not found' })
+        });
+      }
+      if (value.includes('/files/package.json')) {
+        return Promise.resolve(buildFetchResponse({
+          name: 'root-layout-app',
+          dependencies: { react: '^18.2.0' },
+          devDependencies: {}
+        }));
+      }
+      return Promise.resolve({ ok: false, json: async () => ({ success: false }) });
+    });
+
+    render(<PackageTab project={{ id: 42, name: 'Demo' }} />);
+    await waitFor(() => expect(screen.getByTestId('package-list-frontend-dependencies')).toBeInTheDocument());
+    expect(screen.getByText('react')).toBeInTheDocument();
+  });
+
+  test('shows load error when all manifest candidates fail and parsed result stays empty', async () => {
+    useAppState.mockReturnValue(createAppState());
+    fetch.mockReset();
+    fetch.mockImplementation((url) => {
+      const value = String(url);
+      if (/\/api\/projects\/\d+\/files$/.test(value)) {
+        return Promise.resolve(buildFilesTreeResponse(buildPackageManifestTree(['frontend/package.json'])));
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        json: async () => ({ success: false, error: 'Not found' })
+      });
+    });
+
+    render(<PackageTab project={{ id: 42, name: 'Demo' }} />);
+
+    const panel = await screen.findByTestId('package-workspace-panel-frontend');
+    await waitFor(() => {
+      expect(within(panel).getByText('Not found')).toBeInTheDocument();
+    });
+  });
+
+  test('falls back to defaults when manifest discovery payload is malformed', async () => {
+    useAppState.mockReturnValue(createAppState());
+    fetch.mockReset();
+    fetch.mockImplementation((url) => {
+      const value = String(url);
+      if (/\/api\/projects\/\d+\/files$/.test(value)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, files: null })
+        });
+      }
+      if (value.includes('frontend/package.json')) {
+        return Promise.resolve(buildFetchResponse(frontendManifest));
+      }
+      if (value.includes('backend/package.json')) {
+        return Promise.resolve(buildFetchResponse(backendManifest));
+      }
+      return Promise.resolve({ ok: false, json: async () => ({ success: false }) });
+    });
+
+    render(<PackageTab project={{ id: 42, name: 'Demo' }} />);
+    await waitFor(() => expect(screen.getByTestId('package-list-frontend-dependencies')).toBeInTheDocument());
+    expect(screen.getByText('react')).toBeInTheDocument();
+  });
+
+  test('skips discovery and render loading when project id is missing', async () => {
+    useAppState.mockReturnValue(createAppState());
+
+    render(<PackageTab project={{ id: null, name: 'No Project' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('package-workspace-panel-frontend')).toBeInTheDocument();
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test('continues to root candidate when first manifest fetch throws not found before last candidate', async () => {
+    useAppState.mockReturnValue(createAppState());
+    fetch.mockReset();
+    fetch.mockImplementation((url) => {
+      const value = String(url);
+      if (/\/api\/projects\/\d+\/files$/.test(value)) {
+        return Promise.resolve(buildFilesTreeResponse(buildPackageManifestTree(['frontend/package.json'])));
+      }
+      if (value.includes('frontend/package.json')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => {
+            throw new Error('Not found');
+          }
+        });
+      }
+      if (value.includes('/files/package.json')) {
+        return Promise.resolve(buildFetchResponse({
+          name: 'root-fallback-app',
+          dependencies: { react: '^18.2.0' },
+          devDependencies: {}
+        }));
+      }
+      return Promise.resolve({ ok: false, json: async () => ({ success: false }) });
+    });
+
+    render(<PackageTab project={{ id: 77, name: 'Fallback project' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('react')).toBeInTheDocument();
+    });
+  });
+
+  test('handles invalid manifest JSON objects by setting workspace error state', async () => {
+    useAppState.mockReturnValue(createAppState());
+    fetch.mockReset();
+    fetch.mockImplementation((url) => {
+      const value = String(url);
+      if (/\/api\/projects\/\d+\/files$/.test(value)) {
+        return Promise.resolve(buildFilesTreeResponse(buildPackageManifestTree(['frontend/package.json', 'backend/package.json'])));
+      }
+      if (value.includes('frontend/package.json')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, content: '[]' })
+        });
+      }
+      if (value.includes('backend/package.json')) {
+        return Promise.resolve(buildFetchResponse(backendManifest));
+      }
+      return Promise.resolve({ ok: false, json: async () => ({ success: false }) });
+    });
+
+    render(<PackageTab project={{ id: 88, name: 'Bad manifest' }} />);
+
+    const panel = await screen.findByTestId('package-workspace-panel-frontend');
+    await waitFor(() => {
+      expect(within(panel).getByText('Manifest is not a valid JSON object')).toBeInTheDocument();
+    });
   });
 
   test('starts add-package job with provided metadata', async () => {

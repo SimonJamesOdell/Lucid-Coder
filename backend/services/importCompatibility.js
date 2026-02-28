@@ -34,6 +34,19 @@ const readJsonFile = async (filePath) => {
   return JSON.parse(raw);
 };
 
+const readPackageScripts = async (packageJsonPath) => {
+  try {
+    const pkg = await readJsonFile(packageJsonPath);
+    const scripts = pkg?.scripts;
+    if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) {
+      return {};
+    }
+    return scripts;
+  } catch {
+    return {};
+  }
+};
+
 const writeJsonFile = async (filePath, data) => {
   const json = JSON.stringify(data, null, 2) + '\n';
   await fs.writeFile(filePath, json, 'utf-8');
@@ -78,6 +91,13 @@ const buildStructurePlan = async (projectPath) => {
 
   if (!(await fileExists(rootPackageJson))) {
     return { needsMove: false, reason: 'root package.json not found' };
+  }
+
+  const rootScripts = await readPackageScripts(rootPackageJson);
+  const backendScript = typeof rootScripts.backend === 'string' ? rootScripts.backend.trim() : '';
+  const backendStartScript = typeof rootScripts['backend:start'] === 'string' ? rootScripts['backend:start'].trim() : '';
+  if (backendScript || backendStartScript) {
+    return { needsMove: false, reason: 'root project uses backend scripts' };
   }
 
   return {

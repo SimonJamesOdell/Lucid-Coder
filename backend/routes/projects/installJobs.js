@@ -1,6 +1,7 @@
 import path from 'path';
 import { startJob } from '../../services/jobRunner.js';
 import { dirExists, fileExists } from './helpers.js';
+import { resolveProjectLayout } from '../../services/projectLayout.js';
 
 const warnJobFailure = (prefix, error) => {
   console.warn(prefix, error?.message || error);
@@ -150,7 +151,8 @@ export const enqueueInstallJobs = async (
   {
     startJobFn = startJob,
     dirExistsFn = dirExists,
-    fileExistsFn = fileExists
+    fileExistsFn = fileExists,
+    resolveLayoutFn = resolveProjectLayout
   } = {}
 ) => {
   if (!projectId || !projectPath) {
@@ -158,12 +160,12 @@ export const enqueueInstallJobs = async (
   }
 
   const jobs = [];
-  const frontendPath = path.join(projectPath, 'frontend');
-  const backendDir = path.join(projectPath, 'backend');
-  const backendPath = await dirExistsFn(backendDir) ? backendDir : projectPath;
+  const layout = await resolveLayoutFn(projectPath);
+  const frontendPath = layout.frontendWorkspacePath;
+  const backendPath = layout.backendWorkspacePath || projectPath;
 
-  if (await dirExistsFn(frontendPath)) {
-    const frontendManifest = path.join(frontendPath, 'package.json');
+  if (frontendPath && await dirExistsFn(frontendPath)) {
+    const frontendManifest = layout.frontendWorkspaceManifestPath || path.join(frontendPath, 'package.json');
     if (await fileExistsFn(frontendManifest)) {
       const frontendJob = maybeStartJob({
         job: buildFrontendInstallJob(projectId, frontendPath),
@@ -179,6 +181,16 @@ export const enqueueInstallJobs = async (
 
   const backendPlan = await resolveBackendInstallPlan({ backendPath, projectPath, fileExistsFn });
   if (backendPlan) {
+    const frontendInstallAlreadyQueued = jobs.some((job) =>
+      job?.type === 'frontend:install'
+      && job?.command === backendPlan.command
+      && JSON.stringify(job?.args || []) === JSON.stringify(backendPlan.args || [])
+      && job?.cwd === backendPlan.cwd
+    );
+    if (frontendInstallAlreadyQueued) {
+      return jobs;
+    }
+
     const backendJob = maybeStartJob({
       job: buildBackendInstallJob({
         projectId,

@@ -186,6 +186,73 @@ describe('TestTab coverage helpers', () => {
     expect(fingerprint).toContain('error:typeerror at <path>:#');
   });
 
+  test('failure signature hooks collapse router-context crashes into a stable signature', () => {
+    const signatures = helpersModule.__testFailureAnalysisHooks.deriveCanonicalFailureSignatures([
+      "TypeError: Cannot destructure property 'basename' of 'React__namespace.useContext(...)' as it is null.",
+      'at LinkWithRef (src/NavBar.jsx:20:5)'
+    ].join('\n'));
+
+    expect(signatures).toContain('router-context-missing-link-provider');
+  });
+
+  test('failure signature hooks ignore warning-only noise lines', () => {
+    const signatures = helpersModule.__testFailureAnalysisHooks.deriveCanonicalFailureSignatures([
+      '⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in React.startTransition in v7.',
+      'Warning: An update to MemoryRouter inside a test was not wrapped in act(...)'
+    ].join('\n'));
+
+    expect(signatures).toEqual([]);
+  });
+
+  test('failure signature normalization helpers handle non-string and prefixed input', () => {
+    expect(helpersModule.__testFailureAnalysisHooks.normalizeFailureSignatureTextInput(null)).toBe('');
+    expect(helpersModule.__testFailureAnalysisHooks.normalizeFailureSignatureText('Error: FAIL src/App.test.jsx:12:3')).toContain('<path>:#');
+    expect(helpersModule.__testFailureAnalysisHooks.normalizeFailureSignatureText(null)).toBe('');
+    expect(helpersModule.__testFailureAnalysisHooks.deriveCanonicalFailureSignatures(null)).toEqual([]);
+    expect(helpersModule.__testFailureAnalysisHooks.deriveCanonicalFailureSignatures('\n\nTypeError: boom')).toContain('typeerror: boom');
+  });
+
+  test('buildTestFixPlan includes root-cause hint for missing router provider failures', () => {
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            logs: [
+              { message: "TypeError: Cannot destructure property 'basename' of 'React__namespace.useContext(...)' as it is null." }
+            ],
+            summary: {}
+          }
+        }
+      ]
+    });
+
+    expect(plan.childPrompts[0]).toContain('Likely root cause: components using Link/NavLink are rendered without a router provider in tests.');
+  });
+
+  test('buildTestFixPlan includes page-root test-id root-cause hint when signatures match', () => {
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            logs: [
+              { message: 'Error: Unable to find an element by: [data-testid="page-root"]' },
+              { message: 'TestingLibraryElementError: Unable to find an element' }
+            ],
+            summary: {}
+          }
+        }
+      ]
+    });
+
+    expect(plan.childPrompts[0]).toContain('Likely root cause: tests require data-testid="page-root"');
+  });
+
   test('formatUncoveredLineSummary adds a preview suffix when there are many lines', () => {
     const summary = formatUncoveredLineSummary([
       { workspace: 'frontend', file: 'src/App.jsx', lines: [1, 2, 3, 4, 5, 6, 7, 8, 9] }
@@ -675,6 +742,28 @@ describe('TestTab coverage helpers', () => {
 
     expect(context.logsTruncated).toBe(false);
     expect(context.recentLogs).toEqual([]);
+  });
+
+  test('buildJobFailureContext skips warning noise lines while extracting failure reports', () => {
+    const context = hooks.buildJobFailureContext({
+      label: 'Frontend tests',
+      kind: 'frontend',
+      job: {
+        status: 'failed',
+        logs: [
+          {
+            message: [
+              'Warning: An update to MemoryRouter inside a test was not wrapped in act()',
+              'TypeError: broken assertion',
+              'details line'
+            ].join('\n')
+          }
+        ]
+      }
+    });
+
+    expect(context.failureReport).toContain('TypeError: broken assertion');
+    expect(context.failureReport).not.toContain('not wrapped in act');
   });
 
   test('extractUncoveredEntriesFromCoverageLogs clears the table when a row is missing delimiters', () => {

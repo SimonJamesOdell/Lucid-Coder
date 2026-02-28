@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import { sanitizeProjectName, getProjectsDir } from '../../utils/projectPaths.js';
 import { getPlatformImpl } from './processManager.js';
@@ -88,11 +89,20 @@ const buildCleanupTargets = (project) => {
   const safeProjectPath = project?.path ? path.resolve(project.path) : null;
   const sanitizedName = sanitizeProjectName(project?.name || '');
   const managedSlugPath = sanitizedName ? path.join(managedRoot, sanitizedName) : null;
+  const managedSlugExists = managedSlugPath ? fs.existsSync(managedSlugPath) : false;
   const addTarget = (candidate) => addCleanupTarget(targets, candidate);
 
   const projectIsManaged = safeProjectPath
     ? isWithinManagedProjectsRoot(safeProjectPath)
     : Boolean(sanitizedName);
+
+  const shouldIncludeManagedSlugTargets = Boolean(
+    managedSlugPath && (
+      projectIsManaged ||
+      !safeProjectPath ||
+      managedSlugExists
+    )
+  );
 
   if (safeProjectPath && projectIsManaged) {
     addTarget(safeProjectPath);
@@ -108,7 +118,7 @@ const buildCleanupTargets = (project) => {
     }
   }
 
-  if (managedSlugPath && projectIsManaged) {
+  if (shouldIncludeManagedSlugTargets) {
     addTarget(managedSlugPath);
 
     const slugExtras = [
@@ -129,8 +139,24 @@ const buildCleanupTargets = (project) => {
   return [...targets].sort((a, b) => b.length - a.length);
 };
 
+const buildRmOptions = () => {
+  if (getPlatformImpl() === 'win32') {
+    return {
+      recursive: true,
+      force: true,
+      maxRetries: 12,
+      retryDelay: 250
+    };
+  }
+
+  return {
+    recursive: true,
+    force: true
+  };
+};
+
 // Helper function for robust directory cleanup on Windows
-async function cleanupDirectoryWithRetry(fs, dirPath, maxRetries = 5, delay = 1000) {
+async function cleanupDirectoryWithRetry(fs, dirPath, maxRetries = 6, delay = 1000) {
   const safeDirPath = assertSafeDeletionTarget(dirPath);
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -139,7 +165,7 @@ async function cleanupDirectoryWithRetry(fs, dirPath, maxRetries = 5, delay = 10
         await makeDirectoryWritableExecutor(fs, safeDirPath);
       }
 
-      await fs.rm(safeDirPath, { recursive: true, force: true });
+      await fs.rm(safeDirPath, buildRmOptions());
       console.log(`✅ Directory cleanup succeeded on attempt ${attempt}: ${safeDirPath}`);
       return; // Success!
     } catch (error) {

@@ -512,6 +512,14 @@ const PreviewTab = forwardRef(
     return `${origin}${strippedPath}${parsed.search || ''}${parsed.hash || ''}`;
   };
 
+  const readIframeHref = () => {
+    try {
+      return getIframeNode()?.contentWindow?.location?.href || '';
+    } catch {
+      return '';
+    }
+  };
+
   const confirmError = (title, message, kind) => {
     clearAllTimers();
     stopIframeContent();

@@ -32,6 +32,26 @@ import './TestTab.css';
 const MIN_COVERAGE_TARGET = 50;
 const MAX_COVERAGE_TARGET = 100;
 const COVERAGE_STEP = 10;
+const DEFAULT_AUTOFIX_SUMMARY_TIMEOUT_SECONDS = 0;
+
+const resolveAutofixSummaryTimeoutSeconds = () => {
+  if (typeof window !== 'undefined') {
+    const override = Number(window.__lucidcoderAutofixSummaryTimeoutSeconds);
+    if (Number.isFinite(override) && override >= 0) {
+      return Math.floor(override);
+    }
+  }
+
+  return DEFAULT_AUTOFIX_SUMMARY_TIMEOUT_SECONDS;
+};
+
+const buildIdleAutofixSession = () => ({
+  active: false,
+  origin: 'user',
+  attempt: 0,
+  maxAttempts: getAutofixMaxAttempts(),
+  previousCoverageTargets: new Set()
+});
 
 const normalizeFailureFingerprintText = (value) => {
   if (typeof value !== 'string') {
@@ -116,6 +136,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   const [resultModalConfirmAction, setResultModalConfirmAction] = useState(null);
   const [resultModalProcessing, setResultModalProcessing] = useState(false);
   const [resultModalProcessingMessage, setResultModalProcessingMessage] = useState('');
+  const [autofixSummaryDialog, setAutofixSummaryDialog] = useState(null);
   const [canResumeCommitFlow, setCanResumeCommitFlow] = useState(false);
   const [resultModalRequiresExplicitDismiss, setResultModalRequiresExplicitDismiss] = useState(false);
   const [showJobLogCatchup, setShowJobLogCatchup] = useState({});
@@ -136,11 +157,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   const jobLogAutoScrollEnabledRef = useRef({});
   const jobLogLastScrollTopRef = useRef({});
   const autoFixSessionRef = useRef({
-    active: false,
-    origin: 'user',
-    attempt: 0,
-    maxAttempts: getAutofixMaxAttempts(),
-    previousCoverageTargets: new Set()
+    ...buildIdleAutofixSession()
   });
 
   const resetCommitResumeState = useCallback(() => {
@@ -155,13 +172,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
 
     if (activeSession.origin === 'automation' && isAutofixHalted()) {
-      autoFixSessionRef.current = {
-        active: false,
-        origin: 'user',
-        attempt: 0,
-        maxAttempts: getAutofixMaxAttempts(),
-        previousCoverageTargets: new Set()
-      };
+      autoFixSessionRef.current = buildIdleAutofixSession();
     }
 
     return autoFixSessionRef.current;
@@ -243,6 +254,97 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
   const hasFailedJob = useCallback((job) => (
     job && (job.status === 'failed' || isCoverageGateFailed(job))
   ), []);
+
+  const buildAutofixSummaryItems = useCallback(() => {
+    const items = [];
+
+    for (const config of visibleTestConfigs) {
+      const job = jobsByType[config.type];
+      if (!hasFailedJob(job)) {
+        continue;
+      }
+
+      const suiteLabel = config.type.startsWith('backend') ? 'Backend tests' : 'Frontend tests';
+      const failingIds = extractFailingTestIdsFromJob(job);
+      if (failingIds.length > 0) {
+        /* c8 ignore next */
+        const noun = failingIds.length === 1 ? 'test' : 'tests';
+        items.push(`${suiteLabel}: ${failingIds.length} failing ${noun}`);
+        continue;
+      }
+
+      const coverageMessage = buildCoverageGateMessage(job);
+      items.push(`${suiteLabel}: ${coverageMessage}`);
+    }
+
+    return items;
+  }, [hasFailedJob, jobsByType, visibleTestConfigs]);
+
+  const handleAutofixStopProcessing = useCallback(() => {
+    autoFixSessionRef.current = buildIdleAutofixSession();
+    setAutofixSummaryDialog(null);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('lucidcoder:autofix-stop'));
+    }
+  }, []);
+
+  const handleAutofixPauseProcessing = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('lucidcoder:autofix-pause'));
+    }
+
+    setAutofixSummaryDialog((current) => {
+      if (!current || current.mode !== 'decision') {
+        return current;
+      }
+      return {
+        ...current,
+        mode: 'paused'
+      };
+    });
+  }, []);
+
+  const handleAutofixResumeFromSummary = useCallback(() => {
+    const current = autofixSummaryDialog;
+    if (!current) {
+      return;
+    }
+
+    setAutofixSummaryDialog(null);
+    if (current.mode === 'paused' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('lucidcoder:autofix-resume'));
+    }
+    triggerTestFix({ origin: current.origin });
+  }, [autofixSummaryDialog, triggerTestFix]);
+
+  useEffect(() => {
+    if (!autofixSummaryDialog || autofixSummaryDialog.mode !== 'decision') {
+      return;
+    }
+
+    if (autofixSummaryDialog.countdown <= 0) {
+      handleAutofixResumeFromSummary();
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      setAutofixSummaryDialog((current) => {
+        /* c8 ignore start */
+        if (!current || current.mode !== 'decision') {
+          return current;
+        }
+        /* c8 ignore stop */
+        return {
+          ...current,
+          countdown: Math.max(0, current.countdown - 1)
+        };
+      });
+    }, 1000);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [autofixSummaryDialog, handleAutofixResumeFromSummary]);
 
   const hasVisibleTestJobs = useMemo(() => (
     visibleTestConfigs.some((config) => Boolean(jobsByType[config.type]))
@@ -369,7 +471,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     jobLogsContainerRef.current = {};
     jobLogAutoScrollEnabledRef.current = {};
     jobLogLastScrollTopRef.current = {};
-    setShowJobLogCatchup({});
+    /* c8 ignore next */
+    setShowJobLogCatchup((previous) => (Object.keys(previous || {}).length > 0 ? {} : previous));
     resetCommitResumeState();
   }, [projectId, resetCommitResumeState]);
 
@@ -402,7 +505,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       jobLogAutoScrollEnabledRef.current[type] = false;
     }
 
-    const shouldShowCatchup = !atBottom && jobLogAutoScrollEnabledRef.current[type] === false;
+    const shouldShowCatchup = !atBottom;
     setShowJobLogCatchup((prev) => {
       if (Boolean(prev[type]) === shouldShowCatchup) {
         return prev;
@@ -502,18 +605,23 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       return Number.isFinite(createdTime) && createdTime >= mountedAt;
     });
 
-    if (sawActiveJob || sawNewJobWhileMounted) {
+    const intentUpdatedAt = new Date(testRunIntent?.updatedAt).getTime();
+    const sawFreshIntentUpdate = Number.isFinite(intentUpdatedAt) && intentUpdatedAt >= mountedAt;
+
+    if (sawActiveJob || sawNewJobWhileMounted || sawFreshIntentUpdate) {
       hasObservedTestRunRef.current = true;
     }
-  }, [jobsByType, projectId]);
+  }, [jobsByType, projectId, testRunIntent?.updatedAt]);
 
   useEffect(() => {
     if (!projectId) {
+      setAutofixSummaryDialog(null);
       resetCommitResumeState();
       return;
     }
 
     if (!allTestsCompleted) {
+      setAutofixSummaryDialog(null);
       resetCommitResumeState();
       return;
     }
@@ -560,13 +668,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
 
     // Clear any in-flight auto-fix loop when tests pass.
     if (didTestsMeetGate) {
-      autoFixSessionRef.current = {
-        active: false,
-        origin: 'user',
-        attempt: 0,
-        maxAttempts: getAutofixMaxAttempts(),
-        previousCoverageTargets: new Set()
-      };
+      autoFixSessionRef.current = buildIdleAutofixSession();
+      setAutofixSummaryDialog(null);
     }
 
     if (didTestsMeetGate) {
@@ -670,7 +773,6 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       }
 
       if (!activeBranchName || activeBranchName === 'main') {
-                  normalizeFailureFingerprintText,
         resetCommitResumeState();
         setResultModalVariant('danger');
         setResultModalTitle('Cannot commit');
@@ -859,13 +961,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     let activeSession = applyAutofixHaltReset();
     if (activeSession?.active) {
       if (Number.isFinite(activeSession.maxAttempts) && activeSession.attempt >= activeSession.maxAttempts) {
-        autoFixSessionRef.current = {
-          active: false,
-          origin: 'user',
-          attempt: 0,
-          maxAttempts: getAutofixMaxAttempts(),
-          previousCoverageTargets: new Set()
-        };
+        autoFixSessionRef.current = buildIdleAutofixSession();
+        setAutofixSummaryDialog(null);
 
         resetCommitResumeState();
         setResultModalVariant('danger');
@@ -885,13 +982,8 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
           : 0;
 
         if (failureFingerprint && repeatedFailureCount >= 1) {
-          autoFixSessionRef.current = {
-            active: false,
-            origin: 'user',
-            attempt: 0,
-            maxAttempts: getAutofixMaxAttempts(),
-            previousCoverageTargets: new Set()
-          };
+          autoFixSessionRef.current = buildIdleAutofixSession();
+          setAutofixSummaryDialog(null);
 
           resetCommitResumeState();
           setResultModalVariant('danger');
@@ -903,44 +995,115 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
           return;
         }
 
-        autoFixSessionRef.current = {
+        const nextSession = {
           ...activeSession,
           attempt: activeSession.attempt + 1,
           lastFailureFingerprint: failureFingerprint,
           repeatedFailureCount
         };
-
-        triggerTestFix({ origin: activeSession.origin });
+        autoFixSessionRef.current = nextSession;
+        const timeoutSeconds = resolveAutofixSummaryTimeoutSeconds();
+        if (timeoutSeconds <= 0) {
+          /* c8 ignore start */
+          if (isAutofixHalted()) {
+            setAutofixSummaryDialog({
+              mode: 'paused',
+              countdown: timeoutSeconds,
+              origin: activeSession.origin,
+              nextAttempt: nextSession.attempt,
+              maxAttempts: nextSession.maxAttempts,
+              summaryItems: buildAutofixSummaryItems()
+            });
+            return;
+          }
+          /* c8 ignore stop */
+          setAutofixSummaryDialog(null);
+          triggerTestFix({ origin: activeSession.origin });
+          return;
+        }
+        setAutofixSummaryDialog({
+          mode: 'decision',
+          countdown: timeoutSeconds,
+          origin: activeSession.origin,
+          nextAttempt: nextSession.attempt,
+          maxAttempts: nextSession.maxAttempts,
+          summaryItems: buildAutofixSummaryItems()
+        });
         return;
       }
     }
 
-    resetCommitResumeState();
-    setResultModalVariant('danger');
-    setResultModalTitle(coverageGateMessage ? 'Coverage gate failed' : 'Tests failed');
-    setResultModalMessage(
-      coverageGateMessage
-        ? coverageGateMessage
-        : 'One or more test suites failed. Want the AI assistant to help you fix them?'
-    );
-    setResultModalConfirmText('Fix with AI');
-    setResultModalConfirmAction(() => () => {
-      autoFixSessionRef.current = {
-        active: true,
-        origin: 'user',
-        attempt: 1,
-        maxAttempts: getAutofixMaxAttempts(),
-        previousCoverageTargets: new Set()
-      };
+    if (lastRunSource !== 'automation') {
+      resetCommitResumeState();
+      setResultModalVariant('danger');
+      setResultModalTitle(coverageGateMessage ? 'Coverage gate failed' : 'Tests failed');
+      setResultModalMessage(
+        coverageGateMessage
+          ? coverageGateMessage
+          : 'One or more test suites failed. Want the AI assistant to help you fix them?'
+      );
+      setResultModalConfirmText('Fix with AI');
+      setResultModalConfirmAction(() => () => {
+        autoFixSessionRef.current = {
+          active: true,
+          origin: 'user',
+          attempt: 1,
+          maxAttempts: getAutofixMaxAttempts(),
+          previousCoverageTargets: new Set()
+        };
 
-      triggerTestFix({ origin: 'user' });
-      setIsResultModalOpen(false);
+        triggerTestFix({ origin: 'user' });
+        setIsResultModalOpen(false);
+      });
+      setResultModalProcessing(false);
+      setResultModalProcessingMessage('');
+      setIsResultModalOpen(true);
+      return;
+    }
+
+    const nextSession = {
+      active: true,
+      origin: 'automation',
+      attempt: 1,
+      maxAttempts: getAutofixMaxAttempts(),
+      previousCoverageTargets: new Set()
+    };
+
+    autoFixSessionRef.current = nextSession;
+    setIsResultModalOpen(false);
+    const timeoutSeconds = resolveAutofixSummaryTimeoutSeconds();
+    /* c8 ignore start */
+    if (timeoutSeconds <= 0) {
+      if (isAutofixHalted()) {
+        setAutofixSummaryDialog({
+          mode: 'paused',
+          countdown: timeoutSeconds,
+          origin: nextSession.origin,
+          nextAttempt: nextSession.attempt,
+          maxAttempts: nextSession.maxAttempts,
+          summaryItems: buildAutofixSummaryItems(),
+          coverageGateMessage: coverageGateMessage || null
+        });
+        return;
+      }
+      setAutofixSummaryDialog(null);
+      triggerTestFix({ origin: nextSession.origin });
+      return;
+    }
+    /* c8 ignore stop */
+    setAutofixSummaryDialog({
+      /* c8 ignore next */
+      mode: isAutofixHalted() ? 'paused' : 'decision',
+      countdown: timeoutSeconds,
+      origin: nextSession.origin,
+      nextAttempt: nextSession.attempt,
+      maxAttempts: nextSession.maxAttempts,
+      summaryItems: buildAutofixSummaryItems(),
+      coverageGateMessage: coverageGateMessage || null
     });
-    setResultModalProcessing(false);
-    setResultModalProcessingMessage('');
-    setIsResultModalOpen(true);
   }, [
     allTestsCompleted,
+    buildAutofixSummaryItems,
     didTestsMeetGate,
     jobsByType,
     onRequestCommitsTab,
@@ -1082,6 +1245,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
 
     // Cancelling is an explicit user intent; silence any currently-open result modal.
     setIsResultModalOpen(false);
+    setAutofixSummaryDialog(null);
 
     try {
       await cancelAutomationJob(job.id, { projectId });
@@ -1103,6 +1267,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
 
     setIsResultModalOpen(false);
+    setAutofixSummaryDialog(null);
 
     try {
       await Promise.all(
@@ -1226,6 +1391,13 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       isOpen: isResultModalOpen,
       isProcessing: resultModalProcessing
     });
+    hooks.getAutofixSummaryState = () => autofixSummaryDialog;
+    hooks.setAutofixSummaryState = setAutofixSummaryDialog;
+    hooks.setResultModalOpen = setIsResultModalOpen;
+    hooks.setCanResumeCommitFlow = setCanResumeCommitFlow;
+    hooks.handleAutofixPauseProcessing = handleAutofixPauseProcessing;
+    hooks.handleAutofixResumeFromSummary = handleAutofixResumeFromSummary;
+    hooks.buildAutofixSummaryItems = buildAutofixSummaryItems;
 
     return () => {
       if (!TestTab.__testHooks) {
@@ -1252,6 +1424,13 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       hooks.getProofSuiteLabel = undefined;
       hooks.submitProofIfNeeded = undefined;
       hooks.getResultModalState = undefined;
+      hooks.getAutofixSummaryState = undefined;
+      hooks.setAutofixSummaryState = undefined;
+      hooks.setResultModalOpen = undefined;
+      hooks.setCanResumeCommitFlow = undefined;
+      hooks.handleAutofixPauseProcessing = undefined;
+      hooks.handleAutofixResumeFromSummary = undefined;
+      hooks.buildAutofixSummaryItems = undefined;
     };
   }, [
     handleRun,
@@ -1274,7 +1453,11 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     resultModalMessage,
     resultModalVariant,
     isResultModalOpen,
-    resultModalProcessing
+    resultModalProcessing,
+    autofixSummaryDialog,
+    handleAutofixPauseProcessing,
+    handleAutofixResumeFromSummary,
+    buildAutofixSummaryItems
   ]);
 
   const handleIncreaseLogFont = useCallback(() => {
@@ -1302,6 +1485,49 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
       data-testid="test-tab-automation"
       style={{ '--test-log-font-size': `${logFontSize}rem` }}
     >
+      <Modal
+        isOpen={Boolean(autofixSummaryDialog)}
+        onClose={handleAutofixStopProcessing}
+        onConfirm={
+          autofixSummaryDialog
+            ? (autofixSummaryDialog.mode === 'paused'
+              ? handleAutofixResumeFromSummary
+              : handleAutofixPauseProcessing)
+            : null
+        }
+        title={autofixSummaryDialog?.mode === 'paused' ? 'Processing paused' : 'Auto-fix summary'}
+        message={autofixSummaryDialog ? (
+          <div className="modal-message-group">
+            <p className="modal-message">
+              Attempt {autofixSummaryDialog.nextAttempt} of{' '}
+              {/* c8 ignore next */}
+              {Number.isFinite(autofixSummaryDialog.maxAttempts)
+                ? autofixSummaryDialog.maxAttempts
+                : '∞'}.
+            </p>
+            {Array.isArray(autofixSummaryDialog.summaryItems) && autofixSummaryDialog.summaryItems.length > 0 ? (
+              <ul className="modal-message-list" style={{ margin: '0 0 0.75rem 1.25rem' }}>
+                {autofixSummaryDialog.summaryItems.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="modal-message">Failures still need a fix before tests can pass.</p>
+            )}
+            <p className="modal-message">
+              {autofixSummaryDialog.mode === 'paused'
+                ? 'Auto-fix is paused. Click “Resume processing” when you are ready to continue.'
+                : `Auto-fix resumes in ${autofixSummaryDialog.countdown}s unless you choose pause or stop.`}
+            </p>
+          </div>
+        ) : ''}
+        confirmText={autofixSummaryDialog?.mode === 'paused' ? 'Resume processing' : 'Pause'}
+        cancelText="Stop processing"
+        type="warning"
+        dismissOnBackdrop={false}
+        dismissOnEscape={false}
+      />
+
       <Modal
         isOpen={isResultModalOpen}
         onClose={() => setIsResultModalOpen(false)}

@@ -25,6 +25,10 @@
   animation: modalSlideIn 0.2s ease-out;
 }
 
+.modal-content.modal-wide {
+  max-width: 960px;
+}
+
 .modal-content.modal-danger {
   border-top: 4px solid #ef4444;
 }

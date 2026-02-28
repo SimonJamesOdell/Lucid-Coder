@@ -1029,7 +1029,7 @@ describe('PreviewPanel', () => {
     expect(isLoopbackHostname(undefined)).toBe(false);
   });
 
-  test('prefers proxy preview target on non-loopback hosts', async () => {
+  test('prefers direct preview target on non-loopback hosts', async () => {
     const locationSpy = vi.spyOn(window, 'location', 'get').mockReturnValue({ hostname: '192.168.0.60' });
     getOpenInNewTabUrlMock.mockReturnValue('http://localhost:5173/about');
     getDisplayedUrlMock.mockReturnValue('http://192.168.0.60:5100/preview/1');
@@ -1044,7 +1044,7 @@ describe('PreviewPanel', () => {
     const button = screen.getByTestId('open-preview-tab');
     await user.click(button);
 
-    expect(window.open).toHaveBeenCalledWith('http://192.168.0.60:5100/preview/1', '_blank', 'noopener,noreferrer');
+    expect(window.open).toHaveBeenCalledWith('http://localhost:5173/about', '_blank', 'noopener,noreferrer');
     locationSpy.mockRestore();
   });
 

@@ -1526,6 +1526,48 @@ describe('processGoal stage error handling', () => {
     expect(implCalls[1].retryContext.message).toMatch(/provide the exact modifications/i);
   });
 
+  test('retries the implementation stage with malformed-json guidance after parse errors', async () => {
+    const syntaxError = new SyntaxError("Expected property name or '}' in JSON at position 2");
+    automationModuleMock.parseEditsFromLLM
+      .mockImplementationOnce(() => {
+        throw syntaxError;
+      })
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'frontend/src/App.jsx',
+          replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+        }
+      ])
+      .mockReturnValue([
+        {
+          type: 'modify',
+          path: 'frontend/src/App.jsx',
+          replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+        }
+      ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [1], implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implCalls = getStagePromptPayloads('implementation');
+    expect(implCalls).toHaveLength(2);
+    expect(implCalls[1].retryContext).toMatchObject({
+      message: expect.stringMatching(/malformed json/i)
+    });
+  });
+
   test('retries the tests stage when scope violations omit path info', async () => {
     automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: true });
 

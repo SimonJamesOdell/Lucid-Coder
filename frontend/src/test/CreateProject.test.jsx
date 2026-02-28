@@ -197,9 +197,10 @@ const waitForCreateProjectHooks = async () => {
 };
 
 const sourceLabelMap = {
-  new: 'Create a new project',
+  new: 'Create a new classic project',
   local: 'Import a local folder',
-  git: 'Clone from Git'
+  git: 'Clone from Git',
+  template: 'Lucid Coder Default Template'
 };
 
 const ensureSourceStep = async (user) => {
@@ -980,7 +981,7 @@ describe('Validation', () => {
 
       await ensureSourceStep(user);
       await user.click(screen.getByText('Import a local folder'));
-      await user.click(screen.getByText('Create a new project'));
+      await user.click(screen.getByText('Create a new classic project'));
       await user.click(getNextButton());
 
       expect(await screen.findByLabelText('Git Workflow *')).toBeInTheDocument();
@@ -1436,7 +1437,7 @@ describe('Validation', () => {
       await user.type(screen.getByLabelText('Project Name *'), 'My Project');
       await user.click(getCreateProjectButton());
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
       expect(screen.getByText('node_modules/')).toBeInTheDocument();
 
       await user.click(screen.getByRole('button', { name: /fix issue/i }));
@@ -1482,7 +1483,7 @@ describe('Validation', () => {
       await user.type(screen.getByLabelText('Project Name *'), 'My Project');
       await user.click(getCreateProjectButton());
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
       expect(screen.queryByText(/detected:/i)).not.toBeInTheDocument();
     });
 
@@ -1511,14 +1512,14 @@ describe('Validation', () => {
       await user.type(screen.getByLabelText('Project Name *'), 'My Project');
       await user.click(getCreateProjectButton());
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await user.click(screen.getByRole('button', { name: /fix issue/i }));
 
       expect(await screen.findByText(/gitignore update failed/i)).toBeInTheDocument();
     });
 
-    test('shows an error when setup fails after skipping gitignore update', async () => {
+    test('cancels installation after skipping gitignore update', async () => {
       const { user } = renderComponent();
 
       mockAxios.post
@@ -1533,8 +1534,7 @@ describe('Validation', () => {
               samplePaths: ['node_modules/']
             }
           }
-        })
-        .mockResolvedValueOnce({ data: { success: false, error: 'setup failed' } });
+        });
 
       render(<CreateProject />);
       await ensureGitStep(user);
@@ -1544,11 +1544,15 @@ describe('Validation', () => {
       await user.type(screen.getByLabelText('Project Name *'), 'My Project');
       await user.click(getCreateProjectButton());
 
-      expect(await screen.findByText(/tracked files.*package-lock\.json/i)).toBeInTheDocument();
+      const trackedFileMentions = await screen.findAllByText(/tracked files.*package-lock\.json/i);
+      expect(trackedFileMentions.length).toBeGreaterThan(0);
 
       await user.click(screen.getByRole('button', { name: /cancel installation/i }));
 
-      expect(await screen.findByText(/setup failed/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(mockShowMain).toHaveBeenCalled();
+      });
+      expect(mockAxios.post).not.toHaveBeenCalledWith('/api/projects/proj-gitignore-skip/setup');
     });
 
     test('exposes gitignore test hooks and rejects missing setup ids', async () => {
@@ -1651,7 +1655,7 @@ describe('Validation', () => {
         });
       });
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await act(async () => {
         await hooks.handleApplyGitIgnore();
@@ -1683,7 +1687,7 @@ describe('Validation', () => {
         });
       });
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await act(async () => {
         await hooks.handleApplyGitIgnore();
@@ -1715,7 +1719,7 @@ describe('Validation', () => {
         });
       });
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await act(async () => {
         await hooks.handleApplyGitIgnore();
@@ -1747,7 +1751,7 @@ describe('Validation', () => {
         });
       });
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await act(async () => {
         await hooks.handleApplyGitIgnore();
@@ -1756,10 +1760,8 @@ describe('Validation', () => {
       expect(await screen.findByText(/failed to update \.gitignore/i)).toBeInTheDocument();
     });
 
-    test('handleSkipGitIgnore surfaces setup failure errors', async () => {
+    test('handleSkipGitIgnore closes modal and returns to main without setup', async () => {
       render(<CreateProject />);
-
-      mockAxios.post.mockResolvedValueOnce({ data: { success: false, error: 'setup failed again' } });
 
       const hooks = await waitForCreateProjectHooks();
 
@@ -1779,19 +1781,18 @@ describe('Validation', () => {
         });
       });
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await act(async () => {
         await hooks.handleSkipGitIgnore();
       });
 
-      expect(await screen.findByText(/setup failed again/i)).toBeInTheDocument();
+      expect(mockAxios.post).not.toHaveBeenCalledWith('/api/projects/proj-gitignore-skip/setup');
+      expect(mockShowMain).toHaveBeenCalled();
     });
 
-    test('handleSkipGitIgnore uses fallback message on unknown errors', async () => {
+    test('handleSkipGitIgnore does not surface setup errors because setup is not run', async () => {
       render(<CreateProject />);
-
-      mockAxios.post.mockRejectedValueOnce({});
 
       const hooks = await waitForCreateProjectHooks();
 
@@ -1811,19 +1812,18 @@ describe('Validation', () => {
         });
       });
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await act(async () => {
         await hooks.handleSkipGitIgnore();
       });
 
-      expect(await screen.findByText(/failed to complete project setup/i)).toBeInTheDocument();
+      expect(mockAxios.post).not.toHaveBeenCalledWith('/api/projects/proj-gitignore-fallback/setup');
+      expect(mockShowMain).toHaveBeenCalled();
     });
 
-    test('handleSkipGitIgnore completes setup successfully', async () => {
+    test('handleSkipGitIgnore does not run setup endpoint', async () => {
       render(<CreateProject />);
-
-      mockAxios.post.mockResolvedValueOnce({ data: { success: true, message: 'Setup done' } });
 
       const hooks = await waitForCreateProjectHooks();
 
@@ -1843,23 +1843,20 @@ describe('Validation', () => {
         });
       });
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await act(async () => {
         await hooks.handleSkipGitIgnore();
       });
 
-      expect(mockAxios.post).toHaveBeenCalledWith('/api/projects/proj-gitignore-skip-success/setup');
-      expect(await screen.findByText(/setup done/i)).toBeInTheDocument();
+      expect(mockAxios.post).not.toHaveBeenCalledWith('/api/projects/proj-gitignore-skip-success/setup');
       await waitFor(() => {
         expect(mockShowMain).toHaveBeenCalled();
       }, { timeout: 3000 });
     });
 
-    test('handleSkipGitIgnore surfaces response error details', async () => {
+    test('handleSkipGitIgnore clears the gitignore warning modal', async () => {
       render(<CreateProject />);
-
-      mockAxios.post.mockRejectedValueOnce({ response: { data: { error: 'Setup response failed' } } });
 
       const hooks = await waitForCreateProjectHooks();
 
@@ -1879,13 +1876,13 @@ describe('Validation', () => {
         });
       });
 
-      expect(await screen.findByText(/missing information in it's \.gitignore/i)).toBeInTheDocument();
+      expect(await screen.findByText(/setup check failed: this repository has \.gitignore issues/i)).toBeInTheDocument();
 
       await act(async () => {
         await hooks.handleSkipGitIgnore();
       });
 
-      expect(await screen.findByText(/setup response failed/i)).toBeInTheDocument();
+      expect(screen.queryByText(/fix \.gitignore issues/i)).not.toBeInTheDocument();
     });
 
     test('skips test hook wiring outside test environments', async () => {
@@ -2280,6 +2277,106 @@ describe('Validation', () => {
       await waitFor(() => {
         expect(mockCreateProjectRemoteRepository).toHaveBeenCalledWith('proj-1', expect.objectContaining({
           name: 'my-fork'
+        }));
+      });
+    });
+
+    test('creates a project from the Lucid Coder default template', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse());
+
+      render(<CreateProject />);
+
+      await user.click(screen.getByText('Lucid Coder Default Template'));
+      await user.click(getNextButton());
+
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+
+      await fillProjectName(user, 'Template Project');
+      await user.click(getCreateProjectButton());
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
+          name: 'Template Project',
+          projectTemplate: 'lucid-coder-default',
+          gitWorkflowMode: 'local'
+        }));
+      });
+    });
+
+    test('includes cloud template git fields for custom workflow', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse());
+
+      render(<CreateProject />);
+
+      await user.click(screen.getByText('Lucid Coder Default Template'));
+      await user.click(getNextButton());
+
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'custom');
+      await user.selectOptions(screen.getByLabelText('Git Provider *'), 'gitlab');
+      await user.type(screen.getByLabelText('Personal Access Token *'), '  glpat-template-token  ');
+
+      await user.click(getNextButton());
+      await fillProjectName(user, 'Template Cloud Project');
+      await user.click(getCreateProjectButton());
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
+          name: 'Template Cloud Project',
+          projectTemplate: 'lucid-coder-default',
+          gitWorkflowMode: 'custom',
+          gitProvider: 'gitlab',
+          gitDefaultBranch: 'main',
+          gitUsername: 'global-user',
+          gitToken: 'glpat-template-token'
+        }));
+      });
+    });
+
+    test('returns to source step when backing out of template details', async () => {
+      const { user } = renderComponent();
+
+      render(<CreateProject />);
+
+      await user.click(screen.getByText('Lucid Coder Default Template'));
+      await user.click(getNextButton());
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+      await screen.findByLabelText('Project Name *');
+
+      await user.click(screen.getByRole('button', { name: /back/i }));
+
+      expect(await screen.findByText('Project Source')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Git Workflow *')).toBeNull();
+    });
+
+    test('falls back to local git mode if workflow value is cleared before template submit', async () => {
+      const { user } = renderComponent();
+      mockAxios.post.mockResolvedValue(createSuccessResponse());
+
+      render(<CreateProject />);
+
+      await user.click(screen.getByText('Lucid Coder Default Template'));
+      await user.click(getNextButton());
+      await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local');
+      await user.click(getNextButton());
+      await screen.findByLabelText('Project Name *');
+
+      const hooks = await waitForCreateProjectHooks();
+      await act(async () => {
+        hooks.setGitWorkflowMode('');
+      });
+
+      await fillProjectName(user, 'Template Fallback Mode');
+      await user.click(getCreateProjectButton());
+
+      await waitFor(() => {
+        expect(mockAxios.post).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
+          name: 'Template Fallback Mode',
+          projectTemplate: 'lucid-coder-default',
+          gitWorkflowMode: 'local'
         }));
       });
     });
@@ -3672,7 +3769,7 @@ describe('Validation', () => {
 
       render(<CreateProject />);
       await ensureSourceStep(user);
-      await user.click(screen.getByText('Create a new project'));
+      await user.click(screen.getByText('Create a new classic project'));
       await user.click(getNextButton());
 
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'global');

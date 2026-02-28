@@ -2,6 +2,12 @@ import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
 import { enqueueInstallJobs } from '../routes/projects/installJobs.js';
 
+const buildClassicLayout = (projectPath) => ({
+  frontendWorkspacePath: path.join(projectPath, 'frontend'),
+  frontendWorkspaceManifestPath: path.join(projectPath, 'frontend', 'package.json'),
+  backendWorkspacePath: path.join(projectPath, 'backend')
+});
+
 describe('enqueueInstallJobs', () => {
   test('returns empty when project id or path is missing', async () => {
     await expect(enqueueInstallJobs({ projectId: null, projectPath: 'x' })).resolves.toEqual([]);
@@ -23,7 +29,12 @@ describe('enqueueInstallJobs', () => {
 
     const jobs = await enqueueInstallJobs(
       { projectId: 7, projectPath: '/repo/proj' },
-      { startJobFn, dirExistsFn, fileExistsFn }
+      {
+        startJobFn,
+        dirExistsFn,
+        fileExistsFn,
+        resolveLayoutFn: async (projectPath) => buildClassicLayout(projectPath)
+      }
     );
 
     expect(jobs).toHaveLength(2);
@@ -38,7 +49,12 @@ describe('enqueueInstallJobs', () => {
 
     const jobs = await enqueueInstallJobs(
       { projectId: 7, projectPath: '/repo/proj' },
-      { startJobFn, dirExistsFn, fileExistsFn }
+      {
+        startJobFn,
+        dirExistsFn,
+        fileExistsFn,
+        resolveLayoutFn: async (projectPath) => buildClassicLayout(projectPath)
+      }
     );
 
     expect(jobs.at(-1)).toEqual(expect.objectContaining({
@@ -60,10 +76,61 @@ describe('enqueueInstallJobs', () => {
 
     const jobs = await enqueueInstallJobs(
       { projectId: 7, projectPath: '/repo/proj' },
-      { startJobFn, dirExistsFn, fileExistsFn }
+      {
+        startJobFn,
+        dirExistsFn,
+        fileExistsFn,
+        resolveLayoutFn: async (projectPath) => buildClassicLayout(projectPath)
+      }
     );
 
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toEqual(expect.objectContaining({ type: 'backend:install' }));
+  });
+
+  test('does not enqueue duplicate npm installs when frontend and backend resolve to root workspace', async () => {
+    const startJobFn = vi.fn((job) => job);
+    const dirExistsFn = vi.fn(async () => true);
+    const fileExistsFn = vi.fn(async (targetPath) => targetPath.endsWith(`${path.sep}package.json`));
+
+    const jobs = await enqueueInstallJobs(
+      { projectId: 7, projectPath: '/repo/proj' },
+      {
+        startJobFn,
+        dirExistsFn,
+        fileExistsFn,
+        resolveLayoutFn: async (projectPath) => ({
+          frontendWorkspacePath: projectPath,
+          frontendWorkspaceManifestPath: path.join(projectPath, 'package.json'),
+          backendWorkspacePath: projectPath
+        })
+      }
+    );
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toEqual(expect.objectContaining({ type: 'frontend:install', cwd: '/repo/proj' }));
+  });
+
+  test('falls back to frontend package.json when workspace manifest path is not provided', async () => {
+    const startJobFn = vi.fn((job) => job);
+    const jobs = await enqueueInstallJobs(
+      { projectId: 9, projectPath: '/repo/focus' },
+      {
+        startJobFn,
+        dirExistsFn: async () => true,
+        fileExistsFn: async (targetPath) => targetPath.endsWith(`${path.sep}frontend${path.sep}package.json`),
+        resolveLayoutFn: async (projectPath) => ({
+          frontendWorkspacePath: path.join(projectPath, 'frontend'),
+          frontendWorkspaceManifestPath: '',
+          backendWorkspacePath: path.join(projectPath, 'backend')
+        })
+      }
+    );
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toEqual(expect.objectContaining({
+      type: 'frontend:install',
+      cwd: path.join('/repo/focus', 'frontend')
+    }));
   });
 });

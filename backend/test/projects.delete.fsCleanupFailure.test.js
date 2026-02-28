@@ -136,4 +136,88 @@ describe('DELETE /api/projects/:id cleanup fs acquisition failures', () => {
       'fs module unavailable'
     );
   });
+
+  it('uses cleanup failed fallback message when fs acquisition rejection has no message', async () => {
+    const { deleteProject } = await import('../database.js');
+    const processManager = await import('../routes/projects/processManager.js');
+
+    processManager.findProjectByIdentifier.mockResolvedValue({
+      id: 456,
+      name: 'No Message Cleanup Error',
+      path: 'C:/tmp/test-project-2'
+    });
+    deleteProject.mockResolvedValue(true);
+
+    projectsModule.__projectRoutesInternals.setFsModuleOverride({
+      then: (_resolve, reject) => reject({})
+    });
+
+    const response = await request(app)
+      .delete('/api/projects/456?confirm=true')
+      .expect(200);
+
+    expect(response.body.cleanup.failures[0]).toEqual({
+      target: null,
+      code: null,
+      message: 'cleanup failed'
+    });
+  });
+
+  it('uses production delete release delay when NODE_ENV is not test', async () => {
+    const { deleteProject } = await import('../database.js');
+    const processManager = await import('../routes/projects/processManager.js');
+    const originalNodeEnv = process.env.NODE_ENV;
+
+    process.env.NODE_ENV = 'production';
+    processManager.findProjectByIdentifier.mockResolvedValue({
+      id: 789,
+      name: 'Production Delay Project',
+      path: 'C:/tmp/test-project-3'
+    });
+    deleteProject.mockResolvedValue(true);
+
+    try {
+      await request(app)
+        .delete('/api/projects/789?confirm=true')
+        .expect(200);
+
+      expect(processManager.terminateRunningProcesses).toHaveBeenCalledWith(
+        789,
+        expect.objectContaining({
+          waitForRelease: true,
+          releaseDelay: 2000
+        })
+      );
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('skips Windows settle delay branch on non-win32 platforms', async () => {
+    const { deleteProject } = await import('../database.js');
+    const processManager = await import('../routes/projects/processManager.js');
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+
+    processManager.findProjectByIdentifier.mockResolvedValue({
+      id: 790,
+      name: 'Non Windows Delay Project',
+      path: 'C:/tmp/test-project-4'
+    });
+    deleteProject.mockResolvedValue(true);
+
+    try {
+      await request(app)
+        .delete('/api/projects/790?confirm=true')
+        .expect(200);
+
+      expect(processManager.terminateRunningProcesses).toHaveBeenCalledWith(
+        790,
+        expect.objectContaining({
+          waitForRelease: true
+        })
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 });

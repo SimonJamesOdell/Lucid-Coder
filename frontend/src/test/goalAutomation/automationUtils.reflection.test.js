@@ -561,6 +561,28 @@ describe('validateEditsAgainstReflection', () => {
     });
   });
 
+  it('treats src/test and src/tests as equivalent for mustChange path matching', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustChange: ['frontend/src/tests/App.test.jsx'],
+      mustAvoid: []
+    };
+    const edits = [{ path: 'frontend/src/test/App.test.jsx' }];
+
+    expect(validateEditsAgainstReflection(edits, reflection, { stage: 'implementation' })).toBeNull();
+  });
+
+  it('matches unscoped src/tests contracts against frontend/src/test edits', () => {
+    const reflection = {
+      testsNeeded: true,
+      mustChange: ['src/tests/App.test.jsx'],
+      mustAvoid: []
+    };
+    const edits = [{ path: 'frontend/src/test/App.test.jsx' }];
+
+    expect(validateEditsAgainstReflection(edits, reflection, { stage: 'implementation' })).toBeNull();
+  });
+
   it('does not enforce mustChange execution-contract areas during tests stage', () => {
     const reflection = {
       testsNeeded: true,
@@ -1082,6 +1104,41 @@ describe('__automationUtilsTestHooks helpers', () => {
     expect(prefixes).not.toContain('frontend/src/setupTests.js (or create if missing)');
   });
 
+  it('adds test/tests aliases for frontend and workspace-derived test roots', () => {
+    const { deriveReflectionPathPrefixes } = __automationUtilsTestHooks;
+
+    const prefixes = deriveReflectionPathPrefixes([
+      'frontend/src/tests/unit/',
+      'tests/e2e/'
+    ]);
+
+    expect(prefixes).toEqual(expect.arrayContaining([
+      'frontend/src/tests/unit',
+      'frontend/src/test/unit',
+      'frontend/src/test/unit/',
+      'tests/e2e',
+      'frontend/tests/e2e',
+      'frontend/test/e2e/'
+    ]));
+  });
+
+  it('adds workspace aliases for src and tests roots', () => {
+    const { deriveReflectionPathPrefixes } = __automationUtilsTestHooks;
+
+    const prefixes = deriveReflectionPathPrefixes([
+      'src/components/Button.jsx',
+      'tests/integration/specs/'
+    ]);
+
+    expect(prefixes).toEqual(expect.arrayContaining([
+      'frontend/src/components/Button.jsx',
+      'frontend/tests/integration/specs',
+      'frontend/tests/integration/specs/',
+      'frontend/test/integration/specs',
+      'frontend/test/integration/specs/'
+    ]));
+  });
+
   it('treats falsy values as non-test paths', () => {
     const { isTestFilePath } = __automationUtilsTestHooks;
 
@@ -1167,6 +1224,20 @@ describe('formatTestFailureJobSection helper', () => {
 
     expect(block).toContain('Command: npm');
     expect(block).not.toContain('Command: npm ');
+  });
+});
+
+describe('__reflectionTestHooks alias helpers', () => {
+  it('returns an empty alias list when deriveTestDirectoryAliases receives a non-string path', () => {
+    expect(__reflectionTestHooks.deriveTestDirectoryAliases(null)).toEqual([]);
+  });
+
+  it('returns an empty alias list when deriveWorkspacePathAliases receives a non-string path', () => {
+    expect(__reflectionTestHooks.deriveWorkspacePathAliases(undefined)).toEqual([]);
+  });
+
+  it('derives /tests alias when path includes /test segments', () => {
+    expect(__reflectionTestHooks.deriveTestDirectoryAliases('frontend/src/test/unit/')).toContain('frontend/src/tests/unit/');
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 import path from 'path';
 import os from 'os';
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
+import net from 'net';
 
 const getRunningProcessEntryMock = vi.hoisted(() => vi.fn());
 const getStoredProjectPortsMock = vi.hoisted(() => vi.fn());
@@ -834,7 +835,7 @@ describe('previewProxy', () => {
 
       expect(
         __testOnly.resolvePreviewTargetHost(createReq('/preview/1', { 'x-forwarded-host': 'myhost:5173, proxy:1234' }))
-      ).toBe('localhost');
+      ).toBe('myhost');
 
       expect(
         __testOnly.resolvePreviewTargetHost(createReq('/preview/1', { host: '[::1]:5000' }))
@@ -868,6 +869,286 @@ describe('previewProxy', () => {
         process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST = original;
       }
     }
+  });
+
+  test('parsePortFromHeaderValue returns null for invalid values and resolveClientAppPort prefers origin', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    expect(__testOnly.parsePortFromHeaderValue('not-a-url')).toBeNull();
+    expect(__testOnly.parsePortFromHeaderValue('http://example.com/path')).toBe(80);
+    expect(__testOnly.parsePortFromHeaderValue('https://example.com/path')).toBe(443);
+    expect(__testOnly.parsePortFromHeaderValue('ws://example.com/path')).toBeNull();
+
+    const req = createReq('/preview/1/', {
+      origin: 'http://localhost:5173',
+      referer: 'http://localhost:3000/path'
+    });
+    expect(__testOnly.resolveClientAppPort(req)).toBe(5173);
+
+    const refererOnlyReq = createReq('/preview/1/', {
+      referer: 'http://localhost:3000/path'
+    });
+    expect(__testOnly.resolveClientAppPort(refererOnlyReq)).toBe(3000);
+  });
+
+  test('resolveFrontendPortCandidates tolerates getPortSettings errors', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 } },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 12, frontendPort: 5173 });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 5173, backend: null });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    getPortSettingsMock.mockRejectedValue(new Error('settings unavailable'));
+
+    await expect(__testOnly.resolveFrontendPortCandidates(12)).resolves.toContain(5173);
+  });
+
+  test('resolveFrontendPortForRequest preserves localhost host casing in test mode', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+    const original = process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+    try {
+      process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST = '   ';
+      getRunningProcessEntryMock.mockReturnValue({
+        processes: { frontend: { port: 5173 } },
+        state: 'running'
+      });
+      getProjectMock.mockResolvedValue({ id: 123, frontendPort: 5173 });
+      getStoredProjectPortsMock.mockReturnValue({ frontend: 5173, backend: null });
+      getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+      getPortSettingsMock.mockResolvedValue({ frontendPortBase: 5173 });
+
+      const selected = await __testOnly.resolveFrontendPortForRequest(
+        123,
+        createReq('/preview/1/', { host: 'LOCALHOST:5173' }),
+        { returnTarget: true }
+      );
+      expect(selected).toEqual({ host: 'LOCALHOST', port: 5173 });
+    } finally {
+      if (typeof original === 'undefined') {
+        delete process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
+      } else {
+        process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST = original;
+      }
+    }
+  });
+
+  test('resolveFrontendPortForRequest returns port number in test mode when returnTarget is false', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5173 } },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 123, frontendPort: 5173 });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 5173, backend: null });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: 5173 });
+
+    await expect(
+      __testOnly.resolveFrontendPortForRequest(
+        123,
+        createReq('/preview/1/', { origin: 'http://localhost:5173' })
+      )
+    ).resolves.toBe(5173);
+  });
+
+  test('resolveFrontendPortForRequest probes candidate hosts in non-test mode and returns null when none are reachable', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    vi.resetModules();
+
+    try {
+      getRunningProcessEntryMock.mockReturnValue({
+        processes: { frontend: { port: 5173 } },
+        state: 'running'
+      });
+      getProjectMock.mockResolvedValue({ id: 12, frontendPort: 5173 });
+      getStoredProjectPortsMock.mockReturnValue({ frontend: 5173, backend: null });
+      getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+      getPortSettingsMock.mockResolvedValue({ frontendPortBase: 5173 });
+
+      const createConnectionSpy = vi.spyOn(net, 'createConnection').mockImplementation(() => {
+        const handlers = new Map();
+        const socket = {
+          setTimeout: vi.fn(),
+          once: vi.fn((event, handler) => {
+            handlers.set(event, handler);
+            return socket;
+          }),
+          destroy: vi.fn()
+        };
+        queueMicrotask(() => {
+          const onError = handlers.get('error');
+          if (onError) {
+            onError(new Error('connect fail'));
+          }
+        });
+        return socket;
+      });
+
+      const { __testOnly } = await import('../routes/previewProxy.js');
+      const resolved = await __testOnly.resolveFrontendPortForRequest(
+        12,
+        createReq('/preview/12/', { host: '192.168.1.20:4173' }),
+        { returnTarget: true }
+      );
+
+      expect(resolved).toBeNull();
+      expect(createConnectionSpy).toHaveBeenCalled();
+      createConnectionSpy.mockRestore();
+    } finally {
+      if (typeof originalNodeEnv === 'undefined') {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      vi.resetModules();
+    }
+  });
+
+  test('isFrontendPortReachable defaults blank hosts to localhost and resolveFrontendPortForRequest returns first reachable target in non-test mode', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    vi.resetModules();
+
+    try {
+      getRunningProcessEntryMock.mockReturnValue({
+        processes: { frontend: { port: 5173 } },
+        state: 'running'
+      });
+      getProjectMock.mockResolvedValue({ id: 12, frontendPort: 5173 });
+      getStoredProjectPortsMock.mockReturnValue({ frontend: 5173, backend: null });
+      getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+      getPortSettingsMock.mockResolvedValue({ frontendPortBase: 5173 });
+
+      const createConnectionSpy = vi.spyOn(net, 'createConnection').mockImplementation(({ host }) => {
+        const handlers = new Map();
+        const socket = {
+          setTimeout: vi.fn(),
+          once: vi.fn((event, handler) => {
+            handlers.set(event, handler);
+            return socket;
+          }),
+          destroy: vi.fn()
+        };
+        queueMicrotask(() => {
+          if (host === 'localhost') {
+            const onConnect = handlers.get('connect');
+            if (onConnect) {
+              onConnect();
+            }
+          } else {
+            const onError = handlers.get('error');
+            if (onError) {
+              onError(new Error('refused'));
+            }
+          }
+        });
+        return socket;
+      });
+
+      const { __testOnly } = await import('../routes/previewProxy.js');
+
+      await expect(__testOnly.isFrontendPortReachable('   ', 5173)).resolves.toBe(true);
+      expect(createConnectionSpy).toHaveBeenCalledWith(expect.objectContaining({ host: 'localhost', port: 5173 }));
+
+      const resolved = await __testOnly.resolveFrontendPortForRequest(
+        12,
+        createReq('/preview/12/', { host: '0.0.0.0:4173' }),
+        { returnTarget: true }
+      );
+
+      expect(resolved).toEqual({ host: 'localhost', port: 5173 });
+      createConnectionSpy.mockRestore();
+    } finally {
+      if (typeof originalNodeEnv === 'undefined') {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      vi.resetModules();
+    }
+  });
+
+  test('resolveFrontendPortForRequest returns selected port in non-test mode when returnTarget is false', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    vi.resetModules();
+
+    try {
+      getRunningProcessEntryMock.mockReturnValue({
+        processes: { frontend: { port: 5173 } },
+        state: 'running'
+      });
+      getProjectMock.mockResolvedValue({ id: 12, frontendPort: 5173 });
+      getStoredProjectPortsMock.mockReturnValue({ frontend: 5173, backend: null });
+      getProjectPortHintsMock.mockReturnValue({ frontend: 5173, backend: 3000 });
+      getPortSettingsMock.mockResolvedValue({ frontendPortBase: 5173 });
+
+      const createConnectionSpy = vi.spyOn(net, 'createConnection').mockImplementation(() => {
+        const handlers = new Map();
+        const socket = {
+          setTimeout: vi.fn(),
+          once: vi.fn((event, handler) => {
+            handlers.set(event, handler);
+            return socket;
+          }),
+          destroy: vi.fn()
+        };
+        queueMicrotask(() => {
+          handlers.get('connect')?.();
+        });
+        return socket;
+      });
+
+      const { __testOnly } = await import('../routes/previewProxy.js');
+
+      await expect(
+        __testOnly.resolveFrontendPortForRequest(12, createReq('/preview/12/', { host: 'localhost:5173' }))
+      ).resolves.toBe(5173);
+
+      createConnectionSpy.mockRestore();
+    } finally {
+      if (typeof originalNodeEnv === 'undefined') {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      vi.resetModules();
+    }
+  });
+
+  test('isFrontendPortReachable ignores duplicate socket events after settling', async () => {
+    const createConnectionSpy = vi.spyOn(net, 'createConnection').mockImplementation(() => {
+      const handlers = new Map();
+      const socket = {
+        setTimeout: vi.fn(),
+        once: vi.fn((event, handler) => {
+          handlers.set(event, handler);
+          return socket;
+        }),
+        destroy: vi.fn()
+      };
+
+      queueMicrotask(() => {
+        const onConnect = handlers.get('connect');
+        const onTimeout = handlers.get('timeout');
+        if (onConnect) {
+          onConnect();
+        }
+        if (onTimeout) {
+          onTimeout();
+        }
+      });
+
+      return socket;
+    });
+
+    const { __testOnly } = await import('../routes/previewProxy.js');
+    await expect(__testOnly.isFrontendPortReachable('localhost', 5173)).resolves.toBe(true);
+    createConnectionSpy.mockRestore();
   });
 
   test('middleware bypasses /api routes', async () => {
@@ -959,7 +1240,7 @@ describe('previewProxy', () => {
     expect(next).not.toHaveBeenCalled();
     expect(proxyStub.web).toHaveBeenCalledTimes(1);
     expect(proxyStub.web.mock.calls[0][2]).toMatchObject({
-      target: 'http://localhost:6100'
+      target: 'http://192.168.0.60:6100'
     });
   });
 

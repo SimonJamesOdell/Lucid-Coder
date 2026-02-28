@@ -748,6 +748,37 @@ describe('startProjectTarget', () => {
     });
   });
 
+  test('starts backend via root script in real mode when backend package is missing', async () => {
+    const projectPath = path.join(tempDir, 'target-backend-root-script');
+    await fs.mkdir(projectPath, { recursive: true });
+    await ensurePkg(path.join(projectPath, 'package.json'), {
+      name: 'root-backend-app',
+      scripts: {
+        dev: 'vite',
+        backend: 'node backend/server.js'
+      }
+    });
+
+    await runWithRealModeProjectScaffolding(async ({ startProjectTarget }) => {
+      const result = await startProjectTarget(projectPath, 'backend', {
+        backendPort: 61556,
+        backendPortBase: 61556
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.process).toEqual(expect.objectContaining({ type: 'backend', status: 'running' }));
+
+      const call = getSpawnCall();
+      expect(call?.[0]).toBe('npm');
+      expect(call?.[1]).toEqual(expect.arrayContaining(['run', 'backend']));
+      expect(call?.[2]).toEqual(expect.objectContaining({
+        cwd: projectPath,
+        shell: true,
+        env: expect.objectContaining({ PORT: expect.any(String) })
+      }));
+    });
+  });
+
   test('starts python backend via venv activation on Windows when activation script exists', async () => {
     const projectPath = path.join(tempDir, 'target-backend-python-win');
     await ensureDirs(projectPath);
@@ -865,6 +896,23 @@ describe('installDependencies', () => {
     expect(execMock.mock.calls[0][0]).toBe('npm install');
     expect(execMock.mock.calls[0][1]).toMatchObject({ cwd: path.join(projectPath, 'frontend') });
     expect(execMock.mock.calls[1][1]).toMatchObject({ cwd: path.join(projectPath, 'backend') });
+  });
+
+  test('installs root npm packages for root-only node layouts', async () => {
+    const projectPath = path.join(tempDir, 'root-only-node');
+    await ensurePkg(path.join(projectPath, 'package.json'), {
+      name: 'root-only-app',
+      scripts: {
+        dev: 'vite',
+        backend: 'node backend/server.js'
+      }
+    });
+
+    await projectScaffolding.installDependencies(projectPath);
+
+    expect(execMock).toHaveBeenCalledTimes(1);
+    expect(execMock.mock.calls[0][0]).toBe('npm install');
+    expect(execMock.mock.calls[0][1]).toMatchObject({ cwd: projectPath });
   });
 
   test('handles python backend dependency flow', async () => {
@@ -1180,6 +1228,33 @@ describe('startProject', () => {
       expect(result.processes.frontend).toBeNull();
       expect(result.processes.backend).toEqual(expect.objectContaining({ type: 'backend' }));
     });
+  });
+
+  test('starts backend via root script when targeting backend in real mode', async () => {
+    const projectPath = path.join(tempDir, 'start-root-backend-script');
+    await fs.mkdir(projectPath, { recursive: true });
+    await ensurePkg(path.join(projectPath, 'package.json'), {
+      name: 'root-layout-app',
+      scripts: {
+        dev: 'vite',
+        backend: 'node backend/server.js'
+      }
+    });
+
+    await runRealStart(projectPath, 'linux', async (realModule) => {
+      const result = await realModule.startProject(projectPath, { target: 'backend' });
+      expect(result.success).toBe(true);
+      expect(result.processes.frontend).toBeNull();
+      expect(result.processes.backend).toEqual(expect.objectContaining({ type: 'backend', status: 'running' }));
+    });
+
+    const backendCall = spawnMock.mock.calls.find(([, args, options]) =>
+      Array.isArray(args)
+      && args[0] === 'run'
+      && args[1] === 'backend'
+      && options?.cwd === projectPath
+    );
+    expect(backendCall).toBeDefined();
   });
 });
 
@@ -2292,5 +2367,90 @@ describe('cloneProjectFromRemote (real mode)', () => {
         timeoutSpy.mockRestore();
       }
     });
+  });
+});
+
+describe('projectScaffolding __testing helpers', () => {
+  test('shouldPatchFrontendDevScriptHost handles invalid and host-patched scripts', () => {
+    const { shouldPatchFrontendDevScriptHost } = projectScaffolding.__testing;
+
+    expect(shouldPatchFrontendDevScriptHost('')).toBe(false);
+    expect(shouldPatchFrontendDevScriptHost('npm run dev')).toBe(false);
+    expect(shouldPatchFrontendDevScriptHost('vite --host 0.0.0.0')).toBe(false);
+    expect(shouldPatchFrontendDevScriptHost('vite')).toBe(true);
+  });
+
+  test('readPackageScripts returns empty object for invalid package payloads', async () => {
+    const { readPackageScripts } = projectScaffolding.__testing;
+    const invalidPackagePath = path.join(tempDir, 'invalid-package.json');
+    const arrayScriptsPath = path.join(tempDir, 'array-scripts.json');
+
+    await fs.writeFile(invalidPackagePath, JSON.stringify(['invalid']));
+    await fs.writeFile(arrayScriptsPath, JSON.stringify({ scripts: ['not-an-object'] }));
+
+    await expect(readPackageScripts(invalidPackagePath)).resolves.toEqual({});
+    await expect(readPackageScripts(arrayScriptsPath)).resolves.toEqual({});
+    await expect(readPackageScripts(path.join(tempDir, 'missing.json'))).resolves.toEqual({});
+  });
+
+  test('resolveBackendScriptName prefers backend then backend:start', () => {
+    const { resolveBackendScriptName } = projectScaffolding.__testing;
+
+    expect(resolveBackendScriptName({ backend: ' node server.js ' })).toBe('backend');
+    expect(resolveBackendScriptName({ 'backend:start': ' node backend/server.js ' })).toBe('backend:start');
+    expect(resolveBackendScriptName({})).toBe('');
+  });
+
+  test('resolveWindowsShell returns platform-appropriate shell result', async () => {
+    const { resolveWindowsShell } = projectScaffolding.__testing;
+    const resolvedShell = await resolveWindowsShell();
+    if (process.platform === 'win32') {
+      expect(typeof resolvedShell).toBe('string');
+      expect(resolvedShell.toLowerCase()).toContain('cmd.exe');
+    } else {
+      expect(resolvedShell).toBeNull();
+    }
+  });
+
+  test('resolveWindowsShell returns cmd.exe when ComSpec is explicitly cmd.exe', async () => {
+    const { resolveWindowsShell } = projectScaffolding.__testing;
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    const originalComSpec = process.env.ComSpec;
+    process.env.ComSpec = 'cmd.exe';
+
+    try {
+      await expect(resolveWindowsShell()).resolves.toBe('cmd.exe');
+    } finally {
+      platformSpy.mockRestore();
+      if (originalComSpec === undefined) {
+        delete process.env.ComSpec;
+      } else {
+        process.env.ComSpec = originalComSpec;
+      }
+    }
+  });
+
+  test('ensureFrontendLanHostBinding skips non-object scripts and warns on parse errors', async () => {
+    const { ensureFrontendLanHostBinding } = projectScaffolding.__testing;
+    const warn = vi.fn();
+    const hostBindingDir = path.join(tempDir, 'host-binding-coverage');
+
+    await fs.mkdir(path.join(hostBindingDir, 'frontend'), { recursive: true });
+    await fs.writeFile(path.join(hostBindingDir, 'package.json'), JSON.stringify('not-an-object'), 'utf8');
+    await fs.writeFile(path.join(hostBindingDir, 'frontend', 'package.json'), '{ invalid json', 'utf8');
+
+    const patched = await ensureFrontendLanHostBinding(hostBindingDir, { logger: { warn } });
+    expect(patched).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  test('ensureFrontendLanHostBinding tolerates parse errors when logger.warn is absent', async () => {
+    const { ensureFrontendLanHostBinding } = projectScaffolding.__testing;
+    const hostBindingDir = path.join(tempDir, 'host-binding-coverage-no-warn');
+
+    await fs.mkdir(path.join(hostBindingDir, 'frontend'), { recursive: true });
+    await fs.writeFile(path.join(hostBindingDir, 'frontend', 'package.json'), '{ invalid json', 'utf8');
+
+    await expect(ensureFrontendLanHostBinding(hostBindingDir, { logger: {} })).resolves.toEqual([]);
   });
 });

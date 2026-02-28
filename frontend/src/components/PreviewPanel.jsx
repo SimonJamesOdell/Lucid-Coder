@@ -433,23 +433,15 @@ const PreviewPanel = () => {
       return;
     }
 
-    const targetUrl =
-      previewRef.current.getDisplayedUrl?.() ||
-      previewRef.current.getPreviewUrl?.();
-
-    const currentHostname = typeof window !== 'undefined' ? window.location?.hostname : '';
-    const shouldPreferProxyTarget = !isLoopbackHostname(currentHostname);
-
-    if (shouldPreferProxyTarget && targetUrl && targetUrl !== 'about:blank') {
-      window.open(targetUrl, '_blank', 'noopener,noreferrer');
-      return;
-    }
-
     const directUrl = previewRef.current.getOpenInNewTabUrl?.();
     if (directUrl && directUrl !== 'about:blank') {
       window.open(directUrl, '_blank', 'noopener,noreferrer');
       return;
     }
+
+    const targetUrl =
+      previewRef.current.getDisplayedUrl?.() ||
+      previewRef.current.getPreviewUrl?.();
 
     if (!targetUrl || targetUrl === 'about:blank') {
       return;

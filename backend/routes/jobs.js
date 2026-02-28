@@ -3,6 +3,7 @@ import path from 'path';
 import { getProject, getTestingSettings, getProjectTestingSettings } from '../database.js';
 import { startJob, listJobsForProject, getJob, cancelJob } from '../services/jobRunner.js';
 import { describeBranchCssOnlyStatus } from '../services/branchWorkflow.js';
+import { resolveProjectLayout } from '../services/projectLayout.js';
 
 const router = express.Router({ mergeParams: true });
 
@@ -135,11 +136,12 @@ const buildInstallArgs = (specifier, { dev = false, action = 'install' } = {}) =
 
 const buildJobDefinition = async (project, type, payload = {}) => {
   const projectRoot = ensureProjectPath(project);
-  const frontendPath = path.join(projectRoot, 'frontend');
-  const backendPath = path.join(projectRoot, 'backend');
-  const hasFrontendPackage = await pathExists(path.join(frontendPath, 'package.json'));
-  const hasBackendPackage = await pathExists(path.join(backendPath, 'package.json'));
-  const hasBackendRequirements = await pathExists(path.join(backendPath, 'requirements.txt'));
+  const layout = await resolveProjectLayout(projectRoot);
+  const frontendPath = layout.frontendWorkspacePath || path.join(projectRoot, 'frontend');
+  const backendPath = layout.backendWorkspacePath || path.join(projectRoot, 'backend');
+  const hasFrontendPackage = Boolean(layout.frontendWorkspaceManifestPath);
+  const hasBackendPackage = Boolean(layout.backendWorkspaceManifestPath);
+  const hasBackendRequirements = Boolean(layout.hasBackendRequirements);
 
   switch (type) {
     case 'frontend:install':

@@ -396,7 +396,16 @@ describe('ProcessesTab', () => {
     const onCreateBackend = vi.fn().mockResolvedValue(null);
     const processInfo = {
       ...buildProcessInfo(),
-      capabilities: { backend: { exists: false } }
+      capabilities: { backend: { exists: false } },
+      processes: {
+        ...buildProcessInfo().processes,
+        backend: null
+      },
+      ports: {
+        active: { frontend: 5173, backend: null },
+        stored: { frontend: 5173, backend: null },
+        preferred: { frontend: 5173, backend: null }
+      }
     };
 
     renderProcessesTab({ processInfo, onCreateBackend });
@@ -415,7 +424,16 @@ describe('ProcessesTab', () => {
     const onCreateBackend = vi.fn().mockRejectedValue(new Error('backend failed'));
     const processInfo = {
       ...buildProcessInfo(),
-      capabilities: { backend: { exists: false } }
+      capabilities: { backend: { exists: false } },
+      processes: {
+        ...buildProcessInfo().processes,
+        backend: null
+      },
+      ports: {
+        active: { frontend: 5173, backend: null },
+        stored: { frontend: 5173, backend: null },
+        preferred: { frontend: 5173, backend: null }
+      }
     };
 
     renderProcessesTab({ processInfo, onCreateBackend });
@@ -432,7 +450,16 @@ describe('ProcessesTab', () => {
     const onCreateBackend = vi.fn().mockRejectedValue({});
     const processInfo = {
       ...buildProcessInfo(),
-      capabilities: { backend: { exists: false } }
+      capabilities: { backend: { exists: false } },
+      processes: {
+        ...buildProcessInfo().processes,
+        backend: null
+      },
+      ports: {
+        active: { frontend: 5173, backend: null },
+        stored: { frontend: 5173, backend: null },
+        preferred: { frontend: 5173, backend: null }
+      }
     };
 
     renderProcessesTab({ processInfo, onCreateBackend });
@@ -441,6 +468,28 @@ describe('ProcessesTab', () => {
     await user.click(createButton);
 
     await waitFor(() => expect(screen.getByText('Failed to create backend')).toBeInTheDocument());
+  });
+
+  test('shows backend process column when backend signals exist despite stale capability=false', () => {
+    const processInfo = {
+      ...buildProcessInfo(),
+      capabilities: { backend: { exists: false } },
+      processes: {
+        ...buildProcessInfo().processes,
+        backend: {
+          pid: 3333,
+          status: 'running',
+          port: 6500,
+          logs: []
+        }
+      }
+    };
+
+    renderProcessesTab({ processInfo });
+
+    expect(screen.queryByText('This project doesn’t have a backend yet.')).not.toBeInTheDocument();
+    const backendColumn = screen.getByTestId('process-column-backend');
+    expect(within(backendColumn).getByText('3333')).toBeInTheDocument();
   });
 });
 

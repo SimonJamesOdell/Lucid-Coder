@@ -19,6 +19,10 @@ vi.mock('../services/branchWorkflow.js', () => ({
   describeBranchCssOnlyStatus: vi.fn()
 }));
 
+vi.mock('../services/projectLayout.js', () => ({
+  resolveProjectLayout: vi.fn()
+}));
+
 vi.mock('fs/promises', () => ({
   access: vi.fn(() => Promise.resolve())
 }));
@@ -36,12 +40,14 @@ describe('routes/jobs', () => {
   let db;
   let jobRunner;
   let branchWorkflow;
+  let projectLayout;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     db = await import('../database.js');
     jobRunner = await import('../services/jobRunner.js');
     branchWorkflow = await import('../services/branchWorkflow.js');
+    projectLayout = await import('../services/projectLayout.js');
 
     db.getProject.mockResolvedValue({ id: 123, path: 'C:/tmp/project' });
     db.getTestingSettings.mockResolvedValue({ coverageTarget: 100 });
@@ -64,6 +70,14 @@ describe('routes/jobs', () => {
       exitCode: null,
       signal: null,
       logs: []
+    });
+
+    projectLayout.resolveProjectLayout.mockResolvedValue({
+      frontendWorkspacePath: 'C:/tmp/project/frontend',
+      frontendWorkspaceManifestPath: 'C:/tmp/project/frontend/package.json',
+      backendWorkspacePath: 'C:/tmp/project/backend',
+      backendWorkspaceManifestPath: 'C:/tmp/project/backend/package.json',
+      hasBackendRequirements: false
     });
 
     app = await buildApp();
@@ -121,5 +135,25 @@ describe('routes/jobs', () => {
 
     expect(res.body.success).toBe(true);
     expect(jobRunner.startJob).toHaveBeenCalled();
+  });
+
+  it('runs backend jobs from root when layout resolves backend workspace to project root', async () => {
+    projectLayout.resolveProjectLayout.mockResolvedValue({
+      frontendWorkspacePath: 'C:/tmp/project',
+      frontendWorkspaceManifestPath: 'C:/tmp/project/package.json',
+      backendWorkspacePath: 'C:/tmp/project',
+      backendWorkspaceManifestPath: 'C:/tmp/project/package.json',
+      hasBackendRequirements: false
+    });
+
+    await request(app)
+      .post('/api/projects/123/jobs')
+      .send({ type: 'backend:install' })
+      .expect(202);
+
+    expect(jobRunner.startJob).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'backend:install',
+      cwd: 'C:/tmp/project'
+    }));
   });
 });

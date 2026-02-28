@@ -40,6 +40,7 @@ import CreateProjectHeader from './create-project/CreateProjectHeader';
 import './CreateProject.css';
 
 export const BACKEND_UNAVAILABLE_MESSAGE = 'Unable to reach the backend server. Please make sure it is running and try again.';
+const LUCID_CODER_DEFAULT_TEMPLATE_ID = 'lucid-coder-default';
 
 const CreateProject = () => {
   const {
@@ -67,7 +68,7 @@ const CreateProject = () => {
   const [gitIgnoreStatus, setGitIgnoreStatus] = useState({ state: 'idle', error: '' });
 
   const [setupStep, setSetupStep] = useState('source');
-  const [projectSource, setProjectSource] = useState('new');
+  const [projectSource, setProjectSource] = useState('template');
   const [localPath, setLocalPath] = useState('');
   const [localImportMode, setLocalImportMode] = useState('copy');
   const [isFolderPickerOpen, setFolderPickerOpen] = useState(false);
@@ -175,7 +176,7 @@ const CreateProject = () => {
   }, [gitRemoteUrl, newProject.name, projectSource]);
 
   useEffect(() => {
-    if (projectSource !== 'new') {
+    if (projectSource !== 'new' && projectSource !== 'template') {
       return;
     }
     if (gitWorkflowMode === 'global' || gitWorkflowMode === 'custom') {
@@ -215,6 +216,10 @@ const CreateProject = () => {
 
     if (setupStep === 'source') {
       setCreateError('');
+      if (projectSource === 'template') {
+        setSetupStep('git');
+        return;
+      }
       setSetupStep('git');
       return;
     }
@@ -292,10 +297,11 @@ const CreateProject = () => {
         return;
       }
 
+      const isNewLikeSource = projectSource === 'new' || projectSource === 'template';
       const isCloudWorkflow = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
 
       /* v8 ignore start */
-      if (projectSource === 'new' && isCloudWorkflow && !gitCloudMode) {
+      if (isNewLikeSource && isCloudWorkflow && !gitCloudMode) {
         setCreateError('Remote setup selection is required for cloud workflows');
         return;
       }
@@ -526,11 +532,12 @@ const CreateProject = () => {
       setCreateLoading(true);
       setCreateError('');
 
+      const isTemplateFlow = projectSource === 'template';
       const isCloudWorkflow = gitWorkflowMode === 'global' || gitWorkflowMode === 'custom';
       const isConnectExisting = isCloudWorkflow && gitCloudMode === 'connect';
 
       const { normalizedProvider, defaultBranch, username } = resolveNormalizedGitConfig({
-        mode: gitWorkflowMode,
+        mode: gitWorkflowMode || 'local',
         gitProvider,
         gitSettings
       });
@@ -560,6 +567,23 @@ const CreateProject = () => {
           mode: gitWorkflowMode,
           token: gitToken
         }));
+      }
+
+      if (isTemplateFlow) {
+        postBody.projectTemplate = LUCID_CODER_DEFAULT_TEMPLATE_ID;
+        postBody.gitWorkflowMode = gitWorkflowMode || 'local';
+
+        if (isCloudWorkflow) {
+          postBody.gitProvider = normalizedProvider;
+          postBody.gitDefaultBranch = defaultBranch;
+          if (username) {
+            postBody.gitUsername = username;
+          }
+
+          if (gitWorkflowMode === 'custom') {
+            postBody.gitToken = gitToken.trim();
+          }
+        }
       }
 
       const response = await axios.post('/api/projects', postBody);
@@ -671,7 +695,7 @@ const CreateProject = () => {
     setGitIgnoreSuggestion(null);
     setGitIgnoreStatus({ state: 'idle', error: '' });
     setSetupStep('source');
-    setProjectSource('new');
+    setProjectSource('template');
     setLocalPath('');
     setLocalImportMode('copy');
     setFolderPickerOpen(false);
@@ -721,6 +745,10 @@ const CreateProject = () => {
       return;
     }
     if (setupStep === 'details') {
+      if (projectSource === 'template') {
+        setSetupStep('source');
+        return;
+      }
       setSetupStep('git');
       return;
     }

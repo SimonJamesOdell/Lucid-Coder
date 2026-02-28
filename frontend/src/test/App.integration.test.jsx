@@ -282,7 +282,7 @@ describe('App Component Integration', () => {
         expect(screen.getByText('Create a new project or bring in an existing one.')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByText('Create a new classic project'))
       await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
@@ -342,7 +342,7 @@ describe('App Component Integration', () => {
 
       await user.click(screen.getByText('Add Project'))
 
-      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByText('Create a new classic project'))
       await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
@@ -376,7 +376,7 @@ describe('App Component Integration', () => {
 
       await user.click(screen.getByText('Add Project'))
 
-      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByText('Create a new classic project'))
       await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
@@ -401,7 +401,7 @@ describe('App Component Integration', () => {
 
       await user.click(screen.getByText('Add Project'))
 
-      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByText('Create a new classic project'))
       await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))
@@ -436,7 +436,7 @@ describe('App Component Integration', () => {
 
       await user.click(screen.getByText('Add Project'))
 
-      await user.click(screen.getByText('Create a new project'))
+      await user.click(screen.getByText('Create a new classic project'))
       await user.click(screen.getByRole('button', { name: 'Next' }))
       await user.selectOptions(screen.getByLabelText('Git Workflow *'), 'local')
       await user.click(screen.getByText('Next'))

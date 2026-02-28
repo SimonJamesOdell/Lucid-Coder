@@ -916,6 +916,137 @@ describe('Projects API with Scaffolding', () => {
       expect(savedSettings.defaultBranch).toBe('main');
     });
 
+    test('clones Lucid Coder default template when projectTemplate is selected', async () => {
+      const projectName = `template-flow-${Date.now()}`;
+      const { cloneProjectFromRemote } = await import('../services/projectScaffolding.js');
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Template project',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          projectTemplate: 'lucid-coder-default',
+          gitWorkflowMode: 'local'
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.success).toBe(true);
+
+      expect(vi.mocked(cloneProjectFromRemote)).toHaveBeenCalledWith(
+        expect.objectContaining({ name: projectName }),
+        expect.objectContaining({
+          cloneOptions: expect.objectContaining({
+            remoteUrl: 'https://github.com/SimonJamesOdell/Lucid-Coder-Default-Template.git',
+            provider: 'github',
+            authMethod: 'pat'
+          })
+        })
+      );
+
+      expect(gitUtils.runGitCommand).toHaveBeenCalledWith(
+        expect.any(String),
+        ['remote', 'remove', 'origin'],
+        expect.objectContaining({ allowFailure: true })
+      );
+
+      const savedSettings = await getProjectGitSettings(response.body.project.id);
+      expect(savedSettings.workflow).toBe('local');
+      expect(savedSettings.remoteUrl).toBe('');
+    });
+
+    test('persists template git settings during skip-scaffolding clone flow', async () => {
+      const projectName = `template-skip-scaffold-${Date.now()}`;
+      const previousSkip = process.env.E2E_SKIP_SCAFFOLDING;
+
+      process.env.E2E_SKIP_SCAFFOLDING = '1';
+      try {
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Template skip scaffold project',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' },
+            projectTemplate: 'lucid-coder-default',
+            gitWorkflowMode: 'custom',
+            gitProvider: 'gitlab',
+            gitDefaultBranch: 'main',
+            gitUsername: 'template-user',
+            gitToken: 'token-123'
+          });
+
+        expect(response.status).toBe(201);
+        expect(response.body.success).toBe(true);
+
+        const savedSettings = await getProjectGitSettings(response.body.project.id);
+        expect(savedSettings.workflow).toBe('cloud');
+        expect(savedSettings.provider).toBe('gitlab');
+        expect(savedSettings.defaultBranch).toBe('main');
+        expect(savedSettings.username).toBe('template-user');
+        expect(savedSettings.remoteUrl).toBe('');
+      } finally {
+        if (typeof previousSkip === 'undefined') {
+          delete process.env.E2E_SKIP_SCAFFOLDING;
+        } else {
+          process.env.E2E_SKIP_SCAFFOLDING = previousSkip;
+        }
+      }
+    });
+
+    test('defaults template git workflow mode to local when request value is invalid', async () => {
+      const projectName = `template-invalid-workflow-${Date.now()}`;
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: projectName,
+          description: 'Template project invalid workflow mode',
+          frontend: { language: 'javascript', framework: 'react' },
+          backend: { language: 'javascript', framework: 'express' },
+          projectTemplate: 'lucid-coder-default',
+          gitWorkflowMode: 'invalid-mode'
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.success).toBe(true);
+
+      const savedSettings = await getProjectGitSettings(response.body.project.id);
+      expect(savedSettings.workflow).toBe('local');
+      expect(savedSettings.remoteUrl).toBe('');
+    });
+
+    test('continues template clone flow when removing template origin fails', async () => {
+      const projectName = `template-detach-fails-${Date.now()}`;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      gitUtils.runGitCommand.mockImplementation(async (_projectPath, args) => {
+        if (Array.isArray(args) && args.join(' ') === 'remote remove origin') {
+          throw new Error('remote remove failed');
+        }
+        return { stdout: '', code: 0 };
+      });
+
+      try {
+        const response = await request(app)
+          .post('/api/projects')
+          .send({
+            name: projectName,
+            description: 'Template project detach warning',
+            frontend: { language: 'javascript', framework: 'react' },
+            backend: { language: 'javascript', framework: 'express' },
+            projectTemplate: 'lucid-coder-default',
+            gitWorkflowMode: 'local'
+          });
+
+        expect(response.status).toBe(201);
+        expect(response.body.success).toBe(true);
+        expect(warnSpy).toHaveBeenCalledWith('Failed to detach template origin remote:', 'remote remove failed');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     test('clone flow uses result.branch and result.remote for git settings', async () => {
       const projectName = `clone-branch-${Date.now()}`;
       const { cloneProjectFromRemote } = await import('../services/projectScaffolding.js');
@@ -2141,6 +2272,25 @@ describe('Projects API with Scaffolding', () => {
 
       // For safety, the API only cleans up managed project paths.
       expect(targets).toEqual([]);
+    });
+
+    test('buildCleanupTargets includes managed slug fallback when project path is outside managed root but slug folder exists', async () => {
+      const projectRoutesModule = await import('../routes/projects.js');
+      const { buildCleanupTargets } = projectRoutesModule.__projectRoutesInternals;
+
+      const managedRoot = path.resolve(getProjectsDir());
+      const slug = 'jlt-life-cleanup-fallback';
+      const externalPath = path.resolve(path.join(process.cwd(), 'external-project'));
+      const managedSlugPath = path.join(managedRoot, slug);
+
+      await fs.mkdir(managedSlugPath, { recursive: true });
+
+      try {
+        const targets = buildCleanupTargets({ name: slug, path: externalPath });
+        expect(targets).toContain(managedSlugPath);
+      } finally {
+        await fs.rm(managedSlugPath, { recursive: true, force: true });
+      }
     });
 
     test('cleanupDirectoryWithRetry resolves when the directory is already gone', async () => {
@@ -4966,10 +5116,10 @@ describe('Projects API with Scaffolding', () => {
       expect(response.status).toBe(200);
       expect(response.body.activity).toBe('idle');
       expect(response.body.running).toBe(false);
-      expect(response.body.ports.active.frontend).toBe(5173);
-      expect(response.body.ports.active.backend).toBe(3000);
-      expect(response.body.lastKnownPorts.frontend).toBe(5173);
-      expect(response.body.lastKnownPorts.backend).toBe(3000);
+      expect(response.body.ports.active.frontend).toBe(5100);
+      expect(response.body.ports.active.backend).toBe(5500);
+      expect(response.body.lastKnownPorts.frontend).toBe(5100);
+      expect(response.body.lastKnownPorts.backend).toBe(5500);
     });
 
     test('uses stored project ports as last-known values when snapshots are missing', async () => {

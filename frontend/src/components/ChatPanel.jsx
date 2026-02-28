@@ -61,6 +61,95 @@ const buildAutofixLoopSignature = (payload = {}) => {
   return [prompt, ...childPrompts].join('\n---\n');
 };
 
+const DEFAULT_AUTOFIX_PRE_MESSAGE = {
+  automation: 'Trying again—hopefully this pass lands the fix.',
+  user: 'On it—starting a fix pass for the failing tests.'
+};
+
+const pickAutofixPreMessageFallback = (origin) => (
+  origin === 'automation'
+    ? DEFAULT_AUTOFIX_PRE_MESSAGE.automation
+    : DEFAULT_AUTOFIX_PRE_MESSAGE.user
+);
+
+const parseAutofixPreMessageResponse = (rawText) => {
+  const text = typeof rawText === 'string' ? rawText.trim() : '';
+  if (!text) {
+    return '';
+  }
+
+  const normalize = (value) => String(value || '')
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 140);
+
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text);
+      const candidate = parsed?.comment ?? parsed?.message ?? parsed?.text;
+      return normalize(candidate);
+    } catch {
+      // Fall through to plain-text handling.
+    }
+  }
+
+  return normalize(text);
+};
+
+const requestAutofixPreMessage = async ({ prompt, origin, childPrompts = [], failureContext }) => {
+  const fallback = pickAutofixPreMessageFallback(origin);
+  try {
+    const childSummary = childPrompts
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter(Boolean)
+      .slice(0, 2);
+    const failureSummary = (() => {
+      if (!failureContext || typeof failureContext !== 'object') {
+        return '';
+      }
+      const jobs = Array.isArray(failureContext.jobs) ? failureContext.jobs : [];
+      const labels = jobs
+        .map((job) => (typeof job?.label === 'string' ? job.label.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 2);
+      return labels.join(', ');
+    })();
+
+    const response = await axios.post('/api/llm/generate', {
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Write one short assistant status line before an automated fix run starts. ' +
+            'Return only plain text (no markdown, no JSON, no quotes). ' +
+            'Tone: friendly, concise, optimistic, and professional. ' +
+            'Keep it between 8 and 18 words and avoid mentioning branch names.'
+        },
+        {
+          role: 'user',
+          content: [
+            `Origin: ${origin === 'automation' ? 'automation retry' : 'user initiated fix'}`,
+            `Goal prompt: ${String(prompt || '').slice(0, 220)}`,
+            childSummary.length > 0 ? `Child prompts: ${childSummary.join(' | ')}` : '',
+            failureSummary ? `Recent failing jobs: ${failureSummary}` : ''
+          ].filter(Boolean).join('\n')
+        }
+      ],
+      max_tokens: 60,
+      temperature: 0.7,
+      __lucidcoderDisableToolBridge: true,
+      __lucidcoderPurpose: 'autofix-pre-message'
+    });
+
+    const rawText = response?.data?.response ?? response?.data?.content ?? '';
+    const parsed = parseAutofixPreMessageResponse(rawText);
+    return parsed || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const isLikelyExternalPackageName = (value = '') => {
   const name = String(value || '').trim();
   if (!name) {
@@ -1700,6 +1789,22 @@ const ChatPanel = ({
     setIsSending(true);
 
     try {
+      const preMessage = await requestAutofixPreMessage({
+        prompt,
+        origin,
+        childPrompts,
+        failureContext
+      });
+
+      setMessages((prev) => [
+        ...prev,
+        createMessage(
+          'assistant',
+          preMessage,
+          { variant: 'status' }
+        )
+      ]);
+
       setMessages((prev) => [
         ...prev,
         createMessage(
@@ -1740,6 +1845,10 @@ const ChatPanel = ({
 
       if (goalsToProcess.length === 0) {
         throw new Error('Failed to create goals for fixing failing tests.');
+      }
+
+      if (origin === 'automation' && autoFixHaltedRef.current) {
+        return;
       }
 
       if (autoFixCancelRef.current) {
@@ -1943,6 +2052,16 @@ const ChatPanel = ({
       }
     };
 
+    const handleAutoFixPause = () => {
+      if (!autoFixHaltedRef.current) {
+        setAutofixHaltFlag(true);
+      }
+    };
+
+    const handleAutoFixStop = () => {
+      handleClearPendingAgentActions();
+    };
+
     const handleAutoFixTests = (event) => {
       const payload = event?.detail;
       const prompt = payload?.prompt;
@@ -1959,12 +2078,16 @@ const ChatPanel = ({
     };
 
     window.addEventListener('lucidcoder:autofix-resume', handleAutoFixResume);
+    window.addEventListener('lucidcoder:autofix-pause', handleAutoFixPause);
+    window.addEventListener('lucidcoder:autofix-stop', handleAutoFixStop);
     window.addEventListener('lucidcoder:autofix-tests', handleAutoFixTests);
     return () => {
       window.removeEventListener('lucidcoder:autofix-resume', handleAutoFixResume);
+      window.removeEventListener('lucidcoder:autofix-pause', handleAutoFixPause);
+      window.removeEventListener('lucidcoder:autofix-stop', handleAutoFixStop);
       window.removeEventListener('lucidcoder:autofix-tests', handleAutoFixTests);
     };
-  }, [autoFixHalted, runAutomatedTestFixGoal, setAutofixHaltFlag]);
+  }, [autoFixHalted, handleClearPendingAgentActions, runAutomatedTestFixGoal, setAutofixHaltFlag]);
 
   const handleSendMessage = async () => {
     await submitPrompt(inputValue, { origin: 'user' });
@@ -2365,6 +2488,9 @@ Object.assign(ChatPanel.__testHooks, {
   },
   suiteHelpers: {
     buildAutofixLoopSignature,
+    pickAutofixPreMessageFallback,
+    parseAutofixPreMessageResponse,
+    requestAutofixPreMessage,
     classifyPathSuites,
     deriveSuitesFromStagedDiff,
     isLikelyExternalPackageName,

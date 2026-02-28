@@ -94,6 +94,87 @@ const MAX_FAILURE_REPORT_LINES = 80;
 const MAX_FAILURE_REPORT_CHARS = 4000;
 const FAILURE_LINE_REGEX = /(\bFAIL\b|AssertionError|TypeError|ReferenceError|SyntaxError|Error:|Expected|Received|toThrow|Unhandled|RangeError|Cannot read|is not a function)/i;
 const FAIL_LINE_REGEX = /^FAIL\s+/i;
+const WARNING_NOISE_REGEX = /(?:React Router Future Flag Warning|was not wrapped in act\(\)|Consider adding an error boundary|https:\/\/reactjs\.org\/link\/error-boundaries)/i;
+
+const isWarningNoiseLine = (line) => WARNING_NOISE_REGEX.test(String(line || ''));
+
+const normalizeFailureSignatureTextInput = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/[a-z]:\\[^\s)\]]+/gi, '<path>')
+    .replace(/(?:frontend|backend|src|tests?)\/[a-z0-9._\-/]+/gi, '<path>')
+    .replace(/:\d+(?::\d+)?/g, ':#')
+    .replace(/\b\d+\b/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const normalizeFailureSignatureText = (line) => normalizeFailureSignatureTextInput(String(line || ''))
+  .replace(/^error:\s*/i, '')
+  .replace(/^fail\s+/i, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const deriveCanonicalFailureSignatures = (failureReport) => {
+  const report = typeof failureReport === 'string' ? failureReport : '';
+  if (!report.trim()) {
+    return [];
+  }
+
+  const signatures = new Set();
+  for (const rawLine of report.split(/\r?\n/)) {
+    const line = String(rawLine || '').trim();
+    if (!line || isWarningNoiseLine(line)) {
+      continue;
+    }
+
+    if (/Cannot destructure property ['"]basename['"].*useContext/i.test(line)) {
+      signatures.add('router-context-missing-link-provider');
+      continue;
+    }
+
+    if (/Unable to find an element by:\s*\[data-testid=["']page-root["']\]/i.test(line)) {
+      signatures.add('page-root-testid-mismatch');
+      continue;
+    }
+
+    if (/TestingLibraryElementError/i.test(line)) {
+      signatures.add('testing-library-query-mismatch');
+      continue;
+    }
+
+    if (!/(TypeError|ReferenceError|SyntaxError|AssertionError|TestingLibraryElementError|Cannot\s+|Expected\s+|Received\s+)/i.test(line)) {
+      continue;
+    }
+
+    const normalized = normalizeFailureSignatureText(line);
+    if (normalized) {
+      signatures.add(normalized.slice(0, 180));
+    }
+  }
+
+  return Array.from(signatures).slice(0, 6);
+};
+
+const deriveRootCauseHint = (signatures = []) => {
+  if (!Array.isArray(signatures) || signatures.length === 0) {
+    return null;
+  }
+
+  if (signatures.includes('router-context-missing-link-provider')) {
+    return 'Likely root cause: components using Link/NavLink are rendered without a router provider in tests. Wrap test renders with MemoryRouter.';
+  }
+
+  if (signatures.includes('page-root-testid-mismatch')) {
+    return 'Likely root cause: tests require data-testid="page-root" but components only render headings. Prefer semantic heading assertions or align the shared test id contract.';
+  }
+
+  return null;
+};
 
 const collectRecentLogLines = (job) => {
   const logs = Array.isArray(job?.logs) ? job.logs : [];
@@ -167,11 +248,17 @@ const extractFailureReport = (job) => {
       if (!line) {
         continue;
       }
+      if (isWarningNoiseLine(line)) {
+        continue;
+      }
       const matches = FAILURE_LINE_REGEX.test(line);
       if (matches) {
         pushLine(line);
         for (let j = 1; j <= 3 && i + j < split.length; j += 1) {
-          pushLine(split[i + j].trimEnd());
+          const contextLine = split[i + j].trimEnd();
+          if (!isWarningNoiseLine(contextLine)) {
+            pushLine(contextLine);
+          }
         }
       }
       if (lines.length >= MAX_FAILURE_REPORT_LINES || remainingChars <= 0) {
@@ -186,7 +273,7 @@ const extractFailureReport = (job) => {
   if (lines.length === 0) {
     const fallback = logs.slice(-6)
       .map((entry) => stripAnsi(entry?.message || '').trimEnd())
-      .filter(Boolean);
+      .filter((line) => Boolean(line) && !isWarningNoiseLine(line));
     fallback.forEach((line) => pushLine(line));
   }
 
@@ -305,6 +392,11 @@ export const buildFailingTestsPrompt = ({ label, failureReport, failingIds }) =>
   }
   if (failureReport) {
     lines.push('', 'Failure output:', String(failureReport));
+  }
+
+  const rootCauseHint = deriveRootCauseHint(deriveCanonicalFailureSignatures(failureReport));
+  if (rootCauseHint) {
+    lines.push('', rootCauseHint);
   }
   return lines.join('\n');
 };
@@ -651,12 +743,16 @@ export const buildTestFixPlan = ({ jobs, previousCoverageTargets = null }) => {
     const failureReport = ids.length > 0
       ? extractFailureReportForTestId(job, ids[0]) || extractFailureReport(job)
       : extractFailureReport(job);
+    const failureSignatures = deriveCanonicalFailureSignatures(failureReport);
     const hasFailingTests = ids.length > 0 || (job?.status === 'failed' && !coverageFailed);
     const coverageOnly = isCoverageOnlyFailure(job, failureReport, ids);
 
     if (hasFailingTests && !coverageOnly) {
       const prompt = buildFailingTestsPrompt({ label, failureReport, failingIds: ids });
-      addChild(prompt, buildTestFixMetadata({ testId: ids[0] || null, label, kind, failureReport: failureReport || null }));
+      addChild(prompt, {
+        ...buildTestFixMetadata({ testId: ids[0] || null, label, kind, failureReport: failureReport || null }),
+        ...(failureSignatures.length > 0 ? { failureSignatures } : {})
+      });
     }
 
     if (coverageFailed && !hasFailingTests) {
@@ -964,6 +1060,14 @@ export const renderLogLines = (job) => {
   }
 
   return rendered;
+};
+
+export const __testFailureAnalysisHooks = {
+  normalizeFailureSignatureTextInput,
+  normalizeFailureSignatureText,
+  deriveCanonicalFailureSignatures,
+  deriveRootCauseHint,
+  isWarningNoiseLine
 };
 
 export const buildProofFailureMessage = (testRun) => {

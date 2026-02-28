@@ -396,6 +396,48 @@ describe('Projects routes coverage (projects.js)', () => {
       expect(backendJob?.command).toBe('gradle');
     });
 
+    test('does not enqueue duplicate backend install job when frontend install already matches backend plan', async () => {
+      const projectPath = path.join(projectsRoot, `frontend-backend-same-${Date.now()}`);
+      const frontendPath = path.join(projectPath, 'frontend');
+      await ensureEmptyDir(frontendPath);
+      await fs.writeFile(path.join(frontendPath, 'package.json'), JSON.stringify({ name: 'frontend' }));
+
+      const jobs = await enqueueInstallJobs({
+        projectId: 'frontend-backend-same',
+        projectPath
+      }, {
+        resolveLayoutFn: vi.fn(async () => ({
+          frontendWorkspacePath: frontendPath,
+          frontendWorkspaceManifestPath: path.join(frontendPath, 'package.json'),
+          backendWorkspacePath: frontendPath
+        }))
+      });
+
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]).toMatchObject({ type: 'frontend:install', command: 'npm', args: ['install'], cwd: frontendPath });
+    });
+
+    test('uses fallback frontend manifest path and skips frontend job when manifest is missing', async () => {
+      const projectPath = path.join(projectsRoot, `frontend-manifest-fallback-${Date.now()}`);
+      const frontendPath = path.join(projectPath, 'frontend');
+      await ensureEmptyDir(frontendPath);
+
+      const jobs = await enqueueInstallJobs({
+        projectId: 'frontend-manifest-fallback',
+        projectPath
+      }, {
+        resolveLayoutFn: vi.fn(async () => ({
+          frontendWorkspacePath: frontendPath,
+          frontendWorkspaceManifestPath: '',
+          backendWorkspacePath: null
+        })),
+        dirExistsFn: vi.fn(async () => true),
+        fileExistsFn: vi.fn(async (candidate) => !String(candidate).endsWith(path.join('frontend', 'package.json')))
+      });
+
+      expect(jobs.find((job) => job.type === 'frontend:install')).toBeUndefined();
+    });
+
     test('logs warning when backend install job throws without a message', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const projectPath = path.join(projectsRoot, `backend-throw-${Date.now()}`);

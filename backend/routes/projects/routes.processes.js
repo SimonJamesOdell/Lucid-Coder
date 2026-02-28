@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import {
   getPortSettings,
+  getProjectGitSettings,
   getProject,
   updateProjectPorts
 } from '../../database.js';
@@ -9,6 +10,7 @@ import { startProject } from '../../services/projectScaffolding.js';
 import { generateBackendFiles } from '../../services/projectScaffolding/generate.js';
 import { sanitizeProjectName } from '../../services/projectScaffolding/files.js';
 import { startJob } from '../../services/jobRunner.js';
+import { resolveProjectLayout } from '../../services/projectLayout.js';
 import { hasUnsafeCommandCharacters } from './cleanup.js';
 import { isWithinManagedProjectsRoot } from './cleanup.js';
 import {
@@ -32,6 +34,7 @@ import {
 
 const DEFAULT_FRONTEND_PORT_BASE = Number(process.env.LUCIDCODER_PROJECT_FRONTEND_PORT_BASE) || 5100;
 const DEFAULT_BACKEND_PORT_BASE = Number(process.env.LUCIDCODER_PROJECT_BACKEND_PORT_BASE) || 5500;
+const LUCID_TEMPLATE_REMOTE = 'https://github.com/simonjamesodell/lucid-coder-default-template.git';
 
 const fileExists = async (targetPath) => {
   try {
@@ -43,6 +46,11 @@ const fileExists = async (targetPath) => {
     }
     throw error;
   }
+};
+
+const normalizePositiveInteger = (value) => {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 };
 
 const backendEntrypointExists = async (projectPath) => {
@@ -71,6 +79,71 @@ const backendEntrypointExists = async (projectPath) => {
     }
   }
   return false;
+};
+
+const normalizeRemoteUrl = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return '';
+  }
+  const withoutTrailingSlash = trimmed.replace(/\/+$/, '');
+  return withoutTrailingSlash.endsWith('.git')
+    ? withoutTrailingSlash
+    : `${withoutTrailingSlash}.git`;
+};
+
+const isLucidTemplateProject = async (projectId) => {
+  const gitSettings = await getProjectGitSettings(projectId);
+  const remoteUrl = normalizeRemoteUrl(gitSettings?.remoteUrl);
+  return remoteUrl === LUCID_TEMPLATE_REMOTE;
+};
+
+const parseOriginRemoteFromGitConfig = (gitConfigText) => {
+  if (typeof gitConfigText !== 'string' || !gitConfigText.trim()) {
+    return '';
+  }
+
+  const originSectionMatch = gitConfigText.match(/\[remote\s+"origin"\]([\s\S]*?)(\n\[|$)/i);
+  if (!originSectionMatch) {
+    return '';
+  }
+
+  const sectionBody = originSectionMatch[1];
+  const urlLineMatch = sectionBody.match(/^\s*url\s*=\s*(.+)$/im);
+  if (!urlLineMatch) {
+    return '';
+  }
+
+  return normalizeRemoteUrl(urlLineMatch[1]);
+};
+
+const isLucidTemplateByGitConfig = async (projectPath) => {
+  if (!projectPath) {
+    return false;
+  }
+
+  const gitConfigPath = path.join(projectPath, '.git', 'config');
+  if (!await fileExists(gitConfigPath)) {
+    return false;
+  }
+
+  try {
+    const gitConfigText = await fs.readFile(gitConfigPath, 'utf8');
+    return parseOriginRemoteFromGitConfig(gitConfigText) === LUCID_TEMPLATE_REMOTE;
+  } catch {
+    return false;
+  }
+};
+
+const rootBackendScriptExists = async (projectPath) => {
+  if (!projectPath) {
+    return false;
+  }
+  const layout = await resolveProjectLayout(projectPath);
+  return Boolean(layout.hasRootBackendScript);
 };
 
 export function registerProjectProcessRoutes(router) {
@@ -117,16 +190,31 @@ export function registerProjectProcessRoutes(router) {
       const running = effectiveState === 'running' || (effectiveState === 'stopped' && exposeSnapshot === true);
       const isRunning = effectiveState === 'running';
       const storedPorts = getStoredProjectPorts(project);
-      const portHints = getProjectPortHints(project);
+      const frameworkPortHints = getProjectPortHints(project);
+      const configuredPortSettings = await getPortSettings().catch(() => null);
+      const configuredPortHints = {
+        frontend: normalizePositiveInteger(configuredPortSettings?.frontendPortBase) ?? DEFAULT_FRONTEND_PORT_BASE,
+        backend: normalizePositiveInteger(configuredPortSettings?.backendPortBase) ?? DEFAULT_BACKEND_PORT_BASE
+      };
+      const portHints = {
+        frontend: storedPorts.frontend ?? configuredPortHints.frontend,
+        backend: storedPorts.backend ?? configuredPortHints.backend
+      };
       const lastKnownPorts = {
-        frontend: resolveLastKnownPort(fullSnapshot.frontend?.port, storedPorts.frontend, portHints.frontend),
-        backend: resolveLastKnownPort(fullSnapshot.backend?.port, storedPorts.backend, portHints.backend)
+        frontend: resolveLastKnownPort(fullSnapshot.frontend?.port, portHints.frontend, storedPorts.frontend),
+        backend: resolveLastKnownPort(fullSnapshot.backend?.port, portHints.backend, storedPorts.backend)
       };
       const activePorts = {
         frontend: exposedSnapshot.frontend?.port ?? lastKnownPorts.frontend,
         backend: exposedSnapshot.backend?.port ?? lastKnownPorts.backend
       };
-      const hasBackend = await backendEntrypointExists(project.path);
+      const hasConventionalBackendEntrypoint = await backendEntrypointExists(project.path);
+      const isLucidTemplate = await isLucidTemplateProject(project.id)
+        || await isLucidTemplateByGitConfig(project.path);
+      const hasLucidTemplateRootBackend = !hasConventionalBackendEntrypoint
+        && isLucidTemplate
+        && await rootBackendScriptExists(project.path);
+      const hasBackend = hasConventionalBackendEntrypoint || hasLucidTemplateRootBackend;
 
       console.log('[process-status]', id, {
         isRunning,
@@ -623,3 +711,8 @@ export function registerProjectProcessRoutes(router) {
   void ensurePortsFreed;
   void hasUnsafeCommandCharacters;
 }
+
+export const __testOnly = {
+  normalizeRemoteUrl,
+  parseOriginRemoteFromGitConfig
+};

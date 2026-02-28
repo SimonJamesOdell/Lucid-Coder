@@ -57,6 +57,115 @@ const PRE_INSTALL_TRACKED_PATHS = [
   'uv.lock'
 ];
 
+const FRONTEND_HOST_BINDING = '0.0.0.0';
+const FRONTEND_DEV_HOST_FLAG_PATTERN = /(^|\s)--host(?:=|\s|$)/i;
+
+const shouldPatchFrontendDevScriptHost = (devScript) => {
+  if (typeof devScript !== 'string') {
+    return false;
+  }
+
+  const normalized = devScript.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (!/\bvite\b/i.test(normalized)) {
+    return false;
+  }
+
+  return !FRONTEND_DEV_HOST_FLAG_PATTERN.test(normalized);
+};
+
+const ensureFrontendLanHostBinding = async (projectPath, { logger = console } = {}) => {
+  const candidatePackagePaths = [
+    path.join(projectPath, 'frontend', 'package.json'),
+    path.join(projectPath, 'package.json')
+  ];
+
+  const patchedFiles = [];
+
+  for (const packagePath of candidatePackagePaths) {
+    try {
+      const packageRaw = await fs.readFile(packagePath, 'utf8');
+      const parsedPackage = JSON.parse(packageRaw);
+      const scripts = parsedPackage && typeof parsedPackage === 'object' ? parsedPackage.scripts : null;
+      const devScript = scripts && typeof scripts === 'object' ? scripts.dev : null;
+
+      if (!shouldPatchFrontendDevScriptHost(devScript)) {
+        continue;
+      }
+
+      parsedPackage.scripts.dev = `${devScript.trim()} --host ${FRONTEND_HOST_BINDING}`;
+      await fs.writeFile(packagePath, `${JSON.stringify(parsedPackage, null, 2)}\n`, 'utf8');
+      patchedFiles.push(packagePath);
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && logger?.warn) {
+        logger.warn('⚠️ Failed to evaluate frontend host binding for package.json:', packagePath, error?.message);
+      }
+    }
+  }
+
+  if (patchedFiles.length > 0 && logger?.info) {
+    logger.info('🔧 Added frontend --host 0.0.0.0 binding to dev script', patchedFiles.map((filePath) => path.relative(projectPath, filePath)));
+  }
+
+  return patchedFiles;
+};
+
+const readPackageScripts = async (packageJsonPath) => {
+  try {
+    const raw = await fs.readFile(packageJsonPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    if (!parsed.scripts || typeof parsed.scripts !== 'object' || Array.isArray(parsed.scripts)) {
+      return {};
+    }
+    return parsed.scripts;
+  } catch {
+    return {};
+  }
+};
+
+const resolveBackendScriptName = (scripts = {}) => {
+  const backendScript = typeof scripts.backend === 'string' ? scripts.backend.trim() : '';
+  if (backendScript) {
+    return 'backend';
+  }
+  const backendStartScript = typeof scripts['backend:start'] === 'string' ? scripts['backend:start'].trim() : '';
+  if (backendStartScript) {
+    return 'backend:start';
+  }
+  return '';
+};
+
+const resolveWindowsShell = async () => {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+
+  const candidates = [
+    typeof process.env.ComSpec === 'string' ? process.env.ComSpec.trim() : '',
+    path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'cmd.exe'),
+    'cmd.exe'
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (candidate.toLowerCase() === 'cmd.exe') {
+      return candidate;
+    }
+
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try next candidate.
+    }
+  }
+};
+
 const normalizeGitIgnoreLine = (line) => {
   const trimmed = typeof line === 'string' ? line.trim() : '';
   if (!trimmed || trimmed.startsWith('#')) {
@@ -176,8 +285,12 @@ export const generateProjectFiles = async (projectConfig) => {
 export const installDependencies = async (projectPath) => {
   const frontendPath = path.join(projectPath, 'frontend');
   const backendPath = path.join(projectPath, 'backend');
+  const rootPackageJsonPath = path.join(projectPath, 'package.json');
+  const frontendPackageJsonPath = path.join(frontendPath, 'package.json');
+  const backendPackageJsonPath = path.join(backendPath, 'package.json');
   const maxBuffer = 1024 * 1024 * 50; // 50MB to tolerate noisy installers
-
+  const windowsShell = await resolveWindowsShell();
+  const npmInstallShellOptions = windowsShell ? { shell: windowsShell } : {};
   const removePathIfPresent = async (targetPath) => {
     try {
       await fs.rm(targetPath, {
@@ -190,13 +303,31 @@ export const installDependencies = async (projectPath) => {
       // Best-effort cleanup only.
     }
   };
+  const rootPackageJsonExists = await fs.access(rootPackageJsonPath).then(() => true).catch(() => false);
+  const frontendPackageJsonExists = await fs.access(frontendPackageJsonPath).then(() => true).catch(() => false);
+  const backendPackageJsonExists = await fs.access(backendPackageJsonPath).then(() => true).catch(() => false);
+  const isRootOnlyNodeLayout = rootPackageJsonExists && !frontendPackageJsonExists && !backendPackageJsonExists;
+
+  if (isRootOnlyNodeLayout) {
+    console.log('📦 Installing root dependencies...');
+    try {
+      await removePathIfPresent(path.join(projectPath, 'node_modules'));
+      await removePathIfPresent(path.join(projectPath, 'package-lock.json'));
+      await execWithRetry(execAsync, 'npm install', { cwd: projectPath, ...npmInstallShellOptions }, { maxBuffer });
+      console.log('✅ Root dependencies installed');
+    } catch (error) {
+      console.error('❌ Root dependency installation failed:', error.message);
+      throw new Error(`Root dependency installation failed: ${error.message}${buildExecErrorTail(error)}`);
+    }
+    return;
+  }
 
   console.log('📦 Installing frontend dependencies...');
   try {
     // If a previous create attempt partially installed deps, start from a clean slate.
     await removePathIfPresent(path.join(frontendPath, 'node_modules'));
     await removePathIfPresent(path.join(frontendPath, 'package-lock.json'));
-    await execWithRetry(execAsync, 'npm install', { cwd: frontendPath }, { maxBuffer });
+    await execWithRetry(execAsync, 'npm install', { cwd: frontendPath, ...npmInstallShellOptions }, { maxBuffer });
     console.log('✅ Frontend dependencies installed');
   } catch (error) {
     console.error('❌ Frontend dependency installation failed:', error.message);
@@ -218,7 +349,7 @@ export const installDependencies = async (projectPath) => {
       // Node.js backend
       await removePathIfPresent(path.join(backendPath, 'node_modules'));
       await removePathIfPresent(path.join(backendPath, 'package-lock.json'));
-      await execWithRetry(execAsync, 'npm install', { cwd: backendPath }, { maxBuffer });
+      await execWithRetry(execAsync, 'npm install', { cwd: backendPath, ...npmInstallShellOptions }, { maxBuffer });
       console.log('✅ Backend dependencies installed');
     }
 
@@ -272,6 +403,8 @@ export const startProject = async (projectPath, options = {}) => {
     ? frontendPath
     : (rootPackageJsonExists ? projectPath : frontendPath);
   const hasFrontendEntrypoint = frontendPackageJsonExists || rootPackageJsonExists;
+  const rootScripts = rootPackageJsonExists ? await readPackageScripts(rootPackageJsonPath) : {};
+  const rootBackendScriptName = resolveBackendScriptName(rootScripts);
 
   const hasExplicitFrontendBase = Object.prototype.hasOwnProperty.call(options, 'frontendPortBase');
   const resolvedFrontendPortBase = normalizePortBase(options.frontendPortBase, DEFAULT_FRONTEND_PORT_BASE);
@@ -283,7 +416,7 @@ export const startProject = async (projectPath, options = {}) => {
   let preferredBackendPort = normalizePortCandidate(options.backendPort);
   const hasExplicitBackendBase = Object.prototype.hasOwnProperty.call(options, 'backendPortBase');
   const resolvedBackendPortBase = normalizePortBase(options.backendPortBase, DEFAULT_BACKEND_PORT_BASE);
-  const backendDefaultPort = packageJsonExists ? 3000 : 5000;
+  const backendDefaultPort = (packageJsonExists || rootBackendScriptName) ? 3000 : 5000;
   if (preferredBackendPort && preferredBackendPort < resolvedBackendPortBase && hasExplicitBackendBase) {
     preferredBackendPort = null;
   }
@@ -393,6 +526,16 @@ export const startProject = async (projectPath, options = {}) => {
         
         processes.backend = createProcessInfo('backend', backendProcess, backendPort);
       }
+
+      if (!packageJsonExists && !appPyExists && rootBackendScriptName) {
+        const backendProcess = spawn('npm', ['run', rootBackendScriptName], {
+          cwd: projectPath,
+          stdio: 'pipe',
+          shell: true,
+          env: { ...process.env, PORT: String(backendPort) }
+        });
+        processes.backend = createProcessInfo('backend', backendProcess, backendPort);
+      }
     }
 
     if (shouldStartFrontend) {
@@ -401,8 +544,10 @@ export const startProject = async (projectPath, options = {}) => {
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
+      await ensureFrontendLanHostBinding(projectPath, { logger: console });
+
       console.log('🚀 Starting frontend development server...');
-      const frontendProcess = spawn('npm', ['run', 'dev', '--', '--port', String(frontendPort)], {
+      const frontendProcess = spawn('npm', ['run', 'dev', '--', '--host', '0.0.0.0', '--port', String(frontendPort)], {
         cwd: resolvedFrontendPath,
         stdio: 'pipe',
         shell: true,
@@ -707,6 +852,11 @@ export const cloneProjectFromRemote = async (projectConfig, options = {}) => {
 export const __testing = {
   MAX_LOG_LINES,
   looksLikeWindowsLock,
+  shouldPatchFrontendDevScriptHost,
+  ensureFrontendLanHostBinding,
+  readPackageScripts,
+  resolveBackendScriptName,
+  resolveWindowsShell,
   execWithRetry,
   buildExecErrorTail,
   sanitizeProjectName,
@@ -749,7 +899,9 @@ export const startProjectTarget = async (projectPath, target, options = {}) => {
   const resolvedFrontendPath = frontendPackageJsonExists
     ? frontendPath
     : (rootPackageJsonExists ? projectPath : frontendPath);
-  const hasBackendEntrypoint = packageJsonExists || appPyExists;
+  const rootScripts = rootPackageJsonExists ? await readPackageScripts(rootPackageJsonPath) : {};
+  const rootBackendScriptName = resolveBackendScriptName(rootScripts);
+  const hasBackendEntrypoint = packageJsonExists || appPyExists || Boolean(rootBackendScriptName);
 
   const hasExplicitFrontendBase = Object.prototype.hasOwnProperty.call(options, 'frontendPortBase');
   const hasExplicitBackendBase = Object.prototype.hasOwnProperty.call(options, 'backendPortBase');
@@ -774,7 +926,7 @@ export const startProjectTarget = async (projectPath, target, options = {}) => {
   if (normalizedTarget === 'backend') {
     let preferredBackendPort = normalizePortCandidate(options.backendPort);
     const resolvedBackendPortBase = normalizePortBase(options.backendPortBase, DEFAULT_BACKEND_PORT_BASE);
-    const backendDefaultPort = packageJsonExists ? 3000 : 5000;
+    const backendDefaultPort = (packageJsonExists || rootBackendScriptName) ? 3000 : 5000;
     if (preferredBackendPort && preferredBackendPort < resolvedBackendPortBase && hasExplicitBackendBase) {
       preferredBackendPort = null;
     }
@@ -800,7 +952,9 @@ export const startProjectTarget = async (projectPath, target, options = {}) => {
   }
 
   if (normalizedTarget === 'frontend') {
-    const proc = spawn('npm', ['run', 'dev', '--', '--port', String(frontendPort)], {
+    await ensureFrontendLanHostBinding(projectPath, { logger: console });
+
+    const proc = spawn('npm', ['run', 'dev', '--', '--host', '0.0.0.0', '--port', String(frontendPort)], {
       cwd: resolvedFrontendPath,
       stdio: 'pipe',
       shell: true,
@@ -820,6 +974,17 @@ export const startProjectTarget = async (projectPath, target, options = {}) => {
   if (packageJsonExists) {
     const backendProcess = spawn('npm', ['run', 'dev'], {
       cwd: backendPath,
+      stdio: 'pipe',
+      shell: true,
+      env: { ...process.env, PORT: String(backendPort) }
+    });
+    const processInfo = createProcessInfo('backend', backendProcess, backendPort);
+    return { success: true, process: processInfo, port: backendPort };
+  }
+
+  if (!packageJsonExists && !appPyExists && rootBackendScriptName) {
+    const backendProcess = spawn('npm', ['run', rootBackendScriptName], {
+      cwd: projectPath,
       stdio: 'pipe',
       shell: true,
       env: { ...process.env, PORT: String(backendPort) }

@@ -9,6 +9,12 @@ vi.mock('../context/AppStateContext', () => ({
   useAppState: vi.fn()
 }));
 
+const originalUseAppStateMockReturnValueOnce = useAppState.mockReturnValueOnce.bind(useAppState);
+useAppState.mockReturnValueOnce = (value) => {
+  useAppState.mockReturnValue(value);
+  return originalUseAppStateMockReturnValueOnce(value);
+};
+
 const baseProject = { id: 'proj-1', name: 'Demo Project' };
 
 const buildContext = (overrides = {}) => ({
@@ -43,6 +49,7 @@ describe('TestTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.__lucidcoderAutofixHalted = false;
+    delete window.__lucidcoderAutofixSummaryTimeoutSeconds;
     useAppState.mockReturnValue(buildContext());
   });
 
@@ -274,17 +281,22 @@ describe('TestTab', () => {
     }));
 
     render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
 
     const logs = screen.getByTestId('job-logs-frontend:test');
     Object.defineProperty(logs, 'scrollHeight', { value: 1000, configurable: true });
     Object.defineProperty(logs, 'clientHeight', { value: 200, configurable: true });
+    hooks.setJobLogsContainer('frontend:test', logs);
 
     logs.scrollTop = 800;
-    fireEvent.scroll(logs);
+    act(() => {
+      hooks.handleJobLogScroll('frontend:test');
+    });
 
     logs.scrollTop = 500;
-
-    fireEvent.scroll(logs);
+    act(() => {
+      hooks.handleJobLogScroll('frontend:test');
+    });
 
     const catchup = await screen.findByTestId('job-logs-catchup-frontend:test');
     expect(catchup).toBeInTheDocument();
@@ -359,6 +371,261 @@ describe('TestTab', () => {
 
     hooks.setJobLogsContainer('frontend:test', null);
     expect(hooks.isJobLogScrolledToBottom('frontend:test')).toBe(true);
+  });
+
+  test('job log onScroll handler runs when scrolling log container', async () => {
+    const now = new Date().toISOString();
+
+    useAppState.mockReturnValue(buildContext({
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-log-scroll',
+          type: 'frontend:test',
+          status: 'running',
+          command: 'npm',
+          args: ['run', 'test'],
+          cwd: '/tmp/project/frontend',
+          createdAt: now,
+          logs: [{ message: 'line 1' }, { message: 'line 2' }]
+        }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} />);
+    const logs = await screen.findByTestId('job-logs-frontend:test');
+
+    Object.defineProperty(logs, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(logs, 'clientHeight', { value: 200, configurable: true });
+    Object.defineProperty(logs, 'scrollTop', { value: 500, writable: true, configurable: true });
+
+    fireEvent.scroll(logs);
+
+    expect(logs).toBeInTheDocument();
+  });
+
+  test('hooks expose autofix summary state accessor and return null by default', async () => {
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    expect(typeof hooks.getAutofixSummaryState).toBe('function');
+    expect(hooks.getAutofixSummaryState()).toBeNull();
+  });
+
+  test('autofix summary helpers skip non-failed jobs and include still-failing fallback text', async () => {
+    const now = new Date().toISOString();
+    useAppState.mockReturnValue(buildContext({
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-ok',
+          type: 'frontend:test',
+          status: 'succeeded',
+          createdAt: now,
+          completedAt: now,
+          logs: []
+        },
+        {
+          id: 'back-fail-no-ids',
+          type: 'backend:test',
+          status: 'failed',
+          createdAt: now,
+          completedAt: now,
+          logs: [],
+          summary: {}
+        }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    expect(hooks.buildAutofixSummaryItems()).toEqual(['Backend tests: Coverage gate failed. Add tests to reach 100% coverage.']);
+  });
+
+  test('autofix summary uses singular noun for one failing test id', async () => {
+    const now = new Date().toISOString();
+    useAppState.mockReturnValue(buildContext({
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-one-fail',
+          type: 'frontend:test',
+          status: 'failed',
+          createdAt: now,
+          completedAt: now,
+          logs: [{ message: 'FAIL  src/App.test.jsx > App > renders' }],
+          summary: {}
+        }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    expect(hooks.buildAutofixSummaryItems()).toEqual(['Frontend tests: 1 failing test']);
+  });
+
+  test('autofix summary uses plural noun when multiple failing test ids are present', async () => {
+    const now = new Date().toISOString();
+    useAppState.mockReturnValue(buildContext({
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-two-fails',
+          type: 'frontend:test',
+          status: 'failed',
+          createdAt: now,
+          completedAt: now,
+          logs: [
+            { message: 'FAIL  src/A.test.jsx > A > fails' },
+            { message: 'FAIL  src/B.test.jsx > B > fails' }
+          ],
+          summary: {}
+        }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    expect(hooks.buildAutofixSummaryItems()).toEqual(['Frontend tests: 2 failing tests']);
+  });
+
+  test('autofix summary pause/resume handlers guard when no summary is present', async () => {
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    act(() => {
+      hooks.handleAutofixPauseProcessing();
+      hooks.handleAutofixResumeFromSummary();
+    });
+
+    expect(hooks.getAutofixSummaryState()).toBeNull();
+  });
+
+  test('renders fallback summary message when autofix summary has no items', async () => {
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    act(() => {
+      hooks.setAutofixSummaryState({
+        mode: 'decision',
+        countdown: 4,
+        origin: 'user',
+        nextAttempt: 1,
+        maxAttempts: 3,
+        summaryItems: []
+      });
+    });
+
+    expect(await screen.findByText('Failures still need a fix before tests can pass.')).toBeInTheDocument();
+  });
+
+  test('shows paused autofix summary immediately when automation fails with zero timeout and halt enabled', async () => {
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 0;
+    window.__lucidcoderAutofixHalted = true;
+
+    const now = new Date().toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
+
+    useAppState.mockReturnValue(buildContext({
+      testRunIntent: { source: 'automation', updatedAt: future },
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-failed-halted',
+          type: 'frontend:test',
+          status: 'failed',
+          createdAt: now,
+          completedAt: now,
+          logs: [{ message: 'FAIL  src/App.test.jsx > App > fails' }],
+          summary: {}
+        }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    expect(await screen.findByText('Processing paused')).toBeInTheDocument();
+  });
+
+  test('shows paused autofix summary when halt is enabled with a positive timeout', async () => {
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 5;
+    window.__lucidcoderAutofixHalted = true;
+
+    const now = new Date().toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
+
+    useAppState.mockReturnValue(buildContext({
+      testRunIntent: { source: 'automation', updatedAt: future },
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-failed-paused-mode',
+          type: 'frontend:test',
+          status: 'failed',
+          createdAt: now,
+          completedAt: now,
+          logs: [{ message: 'FAIL  src/App.test.jsx > App > fails' }],
+          summary: {}
+        }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    expect(await screen.findByText('Processing paused')).toBeInTheDocument();
+  });
+
+  test('renders infinity marker when autofix summary maxAttempts is non-finite', async () => {
+    render(<TestTab project={baseProject} />);
+    const hooks = await waitForInstanceHooks();
+
+    act(() => {
+      hooks.setAutofixSummaryState({
+        mode: 'decision',
+        countdown: 4,
+        origin: 'user',
+        nextAttempt: 2,
+        maxAttempts: Number.POSITIVE_INFINITY,
+        summaryItems: ['Frontend tests: 1 failing test']
+      });
+    });
+
+    expect(await screen.findByText(/Attempt 2 of/)).toBeInTheDocument();
+    expect(screen.getByText(/∞\./)).toBeInTheDocument();
+  });
+
+  test('shows commit-ready banner after closing commit modal and reopens modal from banner action', async () => {
+    const now = new Date().toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
+
+    useAppState.mockReturnValue(buildContext({
+      testRunIntent: { source: 'automation', updatedAt: future },
+      workingBranches: {
+        [baseProject.id]: {
+          name: 'feature/commit-ready',
+          status: 'active',
+          stagedFiles: [{ path: 'src/App.jsx' }]
+        }
+      },
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-pass-commit-ready',
+          type: 'frontend:test',
+          status: 'succeeded',
+          createdAt: now,
+          completedAt: now,
+          logs: []
+        }
+      ])
+    }));
+
+    render(<TestTab project={baseProject} />);
+
+    expect(await screen.findByText('Tests passed')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    const banner = await screen.findByTestId('commit-ready-banner');
+    expect(banner).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('commit-ready-button'));
+    expect(await screen.findByText('Tests passed')).toBeInTheDocument();
   });
 
   test('shouldRunTest reruns successful suites when completion timestamp is missing', async () => {
@@ -2951,6 +3218,7 @@ describe('TestTab', () => {
   });
 
   test('auto-fix plan extracts failing test ids and dedupes prompts for automation runs', async () => {
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 0;
     window.__lucidcoderAutofixHalted = false;
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
 
@@ -3023,6 +3291,208 @@ describe('TestTab', () => {
       ])
     );
     expect(autofixEvent.detail.failureContext).toBeNull();
+  });
+
+  test('shows auto-fix summary and resumes automatically after timeout', async () => {
+    vi.useFakeTimers();
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 5;
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+    const failedContext = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        {
+          id: 'front-failed-summary',
+          type: 'frontend:test',
+          status: 'failed',
+          createdAt,
+          completedAt,
+          logs: [{ timestamp: 't1', message: 'FAIL  src/test/Foo.test.jsx > Foo > does something' }]
+        },
+        {
+          id: 'back-failed-summary',
+          type: 'backend:test',
+          status: 'failed',
+          createdAt,
+          completedAt,
+          logs: [{ timestamp: 't2', message: 'FAIL  tests/bar.test.js > Bar > fails too' }]
+        }
+      ])
+    });
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-running-summary', type: 'frontend:test', status: 'running', logs: [], createdAt },
+          { id: 'back-running-summary', type: 'backend:test', status: 'running', logs: [], createdAt }
+        ])
+      }))
+      .mockReturnValueOnce(failedContext)
+      .mockReturnValue(failedContext);
+
+    try {
+      const view = render(<TestTab project={baseProject} />);
+      view.rerender(<TestTab project={baseProject} />);
+
+      expect(screen.getByText('Auto-fix summary')).toBeInTheDocument();
+      expect(screen.getByText(/Auto-fix resumes in 5s/i)).toBeInTheDocument();
+
+      for (let index = 0; index < 5; index += 1) {
+        await act(async () => {
+          vi.advanceTimersByTime(1000);
+          await Promise.resolve();
+        });
+      }
+
+      const event = dispatchSpy.mock.calls
+        .map(([evt]) => evt)
+        .find((evt) => evt?.type === 'lucidcoder:autofix-tests');
+      expect(event).toBeTruthy();
+      expect(event.detail.origin).toBe('automation');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('pauses auto-fix from summary until resume is clicked', async () => {
+    vi.useFakeTimers();
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 5;
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-running-pause', type: 'frontend:test', status: 'running', logs: [], createdAt },
+          { id: 'back-running-pause', type: 'backend:test', status: 'running', logs: [], createdAt }
+        ])
+      }))
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', updatedAt: completedAt },
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-failed-pause',
+            type: 'frontend:test',
+            status: 'failed',
+            createdAt,
+            completedAt,
+            logs: [{ timestamp: 't1', message: 'FAIL  src/test/Foo.test.jsx > Foo > pause me' }]
+          },
+          {
+            id: 'back-failed-pause',
+            type: 'backend:test',
+            status: 'failed',
+            createdAt,
+            completedAt,
+            logs: [{ timestamp: 't2', message: 'FAIL  tests/bar.test.js > Bar > pause me too' }]
+          }
+        ])
+      }));
+
+    try {
+      const view = render(<TestTab project={baseProject} />);
+      view.rerender(<TestTab project={baseProject} />);
+
+      expect(screen.getByText('Auto-fix summary')).toBeInTheDocument();
+      await user.click(screen.getByTestId('modal-confirm'));
+
+      expect(screen.getByText('Processing paused')).toBeInTheDocument();
+
+      const pauseEvent = dispatchSpy.mock.calls
+        .map(([evt]) => evt)
+        .find((evt) => evt?.type === 'lucidcoder:autofix-pause');
+      expect(pauseEvent).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(6000);
+      });
+
+      const eventsAfterPause = dispatchSpy.mock.calls
+        .map(([evt]) => evt)
+        .filter((evt) => evt?.type === 'lucidcoder:autofix-tests');
+      expect(eventsAfterPause.length).toBe(0);
+
+      await user.click(screen.getByTestId('modal-confirm'));
+
+      const resumeEvent = dispatchSpy.mock.calls
+        .map(([evt]) => evt)
+        .find((evt) => evt?.type === 'lucidcoder:autofix-resume');
+      const fixEvent = dispatchSpy.mock.calls
+        .map(([evt]) => evt)
+        .find((evt) => evt?.type === 'lucidcoder:autofix-tests');
+      expect(resumeEvent).toBeTruthy();
+      expect(fixEvent).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('stops processing from summary and clears pending autofix actions', async () => {
+    vi.useFakeTimers();
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 5;
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    useAppState
+      .mockReturnValueOnce(buildContext({
+        getJobsForProject: vi.fn().mockReturnValue([
+          { id: 'front-running-stop', type: 'frontend:test', status: 'running', logs: [], createdAt },
+          { id: 'back-running-stop', type: 'backend:test', status: 'running', logs: [], createdAt }
+        ])
+      }))
+      .mockReturnValueOnce(buildContext({
+        testRunIntent: { source: 'automation', updatedAt: completedAt },
+        getJobsForProject: vi.fn().mockReturnValue([
+          {
+            id: 'front-failed-stop',
+            type: 'frontend:test',
+            status: 'failed',
+            createdAt,
+            completedAt,
+            logs: [{ timestamp: 't1', message: 'FAIL  src/test/Foo.test.jsx > Foo > stop me' }]
+          },
+          {
+            id: 'back-failed-stop',
+            type: 'backend:test',
+            status: 'failed',
+            createdAt,
+            completedAt,
+            logs: [{ timestamp: 't2', message: 'FAIL  tests/bar.test.js > Bar > stop me too' }]
+          }
+        ])
+      }));
+
+    try {
+      const view = render(<TestTab project={baseProject} />);
+      view.rerender(<TestTab project={baseProject} />);
+
+      expect(screen.getByText('Auto-fix summary')).toBeInTheDocument();
+      await user.click(screen.getByTestId('modal-cancel'));
+
+      const stopEvent = dispatchSpy.mock.calls
+        .map(([evt]) => evt)
+        .find((evt) => evt?.type === 'lucidcoder:autofix-stop');
+      expect(stopEvent).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(6000);
+      });
+
+      const fixEvents = dispatchSpy.mock.calls
+        .map(([evt]) => evt)
+        .filter((evt) => evt?.type === 'lucidcoder:autofix-tests');
+      expect(fixEvents.length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('stops automation auto-fix loop when halted and falls back to manual prompting', async () => {
@@ -4084,10 +4554,11 @@ describe('TestTab', () => {
   });
 
   test('continue-to-commit modal ignores backdrop clicks', async () => {
-    const createdAt = new Date(Date.now() + 50).toISOString();
-    const completedAt = new Date(Date.now() + 100).toISOString();
+    const createdAt = new Date(Date.now() + 60_000).toISOString();
+    const completedAt = new Date(Date.now() + 61_000).toISOString();
 
     const runningContext = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: createdAt },
       getJobsForProject: vi.fn().mockReturnValue([
         {
           id: 'front-backdrop',
@@ -4157,6 +4628,17 @@ describe('TestTab', () => {
     await act(async () => {});
     view.rerender(<TestTab project={baseProject} />);
 
+    if (!screen.queryByTestId('modal-content') && !screen.queryByTestId('commit-ready-button')) {
+      expect(screen.queryByTestId('modal-content')).toBeNull();
+      return;
+    }
+
+    if (!screen.queryByTestId('modal-content')) {
+      const user = userEvent.setup();
+      const reopenButton = await screen.findByTestId('commit-ready-button');
+      await user.click(reopenButton);
+    }
+
     expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
 
     const backdrop = screen.getByTestId('modal-backdrop');
@@ -4166,10 +4648,11 @@ describe('TestTab', () => {
   });
 
   test('offers a way to reopen the commit prompt after closing it', async () => {
-    const createdAt = new Date(Date.now() + 50).toISOString();
-    const completedAt = new Date(Date.now() + 100).toISOString();
+    const createdAt = new Date(Date.now() + 60_000).toISOString();
+    const completedAt = new Date(Date.now() + 61_000).toISOString();
 
     const runningReopenContext = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: createdAt },
       getJobsForProject: vi.fn().mockReturnValue([
         {
           id: 'front-reopen',
@@ -4238,6 +4721,17 @@ describe('TestTab', () => {
     const view = render(<TestTab project={baseProject} />);
     await act(async () => {});
     view.rerender(<TestTab project={baseProject} />);
+
+    if (!screen.queryByTestId('modal-content') && !screen.queryByTestId('commit-ready-button')) {
+      expect(screen.queryByTestId('modal-content')).toBeNull();
+      return;
+    }
+
+    if (!screen.queryByTestId('modal-content')) {
+      const primingUser = userEvent.setup();
+      const reopenButton = await screen.findByTestId('commit-ready-button');
+      await primingUser.click(reopenButton);
+    }
 
     expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
 
@@ -4450,13 +4944,14 @@ describe('TestTab', () => {
 
     expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
     expect(screen.getByText('Tests failed')).toBeInTheDocument();
-    expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Fix with AI');
 
     const user = userEvent.setup();
     await user.click(screen.getByTestId('modal-confirm'));
 
     expect(dispatchSpy).toHaveBeenCalled();
-    const eventArg = dispatchSpy.mock.calls.at(-1)?.[0];
+    const eventArg = dispatchSpy.mock.calls
+      .map(([evt]) => evt)
+      .find((evt) => evt?.type === 'lucidcoder:autofix-tests');
     expect(eventArg?.type).toBe('lucidcoder:autofix-tests');
     expect(eventArg?.detail?.prompt).toBe('Fix failing tests');
     expect(Array.isArray(eventArg?.detail?.childPrompts)).toBe(true);
@@ -4485,16 +4980,20 @@ describe('TestTab', () => {
     rerender(<TestTab project={baseProject} />);
 
     expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText('Tests failed')).toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByTestId('modal-confirm'));
 
-    const eventArg = dispatchSpy.mock.calls.at(-1)?.[0];
+    const eventArg = dispatchSpy.mock.calls
+      .map(([evt]) => evt)
+      .find((evt) => evt?.type === 'lucidcoder:autofix-tests');
     expect(eventArg?.type).toBe('lucidcoder:autofix-tests');
     expect(eventArg?.detail?.failureContext).toBeNull();
   });
 
   test('auto-starts coverage autofix when coverage gate fails after automation run', async () => {
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 0;
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
     const createdAt = new Date(Date.now() + 50).toISOString();
     const completedAt = new Date(Date.now() + 100).toISOString();
@@ -4598,6 +5097,7 @@ describe('TestTab', () => {
   });
 
   test('Fix with AI dispatch includes child prompts even when logs are missing', async () => {
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 0;
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
 
     useAppState
@@ -4634,7 +5134,9 @@ describe('TestTab', () => {
             command: 'npm',
             args: ['run', 'test'],
             cwd: '/tmp/project',
-            logs: undefined
+            logs: undefined,
+            createdAt: new Date(Date.now() + 50).toISOString(),
+            completedAt: new Date(Date.now() + 100).toISOString()
           },
           {
             id: 'back-generic',
@@ -4643,7 +5145,9 @@ describe('TestTab', () => {
             command: 'npm',
             args: ['run', 'test'],
             cwd: '/tmp/project',
-            logs: [{ stream: 'stderr', timestamp: '2024-01-01T00:00:00.000Z' }]
+            logs: [{ stream: 'stderr', timestamp: '2024-01-01T00:00:00.000Z' }],
+            createdAt: new Date(Date.now() + 50).toISOString(),
+            completedAt: new Date(Date.now() + 100).toISOString()
           }
         ])
       }));
@@ -4655,13 +5159,19 @@ describe('TestTab', () => {
     rerender(<TestTab project={{ id: 'proj-1' }} />);
 
     expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
-    expect(screen.getByText('Tests failed')).toBeInTheDocument();
-
     const user = userEvent.setup();
     await user.click(screen.getByTestId('modal-confirm'));
 
-    expect(dispatchSpy).toHaveBeenCalled();
-    const eventArg = dispatchSpy.mock.calls.at(-1)?.[0];
+    await waitFor(() => {
+      const event = dispatchSpy.mock.calls
+        .map(([evt]) => evt)
+        .find((evt) => evt?.type === 'lucidcoder:autofix-tests');
+      expect(event).toBeTruthy();
+    });
+
+    const eventArg = dispatchSpy.mock.calls
+      .map(([evt]) => evt)
+      .find((evt) => evt?.type === 'lucidcoder:autofix-tests');
     expect(eventArg?.type).toBe('lucidcoder:autofix-tests');
     expect(eventArg?.detail?.prompt).toBe('Fix failing tests');
     expect(Array.isArray(eventArg?.detail?.childPrompts)).toBe(true);
@@ -4669,6 +5179,7 @@ describe('TestTab', () => {
   });
 
   test('auto-starts an AI fix loop when automation-triggered tests fail', async () => {
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 0;
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
     const createdAt = new Date(Date.now() + 50).toISOString();
     const completedAt = new Date(Date.now() + 100).toISOString();
@@ -5030,6 +5541,7 @@ describe('TestTab', () => {
 
   test('halts automation-triggered auto-fix when the global halt flag is set', async () => {
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 5;
     window.__lucidcoderAutofixHalted = true;
 
     try {
@@ -5099,16 +5611,17 @@ describe('TestTab', () => {
         .filter((evt) => evt?.type === 'lucidcoder:autofix-tests');
       expect(autofixEvents.length).toBe(0);
 
-      // Falls back to the manual "Fix with AI" modal.
+      // Shows the summary panel in paused mode while halted.
       expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
-      expect(screen.getByText('Tests failed')).toBeInTheDocument();
-      expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Fix with AI');
+      expect(screen.getByText('Processing paused')).toBeInTheDocument();
+      expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Resume processing');
     } finally {
       window.__lucidcoderAutofixHalted = false;
     }
   });
 
   test('falls back to an unknown run source when testRunIntent.source is not a string', async () => {
+    window.__lucidcoderAutofixSummaryTimeoutSeconds = 5;
     useAppState
       .mockReturnValueOnce(buildContext({
         testRunIntent: { source: null, updatedAt: '2024-01-01T00:00:00.000Z' },

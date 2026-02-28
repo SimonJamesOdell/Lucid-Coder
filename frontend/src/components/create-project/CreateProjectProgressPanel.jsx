@@ -1,4 +1,5 @@
 import React from 'react';
+import Modal from '../Modal';
 
 const CreateProjectProgressPanel = ({
   progress,
@@ -12,6 +13,27 @@ const CreateProjectProgressPanel = ({
   if (!progress) {
     return null;
   }
+
+  const missingEntries = Array.isArray(gitIgnoreSuggestion?.entries)
+    ? gitIgnoreSuggestion.entries.filter((entry) => typeof entry === 'string' && entry.trim())
+    : [];
+  const trackedInstallFiles = Array.isArray(gitIgnoreSuggestion?.trackedFiles)
+    ? gitIgnoreSuggestion.trackedFiles.filter((entry) => typeof entry === 'string' && entry.trim())
+    : [];
+
+  const issueSummaryParts = [];
+  if (missingEntries.length > 0) {
+    issueSummaryParts.push(`missing .gitignore entries: ${missingEntries.join(', ')}`);
+  }
+  if (trackedInstallFiles.length > 0) {
+    issueSummaryParts.push(`tracked install files: ${trackedInstallFiles.join(', ')}`);
+  }
+  const issueSummaryText = issueSummaryParts.length > 0
+    ? issueSummaryParts.join('; ')
+    : 'setup detected .gitignore issues for this repository.';
+
+  const hasMissingEntries = missingEntries.length > 0;
+  const hasTrackedInstallFiles = trackedInstallFiles.length > 0;
 
   return (
     <div className="progress-container">
@@ -45,68 +67,72 @@ const CreateProjectProgressPanel = ({
           <p>Backend running on: <a href={`http://localhost:${processes.backend.port}`} target="_blank" rel="noopener noreferrer">http://localhost:{processes.backend.port}</a></p>
         </div>
       )}
-      {gitIgnoreSuggestion && gitIgnoreStatus.state !== 'working' && (
-        <div className="gitignore-suggestion">
-          <h5>This repo is missing information in it's .gitignore file which will result in issues when used with Lucid Coder.</h5>
-          <p>
-            If you want to continue, we can fix this issue automatically.
-          </p>
-          {gitIgnoreSuggestion.entries.length > 0 && (
+      <Modal
+        isOpen={Boolean(gitIgnoreSuggestion) && gitIgnoreStatus.state !== 'working'}
+        onClose={gitIgnoreStatus.state === 'done' ? onContinueAfterGitIgnore : onSkipGitIgnore}
+        onConfirm={gitIgnoreStatus.state === 'done' ? onContinueAfterGitIgnore : onApplyGitIgnore}
+        contentClassName="modal-wide"
+        title="Fix .gitignore issues"
+        message={(
+          <div className="gitignore-suggestion">
+            <h5>Setup check failed: this repository has .gitignore issues that can break Lucid Coder setup.</h5>
             <p>
-              Suggested entries:
+              Detected issue: {issueSummaryText}
             </p>
-          )}
-          <ul>
-            {gitIgnoreSuggestion.entries.map((entry) => (
-              <li key={entry}><code>{entry}</code></li>
-            ))}
-          </ul>
-          {gitIgnoreSuggestion.trackedFiles?.length > 0 && (
-            <p className="gitignore-warning">
-              Note: installs will update tracked files ({gitIgnoreSuggestion.trackedFiles.join(', ')}),
-              so the working tree may still show changes.
+            {hasTrackedInstallFiles && (
+              <p>
+                Why this is a problem: dependency installs modify these tracked files, which can leave your working tree dirty and make
+                Lucid Coder detect unrelated file changes.
+              </p>
+            )}
+            {hasMissingEntries && (
+              <p>
+                Why this is a problem: generated dependency/build artifacts can be committed by mistake and interfere with automation.
+              </p>
+            )}
+            <p>
+              What auto-fix will change: {hasMissingEntries
+                ? `append ${missingEntries.length} missing entr${missingEntries.length === 1 ? 'y' : 'ies'} to .gitignore${hasTrackedInstallFiles ? ' and commit .gitignore.' : '.'}`
+                : 'no new .gitignore entries will be added.'}
+              {hasTrackedInstallFiles
+                ? ' Already tracked files (for example package-lock.json) are not untracked automatically.'
+                : ''}
             </p>
-          )}
-          {gitIgnoreSuggestion.samplePaths?.length > 0 && (
-            <p className="gitignore-sample">
-              Detected: {gitIgnoreSuggestion.samplePaths.join(', ')}
+            <p>
+              If you want to continue, we can fix this automatically.
             </p>
-          )}
-          {gitIgnoreStatus.state === 'error' && (
-            <div className="gitignore-error">{gitIgnoreStatus.error}</div>
-          )}
-          <div className="gitignore-actions">
-            {gitIgnoreStatus.state !== 'done' ? (
-              <>
-                <button
-                  type="button"
-                  className="git-settings-button primary"
-                  onClick={onApplyGitIgnore}
-                  disabled={gitIgnoreStatus.state === 'working'}
-                >
-                  Fix Issue
-                </button>
-                <button
-                  type="button"
-                  className="git-settings-button secondary"
-                  onClick={onSkipGitIgnore}
-                  disabled={gitIgnoreStatus.state === 'working'}
-                >
-                  Cancel Installation
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="git-settings-button primary"
-                onClick={onContinueAfterGitIgnore}
-              >
-                Continue to project
-              </button>
+            {gitIgnoreSuggestion?.entries?.length > 0 && (
+              <p>
+                Missing .gitignore entries:
+              </p>
+            )}
+            <ul>
+              {(gitIgnoreSuggestion?.entries || []).map((entry) => (
+                <li key={entry}><code>{entry}</code></li>
+              ))}
+            </ul>
+            {gitIgnoreSuggestion?.trackedFiles?.length > 0 && (
+              <p className="gitignore-warning">
+                Note: installs will update tracked files ({gitIgnoreSuggestion.trackedFiles.join(', ')}),
+                so the working tree may still show changes.
+              </p>
+            )}
+            {gitIgnoreSuggestion?.samplePaths?.length > 0 && (
+              <p className="gitignore-sample">
+                Detected: {gitIgnoreSuggestion.samplePaths.join(', ')}
+              </p>
+            )}
+            {gitIgnoreStatus.state === 'error' && (
+              <div className="gitignore-error">{gitIgnoreStatus.error}</div>
             )}
           </div>
-        </div>
-      )}
+        )}
+        confirmText={gitIgnoreStatus.state === 'done' ? 'Continue to project' : 'Fix Issue'}
+        cancelText={gitIgnoreStatus.state === 'done' ? 'Close' : 'Cancel Installation'}
+        type="warning"
+        dismissOnBackdrop={false}
+        dismissOnEscape={false}
+      />
     </div>
   );
 };
