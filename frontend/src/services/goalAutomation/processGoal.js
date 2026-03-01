@@ -339,9 +339,7 @@ export async function processGoal(
       if (!lcdtLanePolicy.enabled || !Array.isArray(edits)) {
         return null;
       }
-      const allowedPrefixes = Array.isArray(lcdtLanePolicy.allowedPrefixes)
-        ? lcdtLanePolicy.allowedPrefixes.filter(Boolean)
-        : [];
+      const allowedPrefixes = lcdtLanePolicy.allowedPrefixes.filter(Boolean);
       for (const edit of edits) {
         const normalizedPath = normalizeRepoPath(edit?.path);
         if (!normalizedPath) {
@@ -358,6 +356,15 @@ export async function processGoal(
         }
       }
       return null;
+    };
+
+    const buildLaneScopedGoalPrompt = (basePrompt) => {
+      const promptText = typeof basePrompt === 'string' ? basePrompt : String(basePrompt || '');
+      if (!lcdtLanePolicy.enabled) {
+        return promptText;
+      }
+      const allowedPrefixes = lcdtLanePolicy.allowedPrefixes.filter(Boolean);
+      return `${promptText}\n\nPath lane constraint: Edit ONLY files under ${allowedPrefixes.join(', ')}. Do not propose edits outside these paths.`;
     };
 
     const scopeReflectionGloballyDisabled =
@@ -775,16 +782,17 @@ export async function processGoal(
         automationLog('processGoal:fileTree:error', { message: error?.message, status: error?.response?.status });
       }
 
+      mergeKnownPathsFromTree(fileTreePaths);
+      mergeKnownDirsFromTree(fileTreePaths);
+      refreshLcdtLanePolicy();
+
       relevantFilesContext = await buildRelevantFilesContext({
         projectId,
         goalPrompt: goal?.prompt,
         fileTreePaths,
-        testFailureContext
+        testFailureContext,
+        preferredPathPrefixes: lcdtLanePolicy.enabled ? lcdtLanePolicy.allowedPrefixes : []
       });
-
-      mergeKnownPathsFromTree(fileTreePaths);
-      mergeKnownDirsFromTree(fileTreePaths);
-      refreshLcdtLanePolicy();
     };
 
     if (!(await waitWhilePaused())) {
@@ -808,7 +816,7 @@ export async function processGoal(
           buildEditsPrompt({
             projectInfo,
             fileTreeContext: `${fileTreeContext}${relevantFilesContext}`,
-            goalPrompt: goal.prompt,
+            goalPrompt: buildLaneScopedGoalPrompt(goal.prompt),
             stage: 'tests',
             attempt,
             retryContext: testsRetryContext,
@@ -1036,7 +1044,7 @@ export async function processGoal(
         buildEditsPrompt({
           projectInfo,
           fileTreeContext: `${fileTreeContext}${relevantFilesContext}`,
-          goalPrompt: goal.prompt,
+          goalPrompt: buildLaneScopedGoalPrompt(goal.prompt),
           stage: 'implementation',
           attempt,
           retryContext: implRetryContext,

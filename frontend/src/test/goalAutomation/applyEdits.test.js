@@ -767,6 +767,62 @@ describe('applyEdits modify fallbacks', () => {
 });
 
 describe('buildRelevantFilesContext edge cases', () => {
+  test('seeds relevant context from preferred lane prefixes', async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes('llm_src/main.js')) {
+        return Promise.resolve({ data: { content: 'export const laneMain = true;' } });
+      }
+      if (url.includes('llm_src_backend/server.js')) {
+        return Promise.resolve({ data: { content: 'export const laneServer = true;' } });
+      }
+      return Promise.reject(new Error(`Unexpected url ${url}`));
+    });
+
+    const context = await automationUtils.buildRelevantFilesContext({
+      projectId: 77,
+      goalPrompt: 'turn background blue',
+      fileTreePaths: [
+        'frontend/src/App.jsx',
+        'llm_src/main.js',
+        'llm_src_backend/server.js'
+      ],
+      preferredPathPrefixes: ['llm_src/', 'llm_src_backend/']
+    });
+
+    expect(context).toContain('llm_src/main.js');
+    expect(context).toContain('llm_src_backend/server.js');
+    expect(context).toContain('laneMain');
+    expect(context).toContain('laneServer');
+  });
+
+  test('preferred prefix scoring prioritizes app entry files over docs and test specs', async () => {
+    axios.get.mockImplementation((url) => Promise.resolve({ data: { content: `// ${url}` } }));
+
+    const context = await automationUtils.buildRelevantFilesContext({
+      projectId: 77,
+      goalPrompt: 'fix failing ui tests',
+      fileTreePaths: [
+        'llm_src/readme.md',
+        'llm_src/guide.txt',
+        'llm_src/deep/nested/component.spec.tsx',
+        'llm_src/deep/nested/component.test.tsx',
+        'llm_src/main.jsx',
+        'llm_src/app.jsx'
+      ],
+      preferredPathPrefixes: ['llm_src/']
+    });
+
+    const mainIndex = context.indexOf('--- llm_src/main.jsx ---');
+    const readmeIndex = context.indexOf('--- llm_src/readme.md ---');
+    const specIndex = context.indexOf('--- llm_src/deep/nested/component.spec.tsx ---');
+
+    expect(mainIndex).toBeGreaterThan(-1);
+    expect(readmeIndex).toBeGreaterThan(-1);
+    expect(specIndex).toBeGreaterThan(-1);
+    expect(mainIndex).toBeLessThan(readmeIndex);
+    expect(mainIndex).toBeLessThan(specIndex);
+  });
+
   test('includes placeholders when referenced files are missing or empty', async () => {
     axios.get.mockImplementation((url) => {
       if (url.includes('Missing.jsx')) {

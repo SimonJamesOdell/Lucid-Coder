@@ -1026,12 +1026,63 @@ const LARGE_FILE_CHAR_LIMIT = 30000;
 const LARGE_FILE_HEAD_CHARS = 8000;
 const LARGE_FILE_TAIL_CHARS = 4000;
 
+const derivePreferredPathPrefixCandidates = (normalizedTreePaths, preferredPathPrefixes) => {
+  if (!Array.isArray(normalizedTreePaths) || normalizedTreePaths.length === 0) {
+    return [];
+  }
+
+  const normalizedPrefixes = []
+    .concat(preferredPathPrefixes)
+    .map((prefix) => normalizeRepoPath(prefix || '').replace(/\/+$/g, ''))
+    .filter(Boolean)
+    .map((prefix) => `${prefix}/`);
+
+  if (normalizedPrefixes.length === 0) {
+    return [];
+  }
+
+  const matches = normalizedTreePaths.filter((path) => (
+    normalizedPrefixes.some((prefix) => path.startsWith(prefix))
+  ));
+
+  const scorePath = (path) => {
+    let score = 0;
+    if (/(^|\/)(main|index|app|server|routes?|router|config)\.[jt]sx?$/i.test(path)) {
+      score += 4;
+    }
+    if (/\.(js|jsx|ts|tsx|json)$/i.test(path)) {
+      score += 2;
+    }
+    if (/\.(md|txt)$/i.test(path)) {
+      score -= 1;
+    }
+    if (/\.(test|spec)\.[jt]sx?$/i.test(path)) {
+      score -= 1;
+    }
+    const depth = path.split('/').length;
+    score -= Math.max(0, depth - 2) * 0.1;
+    return score;
+  };
+
+  return matches
+    .slice()
+    .sort((a, b) => {
+      const scoreDelta = scorePath(b) - scorePath(a);
+      if (scoreDelta !== 0) {
+        return scoreDelta;
+      }
+      return a.localeCompare(b);
+    })
+    .slice(0, 12);
+};
+
 export const buildRelevantFilesContext = async ({
   projectId,
   goalPrompt,
   fileTreePaths,
   testFailureContext = null,
-  testFailurePathsOverride = null
+  testFailurePathsOverride = null,
+  preferredPathPrefixes = null
 }) => {
   if (!projectId) {
     return '';
@@ -1128,6 +1179,11 @@ export const buildRelevantFilesContext = async ({
 
   if (failureMentionPaths.length > 0) {
     candidates.push(...failureMentionPaths);
+  }
+
+  const preferredPrefixCandidates = derivePreferredPathPrefixCandidates(normalizedTreePaths, preferredPathPrefixes);
+  if (preferredPrefixCandidates.length > 0) {
+    candidates.push(...preferredPrefixCandidates);
   }
 
   const unique = Array.from(new Set(candidates));

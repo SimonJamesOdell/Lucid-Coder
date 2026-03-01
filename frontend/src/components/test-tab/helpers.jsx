@@ -126,6 +126,22 @@ const deriveCanonicalFailureSignatures = (failureReport) => {
   }
 
   const signatures = new Set();
+
+  const hasMainSideEffectContext = /(side.?effect rendering|imports\s+main\.jsx|createRoot\(|renders the app component into #root)/i.test(report);
+  const hasActWarning = /update to root inside a test was not wrapped in act\(\.\.\.\)/i.test(report);
+  const hasEarlyAssertSignal = /(testinglibraryelementerror|there are no accessible roles|unable to find an accessible element|getbyrole\(\s*['"]heading['"])/i.test(report);
+
+  if ((hasMainSideEffectContext && hasActWarning) || (hasMainSideEffectContext && hasEarlyAssertSignal)) {
+    signatures.add('react-main-side-effect-act-warning');
+  }
+
+  if (
+    /getbyrole\(\s*['"]heading['"][\s\S]*?level\s*:\s*1/i.test(report) &&
+    /<h[2-6]\b/i.test(report)
+  ) {
+    signatures.add('heading-level-mismatch');
+  }
+
   for (const rawLine of report.split(/\r?\n/)) {
     const line = String(rawLine || '').trim();
     if (!line || isWarningNoiseLine(line)) {
@@ -163,6 +179,14 @@ const deriveCanonicalFailureSignatures = (failureReport) => {
 const deriveRootCauseHint = (signatures = []) => {
   if (!Array.isArray(signatures) || signatures.length === 0) {
     return null;
+  }
+
+  if (signatures.includes('react-main-side-effect-act-warning')) {
+    return 'Likely root cause: a side-effect render test imports main.jsx and asserts too early. Wrap the import/render path in act(...) and await DOM assertions with findBy*.';
+  }
+
+  if (signatures.includes('heading-level-mismatch')) {
+    return 'Likely root cause: heading level mismatch. The test expects level=1 while rendered markup shows h2-h6. Align semantic heading level with the test contract (prefer h1 for app title assertions).';
   }
 
   if (signatures.includes('router-context-missing-link-provider')) {
@@ -382,6 +406,7 @@ export const buildFailingTestsPrompt = ({ label, failureReport, failingIds }) =>
   const labelText = typeof label === 'string' && label.trim() ? label.trim() : 'test suite';
   const ids = Array.isArray(failingIds) ? failingIds.filter(Boolean) : [];
   const header = `Fix failing tests in ${labelText}.`;
+  const rootCauseHint = deriveRootCauseHint(deriveCanonicalFailureSignatures(failureReport));
   if (ids.length === 0 && !failureReport) {
     return header;
   }
@@ -390,13 +415,11 @@ export const buildFailingTestsPrompt = ({ label, failureReport, failingIds }) =>
   if (ids.length > 0) {
     lines.push('', `Failing tests: ${ids.join(', ')}`);
   }
-  if (failureReport) {
-    lines.push('', 'Failure output:', String(failureReport));
-  }
-
-  const rootCauseHint = deriveRootCauseHint(deriveCanonicalFailureSignatures(failureReport));
   if (rootCauseHint) {
     lines.push('', rootCauseHint);
+  }
+  if (failureReport) {
+    lines.push('', 'Failure output:', String(failureReport));
   }
   return lines.join('\n');
 };

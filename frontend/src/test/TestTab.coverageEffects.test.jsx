@@ -136,6 +136,102 @@ describe('TestTab coverage effects', () => {
     });
   });
 
+  test('does not reopen modal when rerendered with the same completed run key', async () => {
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    const running = buildContext({
+      testRunIntent: { source: 'user', updatedAt: createdAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-same', type: 'frontend:test', status: 'running', logs: [], createdAt },
+        { id: 'back-same', type: 'backend:test', status: 'running', logs: [], createdAt }
+      ])
+    });
+
+    const completed = buildContext({
+      testRunIntent: { source: 'user', updatedAt: completedAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-same', type: 'frontend:test', status: 'succeeded', logs: [], createdAt, completedAt },
+        { id: 'back-same', type: 'backend:test', status: 'succeeded', logs: [], createdAt, completedAt }
+      ])
+    });
+
+    let context = running;
+    useAppState.mockImplementation(() => context);
+    const view = render(<TestTab project={baseProject} />);
+
+    context = completed;
+    view.rerender(<TestTab project={baseProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('modal-close'));
+    expect(screen.queryByTestId('modal-content')).toBeNull();
+
+    view.rerender(<TestTab project={baseProject} />);
+    await act(async () => {});
+
+    expect(screen.queryByTestId('modal-content')).toBeNull();
+  });
+
+  test('builds modal key using completedAt fallback when createdAt is missing', async () => {
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    const running = buildContext({
+      testRunIntent: { source: 'user', updatedAt: new Date(Date.now() + 50).toISOString() },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-fallback', type: 'frontend:test', status: 'running', logs: [] },
+        { id: 'back-fallback', type: 'backend:test', status: 'running', logs: [] }
+      ])
+    });
+
+    const completed = buildContext({
+      testRunIntent: { source: 'user', updatedAt: completedAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-fallback', type: 'frontend:test', status: 'succeeded', logs: [], completedAt },
+        { id: 'back-fallback', type: 'backend:test', status: 'succeeded', logs: [], completedAt }
+      ])
+    });
+
+    let context = running;
+    useAppState.mockImplementation(() => context);
+    const view = render(<TestTab project={baseProject} />);
+
+    context = completed;
+    view.rerender(<TestTab project={baseProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+  });
+
+  test('builds modal key fallback when testRunIntent is missing', async () => {
+    const completedAt = new Date(Date.now() + 100).toISOString();
+
+    const running = buildContext({
+      testRunIntent: null,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-no-intent', type: 'frontend:test', status: 'running', logs: [] },
+        { id: 'back-no-intent', type: 'backend:test', status: 'running', logs: [] }
+      ])
+    });
+
+    const completed = buildContext({
+      testRunIntent: null,
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'front-no-intent', type: 'frontend:test', status: 'succeeded', logs: [], completedAt },
+        { id: 'back-no-intent', type: 'backend:test', status: 'succeeded', logs: [], completedAt }
+      ])
+    });
+
+    let context = running;
+    useAppState.mockImplementation(() => context);
+    const view = render(<TestTab project={baseProject} />);
+
+    context = completed;
+    view.rerender(<TestTab project={baseProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+  });
+
   test('shows a max-attempts modal when auto-fix reaches its limit', async () => {
     TestTab.__testHooks.setAutofixMaxAttemptsOverride?.(0);
 
@@ -218,6 +314,51 @@ describe('TestTab coverage effects', () => {
     await act(async () => {});
 
     // Second failure round – same fingerprint → circuit breaker.
+    context = failed2;
+    view.rerender(<TestTab project={frontendOnlyProject} />);
+
+    expect(await screen.findByTestId('modal-content')).toBeInTheDocument();
+    expect(screen.getByText(/same error repeating/i)).toBeInTheDocument();
+  });
+
+  test('shows circuit-breaker modal when the same failure repeats across intent updates even with reused job ids', async () => {
+    const frontendOnlyProject = { ...baseProject, backend: null };
+    const createdAt = new Date(Date.now() + 50).toISOString();
+    const completedAt = new Date(Date.now() + 100).toISOString();
+    const completedAt2 = new Date(Date.now() + 200).toISOString();
+
+    const failLogs = [{ message: 'FAIL src/App.test.js' }];
+
+    const running = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: createdAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'cb-same-id', type: 'frontend:test', status: 'running', logs: [], createdAt }
+      ])
+    });
+
+    const failed1 = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'cb-same-id', type: 'frontend:test', status: 'failed', logs: failLogs, createdAt, completedAt }
+      ])
+    });
+
+    const failed2 = buildContext({
+      testRunIntent: { source: 'automation', updatedAt: completedAt2 },
+      getJobsForProject: vi.fn().mockReturnValue([
+        { id: 'cb-same-id', type: 'frontend:test', status: 'failed', logs: failLogs, createdAt, completedAt }
+      ])
+    });
+
+    let context = running;
+    useAppState.mockImplementation(() => context);
+
+    const view = render(<TestTab project={frontendOnlyProject} />);
+
+    context = failed1;
+    view.rerender(<TestTab project={frontendOnlyProject} />);
+    await act(async () => {});
+
     context = failed2;
     view.rerender(<TestTab project={frontendOnlyProject} />);
 

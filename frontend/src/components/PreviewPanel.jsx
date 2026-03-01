@@ -257,6 +257,14 @@ const PreviewPanel = () => {
       return;
     }
 
+    const focusSource = typeof editorFocusRequest?.source === 'string'
+      ? editorFocusRequest.source.trim().toLowerCase()
+      : '';
+    const isAutomationFocus = focusSource === 'automation' || focusSource === 'agent';
+    if (isAutomationFocus && !followAutomation) {
+      return;
+    }
+
     const requestKey = editorFocusRequest.requestedAt
       ? `at:${editorFocusRequest.requestedAt}`
       : [
@@ -276,7 +284,7 @@ const PreviewPanel = () => {
     if (activeTab !== 'files') {
       setActiveTab('files', { source: 'automation' });
     }
-  }, [editorFocusRequest, currentProject?.id, activeTab, setActiveTab]);
+  }, [editorFocusRequest, currentProject?.id, activeTab, setActiveTab, followAutomation]);
 
   const handleFileSaved = useCallback(() => {
     if (previewRef.current?.reloadPreview) {
