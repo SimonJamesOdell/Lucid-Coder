@@ -77,7 +77,11 @@ describe('ChatPanel', () => {
   const mockSetPreviewPanelTab = vi.fn();
   const mockStageAiChange = vi.fn();
   const mockStartAutomationJob = vi.fn();
+  const mockCancelAutomationJob = vi.fn();
+  const mockGetJobsForProject = vi.fn();
   const mockMarkTestRunIntent = vi.fn();
+  const mockPausePreviewAutomation = vi.fn();
+  const mockClearEditorFocusRequest = vi.fn();
   let mockSocket;
 
   beforeEach(() => {
@@ -103,9 +107,13 @@ describe('ChatPanel', () => {
       testingSettings: { coverageTarget: 100, maxSteps: 8 },
       setPreviewPanelTab: mockSetPreviewPanelTab,
       startAutomationJob: mockStartAutomationJob,
+      cancelAutomationJob: mockCancelAutomationJob,
+      getJobsForProject: mockGetJobsForProject,
       markTestRunIntent: mockMarkTestRunIntent,
       requestEditorFocus: vi.fn(),
       syncBranchOverview: vi.fn(),
+      pausePreviewAutomation: mockPausePreviewAutomation,
+      clearEditorFocusRequest: mockClearEditorFocusRequest,
       workingBranches: {
         123: {
           name: 'feature/test-branch',
@@ -132,6 +140,8 @@ describe('ChatPanel', () => {
     goalAutomationService.processGoals.mockResolvedValue({ success: true, processed: 1 });
 
     mockStartAutomationJob.mockResolvedValue({ success: true });
+    mockCancelAutomationJob.mockResolvedValue({ success: true });
+    mockGetJobsForProject.mockReturnValue([]);
     clearAssistantAssetContextPaths(123);
   });
 
@@ -515,6 +525,12 @@ describe('ChatPanel', () => {
     });
 
     it('shows clear pending actions while halted and clears pending state when clicked', async () => {
+      mockGetJobsForProject.mockReturnValue([
+        { id: 'front-running', type: 'frontend:test', status: 'running' },
+        { id: 'back-queued', type: 'backend:test', status: 'queued' },
+        { id: 'front-done', type: 'frontend:test', status: 'succeeded' },
+        { id: 'compile-running', type: 'compile', status: 'running' }
+      ]);
       window.__lucidcoderAutofixHalted = false;
       render(<ChatPanel width={320} side="left" />);
 
@@ -532,6 +548,108 @@ describe('ChatPanel', () => {
       expect(screen.getByTestId('chat-autofix-toggle')).toHaveTextContent('■');
       expect(screen.queryByTestId('chat-autofix-clear')).not.toBeInTheDocument();
       expect(screen.getByText('Cleared pending agent actions.')).toBeInTheDocument();
+      expect(mockCancelAutomationJob).toHaveBeenCalledTimes(2);
+      expect(mockCancelAutomationJob).toHaveBeenCalledWith('front-running', { projectId: 123 });
+      expect(mockCancelAutomationJob).toHaveBeenCalledWith('back-queued', { projectId: 123 });
+    });
+
+    it('clear pending actions ignores already-canceled statuses and swallows cancel failures', async () => {
+      mockCancelAutomationJob.mockRejectedValue(new Error('cancel failed'));
+      mockGetJobsForProject.mockReturnValue([
+        { id: 'front-canceled-american', type: 'frontend:test', status: 'canceled' },
+        { id: 'front-canceled-british', type: 'frontend:test', status: 'cancelled' },
+        { id: 'front-running', type: 'frontend:test', status: 'running' }
+      ]);
+
+      window.__lucidcoderAutofixHalted = false;
+      render(<ChatPanel width={320} side="left" />);
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('chat-autofix-toggle'));
+      await user.click(screen.getByTestId('chat-autofix-clear'));
+
+      expect(screen.getByText('Cleared pending agent actions.')).toBeInTheDocument();
+      expect(mockCancelAutomationJob).toHaveBeenCalledTimes(1);
+      expect(mockCancelAutomationJob).toHaveBeenCalledWith('front-running', { projectId: 123 });
+    });
+
+    it('clear pending actions tolerates malformed jobs and synchronous cancellation throws', async () => {
+      mockCancelAutomationJob.mockImplementation(() => {
+        throw new Error('sync cancel failure');
+      });
+      mockGetJobsForProject.mockReturnValue([
+        { id: null, type: 'frontend:test', status: 'running' },
+        { id: 'missing-type', type: null, status: 'running' },
+        { id: 'compile', type: 'compile', status: 'running' },
+        { id: 'front-running', type: 'frontend:test', status: 'running' }
+      ]);
+
+      window.__lucidcoderAutofixHalted = false;
+      render(<ChatPanel width={320} side="left" />);
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('chat-autofix-toggle'));
+      await user.click(screen.getByTestId('chat-autofix-clear'));
+
+      expect(screen.getByText('Cleared pending agent actions.')).toBeInTheDocument();
+      expect(mockCancelAutomationJob).toHaveBeenCalledTimes(1);
+      expect(mockCancelAutomationJob).toHaveBeenCalledWith('front-running', { projectId: 123 });
+    });
+
+    it('clear pending actions handles non-array job snapshots without cancellation attempts', async () => {
+      mockGetJobsForProject.mockReturnValue({ not: 'an array' });
+
+      window.__lucidcoderAutofixHalted = false;
+      render(<ChatPanel width={320} side="left" />);
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('chat-autofix-toggle'));
+      await user.click(screen.getByTestId('chat-autofix-clear'));
+
+      expect(screen.getByText('Cleared pending agent actions.')).toBeInTheDocument();
+      expect(mockCancelAutomationJob).not.toHaveBeenCalled();
+    });
+
+    it('clear pending actions treats non-string statuses as active until canceled', async () => {
+      mockGetJobsForProject.mockReturnValue([
+        { id: 'front-running', type: 'frontend:test', status: 123 }
+      ]);
+
+      window.__lucidcoderAutofixHalted = false;
+      render(<ChatPanel width={320} side="left" />);
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('chat-autofix-toggle'));
+      await user.click(screen.getByTestId('chat-autofix-clear'));
+
+      expect(screen.getByText('Cleared pending agent actions.')).toBeInTheDocument();
+      expect(mockCancelAutomationJob).toHaveBeenCalledWith('front-running', { projectId: 123 });
+    });
+
+    it('ignores automation-origin autofix events after clearing pending actions', async () => {
+      window.__lucidcoderAutofixHalted = false;
+      render(<ChatPanel width={320} side="left" />);
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('chat-autofix-toggle'));
+      await user.click(screen.getByTestId('chat-autofix-clear'));
+
+      window.dispatchEvent(
+        new CustomEvent('lucidcoder:autofix-tests', {
+          detail: {
+            prompt: 'Fix failing tests',
+            origin: 'automation'
+          }
+        })
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Cleared pending agent actions.')).toBeInTheDocument();
+      });
+
+      expect(goalsApi.createGoal).not.toHaveBeenCalled();
+      expect(goalsApi.createMetaGoalWithChildren).not.toHaveBeenCalled();
+      expect(goalAutomationService.processGoals).not.toHaveBeenCalled();
     });
 
     it('renders toggle button on right side with left arrow icon', () => {
@@ -2019,6 +2137,8 @@ describe('ChatPanel', () => {
       expect(mockStartAutomationJob).not.toHaveBeenCalled();
       expect(mockSetPreviewPanelTab).not.toHaveBeenCalledWith('tests', { source: 'automation' });
       expect(mockSetPreviewPanelTab).not.toHaveBeenCalledWith('commits', { source: 'automation' });
+      expect(mockPausePreviewAutomation).toHaveBeenCalled();
+      expect(mockClearEditorFocusRequest).toHaveBeenCalled();
     });
 
     it('preserves preview tab with no stylesheet changes when style shortcut applies no-op', async () => {

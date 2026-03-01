@@ -658,7 +658,7 @@ const TestTab = ({ project, registerTestActions, onRequestCommitsTab }) => {
     }
     /* c8 ignore stop */
 
-    const modalKey = `${frontendJob?.id || 'none'}@${frontendJob?.createdAt || frontendJob?.completedAt || 'na'}:${backendJob?.id || 'none'}@${backendJob?.createdAt || backendJob?.completedAt || 'na'}`;
+    const modalKey = `${frontendJob?.id || 'none'}@${frontendJob?.createdAt || frontendJob?.completedAt || 'na'}:${backendJob?.id || 'none'}@${backendJob?.createdAt || backendJob?.completedAt || 'na'}:intent@${testRunIntent?.updatedAt || 'na'}`;
 
     if (lastResultModalKeyRef.current === modalKey) {
       return;

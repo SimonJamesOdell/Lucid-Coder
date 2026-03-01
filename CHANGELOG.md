@@ -1,3 +1,11 @@
+## 0.8.2 (2026-03-01)
+- Close the remaining strict coverage gaps and restore full frontend gate compliance at 100% statements/branches/functions/lines, including targeted branch-path tests in `ChatPanel`, `TestTab`, `helpers`, and goal-automation suites.
+- Improve auto-fix reliability in `ChatPanel` by making "Clear pending agent actions" actively cancel in-flight test jobs (with resilient error handling), and by ignoring automation-origin auto-fix events after a manual clear.
+- Refine `TestTab` completion/failure modal dedupe behavior by keying runs with intent timestamps so repeated failed runs with reused job IDs are still processed correctly.
+- Strengthen failure-signature/root-cause extraction in `test-tab/helpers` for side-effect-render `main.jsx` + `act(...)` timing failures and heading-level mismatches, and prioritize root-cause hints ahead of raw failure output in generated fix prompts.
+- Improve `PreviewPanel` automation focus behavior by respecting `followAutomation=false` for automation/agent-origin focus requests so user-selected preview context is preserved.
+- Harden LCDT lane-scoped automation in `processGoal` + `automationUtils` by enforcing lane constraints in prompts/edits, improving lane-prefix candidate selection, and expanding lane-policy regression coverage.
+
 ## 0.8.1 (2026-02-28)
 - Close the remaining strict coverage gaps to restore 100% gates across the merged frontend/backend release pipeline, including targeted branch-path tests for preview routing, project/import setup, process controls, scaffolding fallbacks, and automation/reflection helpers.
 - Add backend project-layout resolution support (`projectLayout`) so routes/services can reliably handle classic split workspaces and root/unified manifests (including root backend scripts and requirements-based fallbacks) when starting projects and enqueueing install jobs.

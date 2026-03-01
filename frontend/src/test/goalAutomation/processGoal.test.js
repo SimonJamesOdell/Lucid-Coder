@@ -3375,6 +3375,275 @@ describe('processGoal implementation preprocessing', () => {
   });
 });
 
+describe('processGoal LCDT lane enforcement', () => {
+  test('passes LCDT lane prefixes into relevant files context selection', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/main.js',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.buildRelevantFilesContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredPathPrefixes: expect.arrayContaining(['llm_src/', 'llm_src_backend/'])
+      })
+    );
+  });
+
+  test('injects LCDT lane constraint into implementation prompts', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/main.js',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(1);
+    expect(implPrompts[0].goalPrompt).toContain('Path lane constraint:');
+    expect(implPrompts[0].goalPrompt).toContain('llm_src/');
+    expect(implPrompts[0].goalPrompt).toContain('llm_src_backend/');
+  });
+
+  test('falls back to project-info lane prefixes when repo tree has no LCDT lanes', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue(['frontend/src/App.jsx']);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('llm_src/');
+    expect(result.error).toContain('llm_src_backend/');
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts[0].goalPrompt).toContain('Path lane constraint:');
+  });
+
+  test('does not inject lane constraints when project is not LCDT', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue(['frontend/src/App.jsx']);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Generic project info',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts[0].goalPrompt).not.toContain('Path lane constraint:');
+  });
+
+  test('blocks implementation edits outside LCDT lanes', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('llm_src/');
+    expect(result.error).toContain('llm_src_backend/');
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test('allows implementation edits inside LCDT lanes', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/main.js',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'implementation',
+        edits: expect.arrayContaining([expect.objectContaining({ path: 'llm_src/main.js' })])
+      })
+    );
+  });
+
+  test('blocks tests-stage edits outside LCDT lanes', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: true });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.test.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [1], implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('llm_src/');
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test('ignores unnormalizable edit paths when validating LCDT lane scope', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: '',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'implementation',
+        edits: expect.arrayContaining([expect.objectContaining({ path: '' })])
+      })
+    );
+  });
+});
+
 describe('processGoal final-attempt failures', () => {
   test('propagates tests scope violations when no retries remain', async () => {
     automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: true });
@@ -3795,6 +4064,33 @@ describe('__processGoalTestHooks helpers', () => {
 
     expect(error.message).toMatch(/tests stage/i);
     expect(isEmptyEditsError(error)).toBe(true);
+  });
+
+  test('hasLcdtProjectMarker returns false for non-string values and matches marker variants', () => {
+    const { hasLcdtProjectMarker } = __processGoalTestHooks;
+
+    expect(hasLcdtProjectMarker(null)).toBe(false);
+    expect(hasLcdtProjectMarker(123)).toBe(false);
+    expect(hasLcdtProjectMarker('Lucid Coder Default Template')).toBe(true);
+    expect(hasLcdtProjectMarker('repo: lucid-coder-default')).toBe(true);
+  });
+
+  test('deriveLcdtAllowedLanePrefixes ignores non-string known paths and detects lane roots', () => {
+    const { deriveLcdtAllowedLanePrefixes } = __processGoalTestHooks;
+
+    expect(
+      deriveLcdtAllowedLanePrefixes(
+        new Set([null, 42, {}, 'llm_src_backend/server.js', 'other/path.js']),
+        new Set()
+      )
+    ).toEqual(['llm_src_backend/']);
+
+    expect(
+      deriveLcdtAllowedLanePrefixes(
+        new Set(['misc/file.js']),
+        new Set(['llm_src'])
+      )
+    ).toEqual(['llm_src/']);
   });
 
   test('extractSelectedProjectAssets returns unique selected asset paths from prompt blocks', () => {

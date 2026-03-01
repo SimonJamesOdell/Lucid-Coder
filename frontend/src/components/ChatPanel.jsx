@@ -473,9 +473,13 @@ const ChatPanel = ({
     stageAiChange,
     setPreviewPanelTab,
     startAutomationJob,
+    cancelAutomationJob,
+    getJobsForProject,
     markTestRunIntent,
     requestEditorFocus,
     syncBranchOverview,
+    pausePreviewAutomation,
+    clearEditorFocusRequest,
     workingBranches,
     jobState,
     projectProcesses,
@@ -1102,17 +1106,44 @@ const ChatPanel = ({
     setAutofixHaltFlag(!autoFixHalted);
   };
 
-  const handleClearPendingAgentActions = useCallback(() => {
+  const handleClearPendingAgentActions = useCallback(async () => {
     autoFixCancelRef.current = true;
     setAutofixHaltFlag(false);
     setThinkingAutomationTopic('');
     setThinkingTopic('');
     setIsSending(false);
+
+    if (typeof cancelAutomationJob === 'function' && typeof getJobsForProject === 'function' && currentProject?.id) {
+      const jobs = getJobsForProject(currentProject.id);
+      const activeTestJobs = Array.isArray(jobs)
+        ? jobs.filter((job) => {
+            if (!job?.id || typeof job?.type !== 'string') {
+              return false;
+            }
+            if (!job.type.endsWith(':test')) {
+              return false;
+            }
+            const status = typeof job?.status === 'string' ? job.status.toLowerCase() : '';
+            return status !== 'succeeded' && status !== 'failed' && status !== 'cancelled' && status !== 'canceled';
+          })
+        : [];
+
+      if (activeTestJobs.length > 0) {
+        try {
+          await Promise.allSettled(
+            activeTestJobs.map((job) => cancelAutomationJob(job.id, { projectId: currentProject.id }))
+          );
+        } catch {
+          // Best-effort cancellation; keep pending actions cleared even if cancellation fails.
+        }
+      }
+    }
+
     setMessages((prev) => [
       ...prev,
       createMessage('assistant', 'Cleared pending agent actions.', { variant: 'status' })
     ]);
-  }, [createMessage, setAutofixHaltFlag]);
+  }, [cancelAutomationJob, createMessage, currentProject?.id, getJobsForProject, setAutofixHaltFlag]);
 
   const panelClassName = `chat-panel ${side === 'right' ? 'chat-panel--right' : 'chat-panel--left'} ${isResizing ? 'chat-panel--resizing' : ''}`;
   const panelStyle = {
@@ -1252,6 +1283,12 @@ const ChatPanel = ({
     if (result.kind === 'feature') {
       const preservePreviewTab = shouldPreservePreviewForShortCircuit(result);
 
+      if (preservePreviewTab) {
+        pausePreviewAutomation?.();
+        clearEditorFocusRequest?.();
+        setPreviewPanelTab?.('preview', { source: 'user' });
+      }
+
       if (result.planOnly) {
         await handlePlanOnlyFeature(
           currentProject.id,
@@ -1326,6 +1363,7 @@ const ChatPanel = ({
 
       if (execution?.success === true && typeof startAutomationJob === 'function') {
         if (preservePreviewTab) {
+          clearEditorFocusRequest?.();
           setMessages((prev) => [
             ...prev,
             createMessage(
@@ -2071,6 +2109,9 @@ const ChatPanel = ({
       const origin = event?.detail?.origin;
 
       const normalizedOrigin = origin === 'automation' ? 'automation' : 'user';
+      if (normalizedOrigin === 'automation' && autoFixCancelRef.current) {
+        return;
+      }
       if (normalizedOrigin === 'user' && autoFixHaltedRef.current) {
         setAutofixHaltFlag(false);
       }

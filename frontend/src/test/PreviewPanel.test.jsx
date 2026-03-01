@@ -1514,6 +1514,31 @@ describe('PreviewPanel', () => {
     });
   });
 
+  test('keeps preview tab when automation focus requests arrive while followAutomation is disabled', async () => {
+    const appState = createAppState({
+      currentProject: { id: 388, name: 'Automation Focus Guard' },
+      previewPanelState: { activeTab: 'preview', followAutomation: false }
+    });
+    useAppState.mockReturnValue(appState);
+
+    const { rerender } = render(<PreviewPanel />);
+
+    expect(screen.getByTestId('mock-preview-tab')).toBeInTheDocument();
+
+    appState.editorFocusRequest = {
+      projectId: 388,
+      filePath: 'src/main.tsx',
+      source: 'automation'
+    };
+
+    rerender(<PreviewPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-preview-tab')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('mock-files-tab')).not.toBeInTheDocument();
+  });
+
   test('builds editor focus key from explicit filePath and source fields when requestedAt is missing', async () => {
     const appState = createAppState({ currentProject: { id: 288, name: 'Explicit Focus Key' } });
     useAppState.mockReturnValue(appState);

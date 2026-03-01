@@ -204,6 +204,25 @@ describe('TestTab coverage helpers', () => {
     expect(signatures).toEqual([]);
   });
 
+  test('failure signature hooks detect main.jsx side-effect act warnings', () => {
+    const signatures = helpersModule.__testFailureAnalysisHooks.deriveCanonicalFailureSignatures([
+      'Warning: An update to Root inside a test was not wrapped in act(...)',
+      'frontend/src/main.jsx side‑effect rendering > imports main.jsx and renders the App component into #root'
+    ].join('\n'));
+
+    expect(signatures).toContain('react-main-side-effect-act-warning');
+  });
+
+  test('failure signature hooks detect heading level mismatches from role query output', () => {
+    const signatures = helpersModule.__testFailureAnalysisHooks.deriveCanonicalFailureSignatures([
+      "expect(screen.getByRole('heading', { level: 1, name: 'test-proj' })).toBeInTheDocument()",
+      'heading:',
+      '<h2 />'
+    ].join('\n'));
+
+    expect(signatures).toContain('heading-level-mismatch');
+  });
+
   test('failure signature normalization helpers handle non-string and prefixed input', () => {
     expect(helpersModule.__testFailureAnalysisHooks.normalizeFailureSignatureTextInput(null)).toBe('');
     expect(helpersModule.__testFailureAnalysisHooks.normalizeFailureSignatureText('Error: FAIL src/App.test.jsx:12:3')).toContain('<path>:#');
@@ -251,6 +270,76 @@ describe('TestTab coverage helpers', () => {
     });
 
     expect(plan.childPrompts[0]).toContain('Likely root cause: tests require data-testid="page-root"');
+  });
+
+  test('buildTestFixPlan includes act-side-effect root-cause hint when signatures match', () => {
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            logs: [
+              { message: 'Warning: An update to Root inside a test was not wrapped in act(...)' },
+              { message: 'frontend/src/main.jsx side‑effect rendering > imports main.jsx and renders the App component into #root' }
+            ],
+            summary: {}
+          }
+        }
+      ]
+    });
+
+    expect(plan.childPrompts[0]).toContain('side-effect render test imports main.jsx and asserts too early');
+  });
+
+  test('buildTestFixPlan includes heading-level root-cause hint when signatures match', () => {
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            logs: [
+              { message: "expect(screen.getByRole('heading', { level: 1, name: 'test-proj' })).toBeInTheDocument()" },
+              { message: 'heading:' },
+              { message: '<h2 />' }
+            ],
+            summary: {}
+          }
+        }
+      ]
+    });
+
+    expect(plan.childPrompts[0]).toContain('Likely root cause: heading level mismatch.');
+  });
+
+  test('buildTestFixPlan places root-cause hint before raw failure output', () => {
+    const plan = hooks.buildTestFixPlan({
+      jobs: [
+        {
+          label: 'Frontend tests',
+          kind: 'frontend',
+          job: {
+            status: 'failed',
+            logs: [
+              { message: 'Warning: An update to Root inside a test was not wrapped in act(...)' },
+              { message: 'Error: frontend/src/main.jsx side‑effect rendering > imports main.jsx and renders the App component into #root' },
+              { message: 'TestingLibraryElementError: Unable to find an accessible element with the role "heading"' }
+            ],
+            summary: {}
+          }
+        }
+      ]
+    });
+
+    const prompt = plan.childPrompts[0] || '';
+    const hintIndex = prompt.indexOf('Likely root cause: a side-effect render test imports main.jsx and asserts too early.');
+    const failureOutputIndex = prompt.indexOf('Failure output:');
+    expect(hintIndex).toBeGreaterThan(-1);
+    expect(failureOutputIndex).toBeGreaterThan(-1);
+    expect(hintIndex).toBeLessThan(failureOutputIndex);
   });
 
   test('formatUncoveredLineSummary adds a preview suffix when there are many lines', () => {
