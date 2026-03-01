@@ -3375,6 +3375,109 @@ describe('processGoal implementation preprocessing', () => {
   });
 });
 
+describe('processGoal LCDT lane enforcement', () => {
+  test('blocks implementation edits outside LCDT lanes', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('llm_src/');
+    expect(result.error).toContain('llm_src_backend/');
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test('allows implementation edits inside LCDT lanes', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/main.js',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [], implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'implementation',
+        edits: expect.arrayContaining([expect.objectContaining({ path: 'llm_src/main.js' })])
+      })
+    );
+  });
+
+  test('blocks tests-stage edits outside LCDT lanes', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: true });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/main.js',
+      'llm_src_backend/server.js'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.test.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, testsAttemptSequence: [1], implementationAttemptSequence: [1] }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('llm_src/');
+    expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
+  });
+});
+
 describe('processGoal final-attempt failures', () => {
   test('propagates tests scope violations when no retries remain', async () => {
     automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: true });

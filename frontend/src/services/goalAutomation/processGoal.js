@@ -122,6 +122,39 @@ const buildFileOpRetryContext = (error, knownPathsSet) => {
 
 const isTestFilePath = (path) => /__tests__\//.test(path) || /\.(test|spec)\.[jt]sx?$/.test(path);
 const isStylesheetPath = (path) => /\.(css|scss|sass|less)$/i.test(path);
+const LCDT_ALLOWED_LANES = ['llm_src', 'llm_src_backend'];
+
+const hasLcdtProjectMarker = (projectInfo) => {
+  if (typeof projectInfo !== 'string') {
+    return false;
+  }
+  const normalized = projectInfo.toLowerCase();
+  return normalized.includes('lucid-coder-default') || normalized.includes('lucid coder default template');
+};
+
+const deriveLcdtAllowedLanePrefixes = (knownPathsSet, knownDirsSet) => {
+  const detected = [];
+  for (const lane of LCDT_ALLOWED_LANES) {
+    const lanePrefix = `${lane}/`;
+    const hasDir = knownDirsSet instanceof Set && knownDirsSet.has(lane);
+    let hasPath = false;
+    if (!hasDir && knownPathsSet instanceof Set && knownPathsSet.size > 0) {
+      for (const path of knownPathsSet) {
+        if (typeof path !== 'string') {
+          continue;
+        }
+        if (path === lane || path.startsWith(lanePrefix)) {
+          hasPath = true;
+          break;
+        }
+      }
+    }
+    if (hasDir || hasPath) {
+      detected.push(lanePrefix);
+    }
+  }
+  return detected;
+};
 
 const buildCoverageScope = (entries) => {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -273,6 +306,57 @@ export async function processGoal(
         }
       }
 
+      return null;
+    };
+
+    let lcdtLanePolicy = {
+      enabled: hasLcdtProjectMarker(projectInfo),
+      allowedPrefixes: [],
+      source: 'project-info'
+    };
+    const refreshLcdtLanePolicy = () => {
+      const detectedPrefixes = deriveLcdtAllowedLanePrefixes(knownPathsSet, knownDirsSet);
+      if (detectedPrefixes.length > 0) {
+        lcdtLanePolicy = {
+          enabled: true,
+          allowedPrefixes: detectedPrefixes,
+          source: 'repo-tree'
+        };
+        return;
+      }
+      if (hasLcdtProjectMarker(projectInfo)) {
+        lcdtLanePolicy = {
+          enabled: true,
+          allowedPrefixes: LCDT_ALLOWED_LANES.map((lane) => `${lane}/`),
+          source: 'project-info'
+        };
+        return;
+      }
+      lcdtLanePolicy = { enabled: false, allowedPrefixes: [], source: null };
+    };
+
+    const validateLcdtLaneScope = (edits) => {
+      if (!lcdtLanePolicy.enabled || !Array.isArray(edits)) {
+        return null;
+      }
+      const allowedPrefixes = Array.isArray(lcdtLanePolicy.allowedPrefixes)
+        ? lcdtLanePolicy.allowedPrefixes.filter(Boolean)
+        : [];
+      for (const edit of edits) {
+        const normalizedPath = normalizeRepoPath(edit?.path);
+        if (!normalizedPath) {
+          continue;
+        }
+        const withinAllowedLane = allowedPrefixes.some((prefix) => normalizedPath.startsWith(prefix));
+        if (!withinAllowedLane) {
+          return {
+            type: 'lcdt-lane-scope',
+            path: normalizedPath,
+            rule: 'lcdt-lane-scope',
+            message: `Lucid Coder Default Template automation is restricted to ${allowedPrefixes.join(', ')}.`
+          };
+        }
+      }
       return null;
     };
 
@@ -700,6 +784,7 @@ export async function processGoal(
 
       mergeKnownPathsFromTree(fileTreePaths);
       mergeKnownDirsFromTree(fileTreePaths);
+      refreshLcdtLanePolicy();
     };
 
     if (!(await waitWhilePaused())) {
@@ -770,6 +855,11 @@ export async function processGoal(
           const coverageViolation = validateCoverageScope(edits);
           if (coverageViolation) {
             throw buildScopeViolationError(coverageViolation);
+          }
+
+          const lcdtLaneViolation = validateLcdtLaneScope(edits);
+          if (lcdtLaneViolation) {
+            throw buildScopeViolationError(lcdtLaneViolation);
           }
 
           const scopeViolation = validateEditsAgainstReflection(edits, scopeReflection, { stage: 'tests' });
@@ -1012,6 +1102,11 @@ export async function processGoal(
           throw buildScopeViolationError(shortcutViolation);
         }
 
+        const lcdtLaneViolation = validateLcdtLaneScope(edits);
+        if (lcdtLaneViolation) {
+          throw buildScopeViolationError(lcdtLaneViolation);
+        }
+
         const scopeViolation = validateEditsAgainstReflection(edits, scopeReflection, { stage: 'implementation' });
         if (scopeViolation) {
           throw buildScopeViolationError(scopeViolation);
@@ -1223,6 +1318,8 @@ export const __processGoalTestHooks = {
   isEmptyEditsError,
   buildFileOpRetryContext,
   buildCoverageScope,
+  hasLcdtProjectMarker,
+  deriveLcdtAllowedLanePrefixes,
   extractSelectedProjectAssets,
   markTouchTrackerForPath
 };
