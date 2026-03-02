@@ -28,6 +28,11 @@ export const isLoopbackHostname = (hostname) => {
   );
 };
 
+const normalizePositiveInteger = (value) => {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+};
+
 const PreviewPanel = () => {
   const [localActiveTab, setLocalActiveTab] = useState('preview');
   const [localFollowAutomation, setLocalFollowAutomation] = useState(true);
@@ -287,13 +292,13 @@ const PreviewPanel = () => {
   }, [editorFocusRequest, currentProject?.id, activeTab, setActiveTab, followAutomation]);
 
   const handleFileSaved = useCallback(() => {
-    if (previewRef.current?.reloadPreview) {
-      previewRef.current.reloadPreview();
+    if (isPreviewActive) {
       pendingPreviewReloadRef.current = false;
-    } else {
-      pendingPreviewReloadRef.current = true;
+      return;
     }
-  }, []);
+
+    pendingPreviewReloadRef.current = true;
+  }, [isPreviewActive]);
   const handleReload = useCallback(() => {
     if (!isPreviewActive || !previewRef.current) {
       return;
@@ -437,6 +442,23 @@ const PreviewPanel = () => {
   }, [workspaceChanges, activeTab, followAutomation, currentProject?.id, focusLatestStagedFile]);
 
   const handleOpenInNewTab = useCallback(() => {
+    const getFallbackDevServerUrl = () => {
+      const frontendPort =
+        normalizePositiveInteger(projectProcesses?.ports?.active?.frontend) ||
+        normalizePositiveInteger(projectProcesses?.ports?.stored?.frontend) ||
+        normalizePositiveInteger(projectProcesses?.ports?.preferred?.frontend) ||
+        normalizePositiveInteger(projectProcesses?.lastKnownPorts?.frontend);
+
+      if (!frontendPort || typeof window === 'undefined') {
+        return null;
+      }
+
+      const rawProtocol = window.location?.protocol;
+      const protocol = rawProtocol === 'https:' ? 'https:' : 'http:';
+      const hostname = window.location?.hostname || 'localhost';
+      return `${protocol}//${hostname}:${frontendPort}/`;
+    };
+
     if (!isPreviewActive || !previewRef.current || !currentProject) {
       return;
     }
@@ -452,11 +474,15 @@ const PreviewPanel = () => {
       previewRef.current.getPreviewUrl?.();
 
     if (!targetUrl || targetUrl === 'about:blank') {
+      const fallbackUrl = getFallbackDevServerUrl();
+      if (fallbackUrl) {
+        window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+      }
       return;
     }
 
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
-  }, [isPreviewActive, currentProject]);
+  }, [isPreviewActive, currentProject, projectProcesses]);
 
   const handleBranchFileOpen = useCallback(
     (filePath) => {

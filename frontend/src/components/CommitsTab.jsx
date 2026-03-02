@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import axios from 'axios';
 import { useAppState } from '../context/AppStateContext';
 import { useCommitComposer } from './branch-tab/useCommitComposer';
-import { describeMergeBlocker, isPassingTestStatus } from './branch-tab/utils';
+import { describeMergeBlocker, isCssStylesheetPath, isPassingTestStatus } from './branch-tab/utils';
 import Modal from './Modal';
 import './CommitsTab.css';
 import './BranchTab.css';
@@ -74,10 +74,7 @@ const CommitsTab = ({
       return false;
     }
 
-    return stagedFiles.every((file) => {
-      const filePath = typeof file?.path === 'string' ? file.path.trim().toLowerCase() : '';
-      return Boolean(filePath) && filePath.endsWith('.css');
-    });
+    return stagedFiles.every((file) => isCssStylesheetPath(file?.path));
   }, [hasStagedFiles, stagedFiles]);
 
   const testsPassed = isPassingTestStatus(activeWorkingBranch?.lastTestStatus);

@@ -666,12 +666,40 @@ export const validateExecutionContractGate = (reflection, options = {}) => valid
 
 export const parseEditsFromLLM = (llmResponse) => {
   const responseContent = llmResponse?.data?.response || llmResponse?.data?.content || '';
+
+  if (Array.isArray(responseContent)) {
+    return responseContent;
+  }
+  if (responseContent && typeof responseContent === 'object') {
+    return Array.isArray(responseContent?.edits) ? responseContent.edits : [];
+  }
+
+  const decodeJsonWrappedString = (value, maxDepth = 2) => {
+    let current = typeof value === 'string' ? value.trim() : '';
+    for (let index = 0; index < maxDepth; index += 1) {
+      if (!(current.startsWith('"') && current.endsWith('"'))) {
+        break;
+      }
+      try {
+        const decoded = JSON.parse(current);
+        if (typeof decoded !== 'string') {
+          break;
+        }
+        current = decoded.trim();
+      } catch {
+        break;
+      }
+    }
+    return current;
+  };
+
+  const normalizedContent = decodeJsonWrappedString(responseContent);
   const jsonText =
-    extractJsonObjectWithKey(responseContent, 'edits') ||
-    extractJsonArray(responseContent) ||
-    extractJsonObject(responseContent);
+    extractJsonObjectWithKey(normalizedContent, 'edits') ||
+    extractJsonArray(normalizedContent) ||
+    extractJsonObject(normalizedContent);
   if (!jsonText) {
-    const fallback = tryParseLooseJson(responseContent);
+    const fallback = tryParseLooseJson(normalizedContent) || tryParseLooseJson(responseContent);
     if (Array.isArray(fallback)) {
       return fallback;
     }
@@ -682,13 +710,17 @@ export const parseEditsFromLLM = (llmResponse) => {
   }
 
   try {
-    const parsed = JSON.parse(jsonText);
+    const parsed = JSON.parse(decodeJsonWrappedString(jsonText));
     if (Array.isArray(parsed)) {
       return parsed;
     }
     return Array.isArray(parsed?.edits) ? parsed.edits : [];
   } catch (error) {
-    const loose = tryParseLooseJson(jsonText) || tryParseLooseJson(responseContent);
+    const loose =
+      tryParseLooseJson(decodeJsonWrappedString(jsonText)) ||
+      tryParseLooseJson(jsonText) ||
+      tryParseLooseJson(normalizedContent) ||
+      tryParseLooseJson(responseContent);
     if (Array.isArray(loose)) {
       return loose;
     }

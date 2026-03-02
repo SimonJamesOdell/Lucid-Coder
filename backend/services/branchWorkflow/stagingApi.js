@@ -39,7 +39,8 @@ export const createBranchWorkflowStaging = (core) => {
     ensureGitBranchExists,
     checkoutGitBranch,
     commitAllChanges,
-    isCssOnlyBranchDiff
+    isCssOnlyBranchDiff,
+    isStyleOnlyPath
   } = core;
 
   const ensureChangelogUnreleasedEntry = async (projectPath, entryText) =>
@@ -50,6 +51,13 @@ export const createBranchWorkflowStaging = (core) => {
 
   const bumpVersionAndRollChangelog = async (projectPath, entryText) =>
     bumpVersionAndRollChangelogBase(fs, path, projectPath, entryText);
+
+  const isStyleOnlyPathPredicate = typeof isStyleOnlyPath === 'function'
+    ? isStyleOnlyPath
+    : ((value) => {
+      const normalized = String(value || '').trim().toLowerCase();
+      return normalized.endsWith('.css') || /(^|\/)llm_src\/styles\/style_[^/]+\.json$/i.test(normalized);
+    });
 
   const stageWorkspaceChange = async (projectId, payload = {}) => {
     const context = await getProjectContext(projectId);
@@ -477,8 +485,7 @@ export const createBranchWorkflowStaging = (core) => {
     }
 
     const isCssOnlyStaged = stagedFiles.every((entry) => {
-      const filePath = typeof entry?.path === 'string' ? entry.path.trim().toLowerCase() : '';
-      return Boolean(filePath) && filePath.endsWith('.css');
+      return isStyleOnlyPathPredicate(entry?.path);
     });
 
     const autoChangelogRequested = payload?.autoChangelog === true;

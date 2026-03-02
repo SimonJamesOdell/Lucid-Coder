@@ -23,6 +23,7 @@ import {
   get,
   getProjectContext,
   isCssOnlyBranchDiff,
+  isStyleOnlyPath,
   isTestMode,
   listBranchChangedPaths,
   listGitStagedEntries,
@@ -183,8 +184,10 @@ const buildOverview = (rows, latestTestRun) => {
       const summary = lastTestRunId ? parseJsonColumn(row.last_test_summary) : null;
       const stagedFiles = parseStagedFiles(row.staged_files);
       const cssOnlyMergeAllowed = Boolean(row.__cssOnlyMergeAllowed);
+      const stagedStyleOnly = stagedFiles.length > 0
+        && stagedFiles.every((entry) => isStyleOnlyPath(entry?.path));
       const testsRequired = stagedFiles.length > 0
-        ? true
+        ? !stagedStyleOnly
         : !(row.status === 'ready-for-merge' || cssOnlyMergeAllowed);
       const mergeBlockedReason = testsRequired
         ? (!lastTestRunId
@@ -453,6 +456,7 @@ const testsApi = createBranchWorkflowTests({
   resolveCoveragePolicy,
   getTestingSettings,
   getProjectTestingSettings,
+  isStyleOnlyPath,
   runProjectGit,
   run,
   get,
@@ -546,7 +550,8 @@ const stagingApi = createBranchWorkflowStaging({
   ensureGitBranchExists,
   checkoutGitBranch,
   commitAllChanges: (...args) => git.commitAllChanges(...args),
-  isCssOnlyBranchDiff
+  isCssOnlyBranchDiff,
+  isStyleOnlyPath
 });
 
 export const stageWorkspaceChange = stagingApi.stageWorkspaceChange;

@@ -210,20 +210,20 @@ describe('processGoal instruction-only goals', () => {
     const branchGoal = { ...goal, prompt: 'Create a branch for documentation only' };
     goalsApiMock.fetchGoals.mockResolvedValueOnce(null);
 
-    const result = await processGoal(
-      branchGoal,
-      args.projectId,
-      args.projectPath,
-      args.projectInfo,
-      args.setPreviewPanelTab,
-      args.setGoalCount,
-      args.createMessage,
-      args.setMessages,
-      baseOptions
-    );
+      const result = await processGoal(
+        branchGoal,
+        args.projectId,
+        args.projectPath,
+        args.projectInfo,
+        args.setPreviewPanelTab,
+        args.setGoalCount,
+        args.createMessage,
+        args.setMessages,
+        baseOptions
+      );
 
-    expect(result).toEqual({ success: true, skippedReason: 'branch-only' });
-    expect(args.setGoalCount).toHaveBeenCalledWith(0);
+      expect(result).toEqual({ success: true, skippedReason: 'branch-only' });
+      expect(args.setGoalCount).toHaveBeenCalledWith(0);
   });
 
   test('refreshes goal count when advanceGoalPhase returns 404 for instruction-only goals', async () => {
@@ -603,7 +603,7 @@ describe('processGoal retries and context handling', () => {
         {
           type: 'modify',
           path: 'frontend/src/App.jsx',
-          replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+          replacements: [{ search: 'const value = 1;', replace: 'const hero = "/uploads/hero.png";' }]
         }
       ]);
 
@@ -637,7 +637,7 @@ describe('processGoal retries and context handling', () => {
         {
           type: 'modify',
           path: 'frontend/src/App.jsx',
-          replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+          replacements: [{ search: 'const value = 1;', replace: 'const bg = "/uploads/background.png";' }]
         }
       ]);
 
@@ -658,6 +658,129 @@ describe('processGoal retries and context handling', () => {
     const retryContext = automationModuleMock.buildEditsPrompt.mock.calls[1][0].retryContext;
     expect(retryContext.message).toMatch(/selected asset paths/i);
     expect(retryContext.message).toContain('uploads/background.png');
+  });
+
+  test('retries implementation when edits do not reference required selected asset paths', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      requiredAssetPaths: ['uploads/AI-levels.jpeg']
+    });
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_global.json',
+          replacements: [{ search: 'background: #000;', replace: 'background: linear-gradient(#0000ff, #800080);' }]
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_global.json',
+          replacements: [{ search: 'background: #000;', replace: 'background-image: url("/uploads/AI-levels.jpeg");' }]
+        }
+      ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      {
+        ...args.goal,
+        prompt: [
+          'Update background image',
+          '',
+          'Selected project assets:',
+          '- uploads/AI-levels.jpeg',
+          '',
+          'Current request: use this image as the background'
+        ].join('\n')
+      },
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const retryContext = automationModuleMock.buildEditsPrompt.mock.calls[1][0].retryContext;
+    expect(retryContext.message).toMatch(/must reference one of the selected asset paths/i);
+    expect(retryContext.message).toContain('uploads/AI-levels.jpeg');
+  });
+
+  test('fails selected-asset reference checks when an edit serializes to a non-string value', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      requiredAssetPaths: ['uploads/AI-levels.jpeg']
+    });
+    automationModuleMock.parseEditsFromLLM.mockReturnValueOnce([undefined]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      {
+        ...args.goal,
+        prompt: 'Use selected asset path uploads/AI-levels.jpeg'
+      },
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1], selectedAssetPaths: ['uploads/AI-levels.jpeg'] }
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('must reference one of the selected asset paths')
+    }));
+  });
+
+  test('fails selected-asset reference checks when edit serialization throws', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      requiredAssetPaths: ['uploads/AI-levels.jpeg']
+    });
+
+    const sentinelEdit = {
+      type: 'modify',
+      path: 'llm_src/styles/style_global.json',
+      replacements: [{ search: 'a', replace: 'b' }]
+    };
+    automationModuleMock.parseEditsFromLLM.mockReturnValueOnce([sentinelEdit]);
+
+    const originalStringify = JSON.stringify;
+    const stringifySpy = vi.spyOn(JSON, 'stringify').mockImplementation((value, ...args) => {
+      if (value === sentinelEdit) {
+        throw new TypeError('stringify exploded');
+      }
+      return originalStringify(value, ...args);
+    });
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      {
+        ...args.goal,
+        prompt: 'Use selected asset path uploads/AI-levels.jpeg'
+      },
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1], selectedAssetPaths: ['uploads/AI-levels.jpeg'] }
+    );
+
+    stringifySpy.mockRestore();
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('must reference one of the selected asset paths')
+    }));
   });
 
   test('retries tests stage after file operation failures', async () => {
@@ -898,6 +1021,49 @@ describe('processGoal framework analysis hooks', () => {
 });
 
 describe('processGoal scope reflection handling', () => {
+  test('reconciles scope reflection against default LCDT lane prefixes', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: ['src/App.css'],
+      mustAvoid: ['backend/'],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue(['frontend/src/App.jsx']);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: false, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('restricted to llm_src/, llm_src_backend/')
+    });
+    expect(automationModuleMock.automationLog).toHaveBeenCalledWith(
+      'processGoal:scopeReflection:lcdtLaneReconciled',
+      expect.objectContaining({
+        allowedPrefixes: ['llm_src/', 'llm_src_backend/'],
+        mustChangeAfter: [],
+        mustAvoidAfter: []
+      })
+    );
+  });
+
   test('fails closed when the reflection request fails and no execution contract is available', async () => {
     const args = defaultArgs();
     const reflectionError = new Error('reflection unavailable');
@@ -1073,6 +1239,843 @@ describe('processGoal scope reflection handling', () => {
     expect(automationModuleMock.applyEdits).not.toHaveBeenCalled();
   });
 
+  test('allows preserve-preview edits inside LCDT lanes even when files are not stylesheet extensions', async () => {
+    const args = defaultArgs();
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/styles/style_LandingPage.json',
+        replacements: [{ search: '"background": "white"', replace: '"background": "blue"' }]
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('treats string content with style signals as a valid preserve-preview visual target', async () => {
+    const args = defaultArgs();
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/manifest.json',
+      'llm_src/styles/style_LandingPage.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/manifest.json',
+        content: '{"theme":"dark","background":"#111"}'
+      }
+    ]);
+
+    const result = await processGoal(
+      { ...args.goal, prompt: 'Adjust the page background theme color' },
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('includes style-focused lane hints in implementation prompt construction', async () => {
+    const args = defaultArgs();
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_Global.json',
+      'llm_src/manifest.json',
+      'llm_src_backend/config.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/styles/style_Global.json',
+        replacements: [{ search: 'background: #000;', replace: 'background: #111;' }]
+      }
+    ]);
+
+    const result = await processGoal(
+      { ...args.goal, prompt: 'Adjust background style colors' },
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implementationPayload = getStagePromptPayloads('implementation')[0];
+    expect(implementationPayload.goalPrompt).toContain('Known existing lane files');
+    expect(implementationPayload.goalPrompt).toContain('llm_src/styles/style_Global.json');
+  });
+
+  test('reconciles out-of-lane mustChange execution contract requirements for LCDT preserve-preview edits', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: ['src/App.css'],
+      mustAvoid: ['frontend/src/', 'backend/'],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/styles/style_LandingPage.json',
+        replacements: [{ search: '"background": "white"', replace: '"background": "blue"' }]
+      }
+    ]);
+    automationModuleMock.validateEditsAgainstReflection.mockImplementation((edits, reflection, options) => {
+      if (options?.stage !== 'implementation') {
+        return null;
+      }
+
+      const mustChange = Array.isArray(reflection?.mustChange)
+        ? reflection.mustChange.filter((value) => typeof value === 'string' && value.trim())
+        : [];
+      if (mustChange.length === 0) {
+        return null;
+      }
+
+      const touched = edits.some((edit) => {
+        const editPath = typeof edit?.path === 'string' ? edit.path : '';
+        return mustChange.some((required) => editPath.startsWith(required) || required.startsWith(editPath));
+      });
+      if (touched) {
+        return null;
+      }
+
+      return {
+        type: 'execution-contract-must-change-missing',
+        rule: 'execution-contract-must-change',
+        path: mustChange[0],
+        message: `Execution contract requires implementation edits in: ${mustChange.join(', ')}.`
+      };
+    });
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+    expect(automationModuleMock.automationLog).toHaveBeenCalledWith(
+      'processGoal:scopeReflection:lcdtLaneReconciled',
+      expect.objectContaining({
+        mustChangeBefore: ['src/App.css'],
+        mustChangeAfter: []
+      })
+    );
+  });
+
+  test('returns early from LCDT reconciliation when normalized allowed prefixes become empty', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: ['src/App.css'],
+      mustAvoid: ['backend/'],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue(['frontend/src/App.jsx']);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+    automationModuleMock.normalizeRepoPath.mockImplementation(() => '');
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: false, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(automationModuleMock.automationLog).not.toHaveBeenCalledWith(
+      'processGoal:scopeReflection:lcdtLaneReconciled',
+      expect.any(Object)
+    );
+  });
+
+  test('allows preserve-preview upsert edits to create new files when the path does not already exist', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'upsert',
+        path: 'llm_src/styles/style_global.json',
+        content: '{"background":"blue"}'
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(1);
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('retries preserve-preview implementation when first attempt modifies a non-existent file path', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_global.json',
+          replacements: [{ search: '"background": "white"', replace: '"background": "blue"' }]
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: '"background": "white"', replace: '"background": "blue"' }]
+        }
+      ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(2);
+    expect(implPrompts[1].retryContext).toMatchObject({
+      path: 'llm_src/styles/style_global.json',
+      scopeWarning: expect.stringContaining('switch to upsert')
+    });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('retries preserve-preview implementation when first attempt only edits non-visual lane metadata', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/manifest.json',
+          replacements: [{ search: '"version": "1.0"', replace: '"version": "1.1"' }]
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: '"background": "white"', replace: '"background": "blue"' }]
+        }
+      ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(2);
+    expect(implPrompts[1].retryContext).toMatchObject({
+      path: 'llm_src/manifest.json',
+      scopeWarning: expect.stringContaining('style-bearing files')
+    });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('retries preserve-preview implementation when first attempt replaces component style JSON contract', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/styles/style_global.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'upsert',
+          path: 'llm_src/styles/style_LandingPage.json',
+          content: '{"selector":".LandingPage","styles":{"backgroundColor":"blue"}}'
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: 'background: #f1f5f9;', replace: 'background: blue;' }]
+        }
+      ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(2);
+    expect(implPrompts[1].retryContext).toMatchObject({
+      path: 'llm_src/styles/style_LandingPage.json',
+      scopeWarning: expect.stringContaining('contract')
+    });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('accepts legacy component style JSON contract replacement in preserve-preview mode', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/styles/style_global.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'upsert',
+        path: 'llm_src/styles/style_LandingPage.json',
+        content: JSON.stringify({
+          id: 'landing-page',
+          type: 'style',
+          target: '.LandingPage',
+          description: 'legacy component style payload',
+          css: '.LandingPage { background: #123456; }'
+        })
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(getStagePromptPayloads('implementation')).toHaveLength(1);
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('retries preserve-preview implementation when first attempt replaces component style JSON with selector/properties payload', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/styles/style_global.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'upsert',
+          path: 'llm_src/styles/style_LandingPage.json',
+          content: JSON.stringify({
+            selector: '.landing-page',
+            properties: {
+              backgroundImage: "url('/uploads/AI-levels.jpeg')",
+              backgroundSize: 'cover'
+            }
+          })
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: 'background: #f1f5f9;', replace: 'background-image: url("/uploads/AI-levels.jpeg");' }]
+        }
+      ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(2);
+    expect(implPrompts[1].retryContext).toMatchObject({
+      path: 'llm_src/styles/style_LandingPage.json',
+      scopeWarning: expect.stringContaining('contract')
+    });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('retries preserve-preview implementation when first attempt replaces component style JSON with styles-object payload', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/styles/style_global.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'upsert',
+          path: 'llm_src/styles/style_LandingPage.json',
+          content: JSON.stringify({
+            styles: {
+              backgroundColor: '#223344'
+            }
+          })
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: 'background: #f1f5f9;', replace: 'background: #223344;' }]
+        }
+      ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(2);
+    expect(implPrompts[1].retryContext).toMatchObject({
+      path: 'llm_src/styles/style_LandingPage.json',
+      scopeWarning: expect.stringContaining('contract')
+    });
+  });
+
+  test('retries preserve-preview implementation when first attempt replaces component style JSON with styles-array payload', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/styles/style_global.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'upsert',
+          path: 'llm_src/styles/style_LandingPage.json',
+          content: JSON.stringify({
+            styles: []
+          })
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: 'background: #f1f5f9;', replace: 'background: #223344;' }]
+        }
+      ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(2);
+    expect(implPrompts[1].retryContext).toMatchObject({
+      path: 'llm_src/styles/style_LandingPage.json',
+      scopeWarning: expect.stringContaining('contract')
+    });
+  });
+
+  test('retries preserve-preview implementation when first attempt replaces component style JSON with @media payload', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/styles/style_global.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'upsert',
+          path: 'llm_src/styles/style_LandingPage.json',
+          content: JSON.stringify({
+            '@media (max-width: 768px)': {
+              '.landing-page': {
+                padding: '16px'
+              }
+            }
+          })
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: 'padding: 24px;', replace: 'padding: 16px;' }]
+        }
+      ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(2);
+    expect(implPrompts[1].retryContext).toMatchObject({
+      path: 'llm_src/styles/style_LandingPage.json',
+      scopeWarning: expect.stringContaining('contract')
+    });
+  });
+
+  test('retries preserve-preview implementation when replacement payload rewrites component style JSON contract', async () => {
+    const args = defaultArgs();
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: [],
+      mustHave: []
+    });
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/styles/style_global.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [
+            { search: '{"css":"old"}', replace: '{"selector": }' },
+            { search: '{"css":"new"}', replace: '{"selector":".LandingPage","styles":{"backgroundColor":"blue"}}' }
+          ]
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: 'background: #f1f5f9;', replace: 'background: blue;' }]
+        }
+      ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1, 2] }
+    );
+
+    expect(result).toEqual({ success: true });
+    const implPrompts = getStagePromptPayloads('implementation');
+    expect(implPrompts).toHaveLength(2);
+    expect(implPrompts[1].retryContext).toMatchObject({
+      path: 'llm_src/styles/style_LandingPage.json',
+      scopeWarning: expect.stringContaining('contract')
+    });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('fails preserve-preview implementation when unknown-path edit type is non-string', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: { value: 'modify' },
+        path: 'llm_src/styles/style_Missing.json',
+        content: '{"css":"body{}"}'
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('must target existing files unless creating a new file with an upsert edit')
+    }));
+  });
+
+  test('fails preserve-preview implementation when unknown-path edit type is missing', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        path: 'llm_src/styles/style_Missing.json',
+        content: '{"css":"body{}"}'
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('must target existing files unless creating a new file with an upsert edit')
+    }));
+  });
+
+  test('fails preserve-preview visual-target validation when replacement values are non-string and non-style', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/manifest.json',
+        replacements: [{ search: 'old', replace: 101 }]
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('must target style-bearing files')
+    }));
+  });
+
+  test('fails preserve-preview visual-target validation when replacement text is falsy', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/manifest.json',
+        replacements: [{ search: 'old', replace: 0 }]
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      'Lucid Coder Default Template project',
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('must target style-bearing files')
+    }));
+  });
+
   test('ignores preserve-preview edits without a normalizable path before validating stylesheet scope', async () => {
     const args = defaultArgs();
 
@@ -1102,6 +2105,74 @@ describe('processGoal scope reflection handling', () => {
 
     expect(result).toEqual({ success: true });
     expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('skips preserve-preview visual-target validation when an earlier edit path is missing', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/styles/style_LandingPage.json',
+      'llm_src/manifest.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        replacements: [{ search: 'old', replace: 'new' }]
+      },
+      {
+        type: 'modify',
+        path: 'llm_src/styles/style_LandingPage.json',
+        replacements: [{ search: 'background: white;', replace: 'background: #222;' }]
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(automationModuleMock.applyEdits).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns style-shortcut-visual-target when non-style edits use non-string content', async () => {
+    const args = defaultArgs();
+
+    automationModuleMock.flattenFileTree.mockReturnValue([
+      'llm_src/manifest.json',
+      'llm_src/styles/style_LandingPage.json'
+    ]);
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'llm_src/manifest.json',
+        content: { background: '#111' }
+      }
+    ]);
+
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, preservePreviewTab: true, implementationAttemptSequence: [1] }
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('must target style-bearing files')
+    }));
   });
 
   test('logs null shortcut path when preserve-preview scope violation omits a path', async () => {
@@ -1801,8 +2872,8 @@ describe('processGoal coverage scope enforcement', () => {
     automationModuleMock.parseEditsFromLLM.mockReturnValue([
       {
         type: 'modify',
-        path: 'frontend/src/App.jsx',
-        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+        path: 'uploads/hero.png',
+        replacements: [{ search: 'old', replace: 'new' }]
       }
     ]);
 
@@ -2926,6 +3997,120 @@ describe('processGoal edit accounting', () => {
 
     expect(result).toEqual({ success: true });
   });
+
+  test('retries implementation when preserve preview is enabled and apply summary reports zero applied edits', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+
+    const implementationEdits = [
+      {
+        type: 'modify',
+        path: 'llm_src/styles/theme.css',
+        replacements: [{ search: '.cta { color: #000; }', replace: '.cta { color: #111; }' }]
+      }
+    ];
+    automationModuleMock.parseEditsFromLLM.mockReturnValue(implementationEdits);
+
+    let implementationApplyAttempts = 0;
+    automationModuleMock.applyEdits.mockImplementation(async ({ stage }) => {
+      if (stage !== 'implementation') {
+        return { applied: 1, skipped: 0 };
+      }
+      implementationApplyAttempts += 1;
+      if (implementationApplyAttempts === 1) {
+        return { applied: 0, skipped: 1 };
+      }
+      return { applied: 1, skipped: 0 };
+    });
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        preservePreviewTab: true,
+        implementationAttemptSequence: [1, 2]
+      }
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(implementationApplyAttempts).toBe(2);
+  });
+
+  test('throws generic no-edits error when no implementation edits are applied and no required assets exist', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({ testsNeeded: false });
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'frontend/src/App.jsx',
+        replacements: [{ search: 'const value = 1;', replace: 'const value = 2;' }]
+      }
+    ]);
+    automationModuleMock.applyEdits.mockResolvedValue({ applied: 0, skipped: 1 });
+
+    const args = defaultArgs();
+
+    await expect(processGoal(
+      args.goal,
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      { ...baseOptions, implementationAttemptSequence: [1] }
+    )).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('No repo edits were applied for this goal.')
+    });
+  });
+
+  test('throws selected-asset no-applied-edits error when required assets are referenced but no edits apply', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      requiredAssetPaths: ['uploads/hero.png']
+    });
+    automationModuleMock.parseEditsFromLLM.mockReturnValue([
+      {
+        type: 'modify',
+        path: 'uploads/hero.png',
+        replacements: [{ search: 'old', replace: 'new' }]
+      }
+    ]);
+    automationModuleMock.applyEdits.mockResolvedValue({ applied: 0, skipped: 1 });
+
+    const args = defaultArgs();
+
+    await expect(processGoal(
+      {
+        ...args.goal,
+        prompt: 'Apply selected asset to the background'
+      },
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        implementationAttemptSequence: [1],
+        selectedAssetPaths: ['uploads/hero.png']
+      }
+    )).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('none referenced the selected asset paths (uploads/hero.png)')
+    });
+  });
+
 });
 
 describe('processGoal implementation guards', () => {
@@ -3989,6 +5174,96 @@ describe('processGoal guard coverage', () => {
     expect(implementationPayload.scopeReflection.requiredAssetPaths).toEqual(['uploads/hero-background.png']);
   });
 
+  test('uses selectedAssetPaths option as required asset fallback when prompt omits selected assets block', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: []
+    });
+
+    automationModuleMock.parseEditsFromLLM
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: 'background: #f1f5f9;', replace: 'background: #111111;' }]
+        }
+      ])
+      .mockReturnValueOnce([
+        {
+          type: 'modify',
+          path: 'llm_src/styles/style_LandingPage.json',
+          replacements: [{ search: 'background: #f1f5f9;', replace: 'background-image: url("/uploads/AI_architecture.jpeg");' }]
+        }
+      ]);
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      {
+        ...args.goal,
+        prompt: 'Use this image as the site background'
+      },
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        implementationAttemptSequence: [1, 2],
+        selectedAssetPaths: ['uploads/AI_architecture.jpeg']
+      }
+    );
+
+    expect(result).toEqual({ success: true });
+    const retryContext = automationModuleMock.buildEditsPrompt.mock.calls[1][0].retryContext;
+    expect(retryContext.message).toMatch(/selected asset paths/i);
+    expect(retryContext.message).toContain('uploads/AI_architecture.jpeg');
+  });
+
+  test('normalizes selectedAssetPaths options by trimming strings and dropping non-string entries', async () => {
+    automationModuleMock.parseScopeReflectionResponse.mockReturnValue({
+      testsNeeded: false,
+      mustChange: [],
+      mustAvoid: []
+    });
+    automationModuleMock.parseEditsFromLLM.mockImplementation(() => ([
+      {
+        type: 'modify',
+        path: 'llm_src/styles/style_LandingPage.json',
+        replacements: [{ search: 'background: #f1f5f9;', replace: 'background: #111111;' }]
+      }
+    ]));
+
+    const args = defaultArgs();
+    const result = await processGoal(
+      {
+        ...args.goal,
+        prompt: 'Use selected project asset in the hero section.'
+      },
+      args.projectId,
+      args.projectPath,
+      args.projectInfo,
+      args.setPreviewPanelTab,
+      args.setGoalCount,
+      args.createMessage,
+      args.setMessages,
+      {
+        ...baseOptions,
+        implementationAttemptSequence: [1],
+        selectedAssetPaths: [' uploads/AI_architecture.jpeg ', null, 42, '   ']
+      }
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('uploads/AI_architecture.jpeg')
+    }));
+    expect(result.error).not.toContain('42');
+  });
+
   test('removes approval listener in finally when processing fails', async () => {
     const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
     const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener');
@@ -4064,6 +5339,24 @@ describe('__processGoalTestHooks helpers', () => {
 
     expect(error.message).toMatch(/tests stage/i);
     expect(isEmptyEditsError(error)).toBe(true);
+  });
+
+  test('editsReferenceRequiredAssetPaths returns true when edits or required assets are empty', () => {
+    const { editsReferenceRequiredAssetPaths } = __processGoalTestHooks;
+
+    expect(editsReferenceRequiredAssetPaths([], ['uploads/hero.png'])).toBe(true);
+    expect(editsReferenceRequiredAssetPaths([{ path: 'src/App.jsx' }], [])).toBe(true);
+  });
+
+  test('editsReferenceRequiredAssetPaths returns true when required asset paths normalize to empty values', () => {
+    const { editsReferenceRequiredAssetPaths } = __processGoalTestHooks;
+
+    expect(
+      editsReferenceRequiredAssetPaths(
+        [{ path: 'src/App.jsx', replacements: [{ search: 'a', replace: 'b' }] }],
+        [null]
+      )
+    ).toBe(true);
   });
 
   test('hasLcdtProjectMarker returns false for non-string values and matches marker variants', () => {

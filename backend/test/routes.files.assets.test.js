@@ -4,9 +4,25 @@ import request from 'supertest';
 import fs from 'fs/promises';
 import path from 'path';
 
+const { execFileMock } = vi.hoisted(() => ({
+  execFileMock: vi.fn((_file, _args, _options, callback) => {
+    if (typeof callback === 'function') {
+      callback(null, '', '');
+    }
+  })
+}));
+
 const { sharpMock } = vi.hoisted(() => ({
   sharpMock: vi.fn()
 }));
+
+vi.mock('child_process', async () => {
+  const actual = await vi.importActual('child_process');
+  return {
+    ...actual,
+    execFile: execFileMock
+  };
+});
 
 vi.mock('sharp', () => ({
   default: sharpMock
@@ -63,6 +79,7 @@ describe('Project file routes assets coverage', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    execFileMock.mockClear();
 
     const { getProject } = await import('../database.js');
     getProject.mockResolvedValue(project);

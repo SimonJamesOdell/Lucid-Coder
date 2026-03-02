@@ -12,7 +12,15 @@ export const formatStatus = (status) => statusLabelMap[status] || 'Unknown';
 
 export const isCssStylesheetPath = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
-  return normalized.endsWith('.css');
+  if (!normalized) {
+    return false;
+  }
+
+  if (normalized.endsWith('.css')) {
+    return true;
+  }
+
+  return /(^|\/)llm_src\/styles\/style_[^/]+\.json$/i.test(normalized);
 };
 
 const PASSING_TEST_STATUSES = new Set(['passed', 'skipped']);

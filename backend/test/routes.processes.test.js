@@ -156,6 +156,31 @@ describe('routes/processes', () => {
     expect(res.body.capabilities?.backend?.exists).toBe(false);
   });
 
+  it('continues process status response when inferred port persistence fails', async () => {
+    processManager.getRunningProcessEntry.mockReturnValue({
+      processes: { frontend: { pid: 11, port: 6123 }, backend: null },
+      state: 'running',
+      snapshotVisible: true,
+      launchType: 'manual'
+    });
+
+    db.getProject.mockResolvedValue({
+      id: '123',
+      name: 'Persist Failure',
+      path: tempDir,
+      frontend_port: 5100,
+      backend_port: 5500
+    });
+    db.updateProjectPorts.mockRejectedValueOnce(new Error('db write failed'));
+
+    const res = await request(app)
+      .get('/api/projects/123/processes')
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+    expect(db.updateProjectPorts).toHaveBeenCalledWith('123', { frontendPort: 6123 });
+  });
+
   it('treats whitespace git remote URLs as non-template remotes', async () => {
     db.getProject.mockResolvedValue({
       id: '123',

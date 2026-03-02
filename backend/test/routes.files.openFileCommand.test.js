@@ -2,6 +2,22 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
+const { execFileMock } = vi.hoisted(() => ({
+  execFileMock: vi.fn((_file, _args, _options, callback) => {
+    if (typeof callback === 'function') {
+      callback(null, '', '');
+    }
+  })
+}));
+
+vi.mock('child_process', async () => {
+  const actual = await vi.importActual('child_process');
+  return {
+    ...actual,
+    execFile: execFileMock
+  };
+});
+
 vi.mock('../database.js', () => ({
   getProject: vi.fn()
 }));
@@ -38,17 +54,19 @@ describe('Project file routes emit OPEN_FILE commands', () => {
   const mockIo = { emit: vi.fn() };
 
   let app;
+  let fsMock;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    execFileMock.mockClear();
 
     const { getProject } = await import('../database.js');
     getProject.mockResolvedValue(project);
 
     const internals = await import('../routes/projects/internals.js');
 
-    const fsMock = {
+    fsMock = {
       stat: vi.fn().mockResolvedValue({ isFile: () => true }),
       writeFile: vi.fn().mockResolvedValue(),
       mkdir: vi.fn().mockResolvedValue()
@@ -107,5 +125,78 @@ describe('Project file routes emit OPEN_FILE commands', () => {
       command: { type: 'OPEN_FILE', payload: { filePath: 'src/newFile.js' } }
     });
     expect(stageWorkspaceChange).not.toHaveBeenCalled();
+  });
+
+  it('skips llm bundle rebuild when bundle script stat resolves as non-file', async () => {
+    fsMock.stat.mockImplementation(async (targetPath) => {
+      if (String(targetPath).includes('build_llm_bundle.cjs')) {
+        return { isFile: () => false };
+      }
+      return { isFile: () => true };
+    });
+
+    await request(app)
+      .put('/api/projects/123/files/llm_src/styles/style_Global.json')
+      .send({ content: '{"css":"body{}"}' })
+      .expect(200);
+
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it('skips llm bundle rebuild when bundle script stat throws', async () => {
+    fsMock.stat.mockImplementation(async (targetPath) => {
+      if (String(targetPath).includes('build_llm_bundle.cjs')) {
+        const error = new Error('ENOENT');
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return { isFile: () => true };
+    });
+
+    await request(app)
+      .put('/api/projects/123/files/llm_src/styles/style_Global.json')
+      .send({ content: '{"css":"body{}"}' })
+      .expect(200);
+
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it('continues request when llm bundle rebuild command fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    execFileMock.mockImplementationOnce((_file, _args, _options, callback) => {
+      if (typeof callback === 'function') {
+        callback(new Error('bundle failed'));
+      }
+    });
+
+    await request(app)
+      .put('/api/projects/123/files/llm_src/styles/style_Global.json')
+      .send({ content: '{"css":"body{}"}' })
+      .expect(200);
+
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('logs raw rebuild failure value when llm bundle rebuild throws without a message', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    execFileMock.mockImplementationOnce((_file, _args, _options, callback) => {
+      if (typeof callback === 'function') {
+        callback('bundle failed without message field');
+      }
+    });
+
+    await request(app)
+      .put('/api/projects/123/files/llm_src/styles/style_Global.json')
+      .send({ content: '{"css":"body{}"}' })
+      .expect(200);
+
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Failed to rebuild llm bundle after file edit:',
+      'bundle failed without message field'
+    );
+    warnSpy.mockRestore();
   });
 });

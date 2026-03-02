@@ -1,3 +1,12 @@
+## 0.8.3 (2026-03-02)
+- Close the remaining strict frontend/backend coverage gaps and restore full release-gate compliance, including targeted branch-path tests for `PreviewPanel`, `AppStateContext`, `PreviewTab`, and expanded `processGoal`/automation utility suites.
+- Improve preview reliability and port resolution across backend/frontend: infer frontend ports from process logs, broaden preview proxy candidate fallbacks/defaults, return placeholder HTML for unavailable preview targets, and add frontend open-in-new-tab fallbacks for active/stored/preferred/last-known process ports.
+- Harden backend process/file workflow behavior by reconciling inferred process ports into snapshots/status responses, adding best-effort llm bundle rebuild hooks on `llm_src` file edits, and extending route tests for rebuild failure/fallback paths.
+- Refine branch workflow style-only handling to treat template style JSON edits as style-only changes (alongside CSS), including merge/commit/test-gate logic updates across `branchWorkflow`, staging/tests APIs, and shared style-path predicates.
+- Strengthen goal-automation safety/contract handling in `processGoal` + `automationUtils`: decode broader LLM edit payload shapes, enforce preserve-preview style shortcut constraints (existing paths, visual target checks, style-json contract checks), and propagate selected asset path requirements through feature execution.
+- Improve frontend UX consistency in `ChatPanel`, `CommitsTab`, and `AssetsTab` by tightening selected-asset propagation, CSS/style-json staged-change classification, and asset-context synchronization after optimize/rename actions.
+- Bump sitewide version metadata to `0.8.3` via the release script across root/frontend/backend manifests, lockfiles, shared version exports, `VERSION`, and versioning documentation.
+
 ## 0.8.2 (2026-03-01)
 - Close the remaining strict coverage gaps and restore full frontend gate compliance at 100% statements/branches/functions/lines, including targeted branch-path tests in `ChatPanel`, `TestTab`, `helpers`, and goal-automation suites.
 - Improve auto-fix reliability in `ChatPanel` by making "Clear pending agent actions" actively cancel in-flight test jobs (with resilient error handling), and by ignoring automation-origin auto-fix events after a manual clear.

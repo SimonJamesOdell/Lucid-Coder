@@ -144,7 +144,20 @@ export const isCssOnlyBranchDiff = async (context, branchName) => {
     return false;
   }
 
-  return changedPaths.every((value) => value.toLowerCase().endsWith('.css'));
+  return changedPaths.every((value) => isStyleOnlyPath(value));
+};
+
+export const isStyleOnlyPath = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (normalized.endsWith('.css')) {
+    return true;
+  }
+
+  return /(^|\/)llm_src\/styles\/style_[^/]+\.json$/i.test(normalized);
 };
 
 export const listGitStagedPaths = async (context) => {

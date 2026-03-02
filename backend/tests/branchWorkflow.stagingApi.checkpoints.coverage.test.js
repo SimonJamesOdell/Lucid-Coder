@@ -412,6 +412,74 @@ describe('branchWorkflow stagingApi checkpoint helpers (coverage)', () => {
     ]);
   });
 
+  it('commitBranchChanges uses injected isStyleOnlyPath predicate for style-only staged commits', async () => {
+    const core = buildCore({ gitReady: false });
+    core.parseStagedFiles.mockReturnValue([
+      { path: 'llm_src/styles/style_Global.json', source: 'editor', timestamp: '2025-01-01T00:00:00Z' }
+    ]);
+    core.getBranchByName.mockResolvedValue({
+      id: 123,
+      name: 'agent/branch',
+      type: 'feature',
+      status: 'active',
+      staged_files: '[{"path":"llm_src/styles/style_Global.json"}]',
+      ahead_commits: 0
+    });
+    core.isStyleOnlyPath = vi.fn((value) => String(value || '').includes('style_Global.json'));
+
+    const staging = createBranchWorkflowStaging(core);
+    const result = await staging.commitBranchChanges(1, 'agent/branch');
+
+    expect(core.isStyleOnlyPath).toHaveBeenCalledWith('llm_src/styles/style_Global.json');
+    expect(result.commit.files).toEqual([
+      expect.objectContaining({ path: 'llm_src/styles/style_Global.json' })
+    ]);
+  });
+
+  it('commitBranchChanges fallback style-only predicate normalizes non-string staged file paths', async () => {
+    const core = buildCore({ gitReady: false });
+    core.parseStagedFiles.mockReturnValue([
+      { path: 123, source: 'editor', timestamp: '2025-01-01T00:00:00Z' }
+    ]);
+    core.getBranchByName.mockResolvedValue({
+      id: 123,
+      name: 'agent/branch',
+      type: 'feature',
+      status: 'active',
+      staged_files: '[{"path":123}]',
+      ahead_commits: 0
+    });
+
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('Run tests to prove this branch')
+    });
+  });
+
+  it('commitBranchChanges fallback style-only predicate handles falsy staged file paths', async () => {
+    const core = buildCore({ gitReady: false });
+    core.parseStagedFiles.mockReturnValue([
+      { path: '', source: 'editor', timestamp: '2025-01-01T00:00:00Z' }
+    ]);
+    core.getBranchByName.mockResolvedValue({
+      id: 123,
+      name: 'agent/branch',
+      type: 'feature',
+      status: 'active',
+      staged_files: '[{"path":""}]',
+      ahead_commits: 0
+    });
+
+    const staging = createBranchWorkflowStaging(core);
+
+    await expect(staging.commitBranchChanges(1, 'agent/branch')).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('Run tests to prove this branch')
+    });
+  });
+
   it('applyBranchPatch throws 500 when git apply fails and cleans temp directory', async () => {
     const core = buildCore({
       gitReady: true,

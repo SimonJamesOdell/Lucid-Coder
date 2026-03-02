@@ -1102,6 +1102,112 @@ describe('PreviewPanel', () => {
     expect(window.open).not.toHaveBeenCalled();
   });
 
+  test('falls back to process frontend port when preview URLs are blank', async () => {
+    getOpenInNewTabUrlMock.mockReturnValue(null);
+    getDisplayedUrlMock.mockReturnValue(null);
+    getPreviewUrlMock.mockReturnValue('about:blank');
+    useAppState.mockReturnValue(
+      createAppState({
+        currentProject: { id: 2, name: 'Port Fallback Preview' },
+        projectProcesses: {
+          ports: {
+            active: { frontend: 5173, backend: 5501 },
+            stored: { frontend: 5100, backend: 5501 },
+            preferred: { frontend: 5100, backend: 5501 }
+          },
+          lastKnownPorts: { frontend: 5173, backend: 5501 }
+        }
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('open-preview-tab'));
+
+    expect(window.open).toHaveBeenCalledWith('http://localhost:5173/', '_blank', 'noopener,noreferrer');
+  });
+
+  test('falls back to stored frontend port when active frontend port is invalid', async () => {
+    getOpenInNewTabUrlMock.mockReturnValue(null);
+    getDisplayedUrlMock.mockReturnValue(null);
+    getPreviewUrlMock.mockReturnValue('about:blank');
+    useAppState.mockReturnValue(
+      createAppState({
+        currentProject: { id: 3, name: 'Stored Port Fallback' },
+        projectProcesses: {
+          ports: {
+            active: { frontend: 0, backend: 5501 },
+            stored: { frontend: 5100, backend: 5501 },
+            preferred: { frontend: 5200, backend: 5501 }
+          },
+          lastKnownPorts: { frontend: 5300, backend: 5501 }
+        }
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('open-preview-tab'));
+
+    expect(window.open).toHaveBeenCalledWith('http://localhost:5100/', '_blank', 'noopener,noreferrer');
+  });
+
+  test('falls back to preferred frontend port with https protocol and localhost hostname fallback', async () => {
+    const locationSpy = vi.spyOn(window, 'location', 'get').mockReturnValue({ protocol: 'https:', hostname: '' });
+    getOpenInNewTabUrlMock.mockReturnValue(null);
+    getDisplayedUrlMock.mockReturnValue(null);
+    getPreviewUrlMock.mockReturnValue('about:blank');
+    useAppState.mockReturnValue(
+      createAppState({
+        currentProject: { id: 4, name: 'Preferred Port Fallback' },
+        projectProcesses: {
+          ports: {
+            active: { frontend: null, backend: 5501 },
+            stored: { frontend: null, backend: 5501 },
+            preferred: { frontend: 5200, backend: 5501 }
+          },
+          lastKnownPorts: { frontend: 5300, backend: 5501 }
+        }
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('open-preview-tab'));
+
+    expect(window.open).toHaveBeenCalledWith('https://localhost:5200/', '_blank', 'noopener,noreferrer');
+    locationSpy.mockRestore();
+  });
+
+  test('falls back to lastKnown frontend port when active, stored, and preferred are invalid', async () => {
+    getOpenInNewTabUrlMock.mockReturnValue(null);
+    getDisplayedUrlMock.mockReturnValue(null);
+    getPreviewUrlMock.mockReturnValue('about:blank');
+    useAppState.mockReturnValue(
+      createAppState({
+        currentProject: { id: 5, name: 'Last Known Port Fallback' },
+        projectProcesses: {
+          ports: {
+            active: { frontend: 0, backend: 5501 },
+            stored: { frontend: null, backend: 5501 },
+            preferred: { frontend: -1, backend: 5501 }
+          },
+          lastKnownPorts: { frontend: 5300, backend: 5501 }
+        }
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<PreviewPanel />);
+
+    await user.click(screen.getByTestId('open-preview-tab'));
+
+    expect(window.open).toHaveBeenCalledWith('http://localhost:5300/', '_blank', 'noopener,noreferrer');
+  });
+
   test('falls back to displayed/preview url when getOpenInNewTabUrl returns null', async () => {
     getOpenInNewTabUrlMock.mockReturnValue(null);
     getDisplayedUrlMock.mockReturnValue('http://localhost:5000/preview/1');
@@ -1342,10 +1448,12 @@ describe('PreviewPanel', () => {
     expect(typeof filesTabControls.onFileSaved).toBe('function');
 
     filesTabControls.onFileSaved?.('src/App.jsx');
-    expect(reloadPreviewMock).toHaveBeenCalledTimes(1);
+    expect(reloadPreviewMock).not.toHaveBeenCalled();
 
     await user.click(screen.getByTestId('preview-tab'));
-    expect(reloadPreviewMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(reloadPreviewMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   test('renders AssetsTab when assets tab is selected', async () => {
@@ -1388,7 +1496,7 @@ describe('PreviewPanel', () => {
     });
   });
 
-  test('reloads preview immediately when a file saves while preview is active', async () => {
+  test('does not force preview reload when a file saves while preview is active', async () => {
     useAppState.mockReturnValue(
       createAppState({ currentProject: { id: 'immediate-preview', name: 'Project' } })
     );
@@ -1407,7 +1515,40 @@ describe('PreviewPanel', () => {
       onFileSaved?.('src/App.jsx');
     });
 
-    expect(reloadPreviewMock).toHaveBeenCalledTimes(1);
+    expect(reloadPreviewMock).not.toHaveBeenCalled();
+  });
+
+  test('clears pending reload when handleFileSaved runs while preview is active', async () => {
+    useAppState.mockReturnValue(
+      createAppState({ currentProject: { id: 'active-preview-hook', name: 'Project' } })
+    );
+
+    render(<PreviewPanel />);
+
+    expect(typeof PreviewPanel.__testHooks?.setActiveTab).toBe('function');
+    expect(typeof PreviewPanel.__testHooks?.handleFileSaved).toBe('function');
+
+    act(() => {
+      PreviewPanel.__testHooks.setActiveTab?.('files');
+    });
+
+    act(() => {
+      PreviewPanel.__testHooks.handleFileSaved?.();
+    });
+
+    act(() => {
+      PreviewPanel.__testHooks.setActiveTab?.('preview');
+    });
+
+    reloadPreviewMock.mockClear();
+
+    act(() => {
+      PreviewPanel.__testHooks.handleFileSaved?.();
+      PreviewPanel.__testHooks.setActiveTab?.('files');
+      PreviewPanel.__testHooks.setActiveTab?.('preview');
+    });
+
+    expect(reloadPreviewMock).not.toHaveBeenCalled();
   });
 
   test('routes branch file open requests to the editor', async () => {
