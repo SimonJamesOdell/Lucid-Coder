@@ -21,9 +21,12 @@ export const normalizeProcessEntry = (value) => {
   }
 
   if (typeof value === 'object' && value !== null && 'processes' in value) {
-    const hasProcesses = Boolean(value.processes?.frontend || value.processes?.backend);
+    const normalizedProcesses = value.processes || null;
+    reconcileProcessPortFromLogs(normalizedProcesses?.frontend);
+    reconcileProcessPortFromLogs(normalizedProcesses?.backend);
+    const hasProcesses = Boolean(normalizedProcesses?.frontend || normalizedProcesses?.backend);
     return {
-      processes: value.processes || null,
+      processes: normalizedProcesses,
       state: buildProcessState(value.state, hasProcesses),
       updatedAt: value.updatedAt || new Date().toISOString(),
       lastStateChange: value.lastStateChange || value.updatedAt || new Date().toISOString(),
@@ -109,6 +112,57 @@ const defaultBackendPorts = {
 const normalizePortCandidate = (value) => {
   const numeric = Number(value);
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+};
+
+const ANSI_ESCAPE_REGEX = /\u001b\[[0-9;]*m/g;
+
+const inferProcessPortFromLogs = (processInfo) => {
+  const logs = Array.isArray(processInfo?.logs) ? processInfo.logs : [];
+  if (!logs.length) {
+    return null;
+  }
+
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const message = typeof logs[index]?.message === 'string' ? logs[index].message : '';
+    if (!message) {
+      continue;
+    }
+
+    const normalized = message.replace(ANSI_ESCAPE_REGEX, '');
+    const localOrNetworkMatch = normalized.match(/(?:Local|Network)\s*:\s*https?:\/\/[^\s:/]+:(\d+)/i);
+    if (localOrNetworkMatch) {
+      const parsed = normalizePortCandidate(localOrNetworkMatch[1]);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    const genericUrlMatch = normalized.match(/https?:\/\/[^\s:/]+:(\d+)/i);
+    if (genericUrlMatch) {
+      const parsed = normalizePortCandidate(genericUrlMatch[1]);
+      if (parsed) {
+        return parsed;
+      }
+    }
+  }
+
+  return null;
+};
+
+const reconcileProcessPortFromLogs = (processInfo) => {
+  if (!processInfo || typeof processInfo !== 'object') {
+    return;
+  }
+
+  const inferred = inferProcessPortFromLogs(processInfo);
+  if (!inferred) {
+    return;
+  }
+
+  const currentPort = normalizePortCandidate(processInfo.port);
+  if (currentPort !== inferred) {
+    processInfo.port = inferred;
+  }
 };
 
 const defaultHostReservedPorts = [5173, 3000];
@@ -200,6 +254,8 @@ export const sanitizeProcessSnapshot = (processInfo) => {
   if (!processInfo) {
     return null;
   }
+
+  reconcileProcessPortFromLogs(processInfo);
 
   const trimLogs = Array.isArray(processInfo.logs)
     ? processInfo.logs.slice(-MAX_EXPOSED_PROCESS_LOGS)

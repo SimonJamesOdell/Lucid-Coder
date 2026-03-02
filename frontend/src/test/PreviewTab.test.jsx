@@ -4242,6 +4242,41 @@ describe('PreviewTab', () => {
     }
   });
 
+  test('placeholder state schedules an automatic refresh/reload attempt', async () => {
+    vi.useFakeTimers();
+    try {
+      const processInfo = buildProcessInfo();
+      const onRefreshProcessStatus = vi.fn().mockResolvedValue(null);
+      const { previewRef } = renderPreviewTab({ processInfo, onRefreshProcessStatus });
+      const hooks = previewRef.current.__testHooks;
+      const reloadFn = vi.fn();
+
+      const fakeIframe = {
+        contentWindow: {
+          postMessage: vi.fn(),
+          stop: vi.fn(),
+          location: { reload: reloadFn }
+        },
+        contentDocument: { title: 'Preview unavailable', querySelector: vi.fn() }
+      };
+      hooks.setIframeNodeForTests(fakeIframe);
+
+      act(() => {
+        hooks.triggerIframeLoad();
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(1200);
+        await Promise.resolve();
+      });
+
+      expect(onRefreshProcessStatus).toHaveBeenCalledWith(mockProject.id);
+      expect(reloadFn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('loading overlay shows "Fix with AI" and "Retry" when stuck in placeholder loop', () => {
     vi.useFakeTimers();
     try {

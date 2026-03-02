@@ -2133,7 +2133,8 @@ describe('ChatPanel', () => {
         expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
       });
 
-      expect(screen.getByText('Style shortcut applied. Staying on Preview. Commits tab has pending changes.')).toBeInTheDocument();
+      expect(screen.queryByText('Style shortcut applied. Staying on Preview. Commits tab has pending changes.')).not.toBeInTheDocument();
+      expect(screen.getByText('Completed style update.')).toBeInTheDocument();
       expect(mockStartAutomationJob).not.toHaveBeenCalled();
       expect(mockSetPreviewPanelTab).not.toHaveBeenCalledWith('tests', { source: 'automation' });
       expect(mockSetPreviewPanelTab).not.toHaveBeenCalledWith('commits', { source: 'automation' });
@@ -2172,7 +2173,8 @@ describe('ChatPanel', () => {
         expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
       });
 
-      expect(screen.getByText('Style shortcut completed, but no stylesheet changes were applied.')).toBeInTheDocument();
+      expect(screen.queryByText('Style shortcut completed, but no stylesheet changes were applied.')).not.toBeInTheDocument();
+      expect(screen.getByText('Completed. No stylesheet changes were applied.')).toBeInTheDocument();
       expect(mockStartAutomationJob).not.toHaveBeenCalled();
       expect(mockSetPreviewPanelTab).not.toHaveBeenCalledWith('tests', { source: 'automation' });
       expect(mockSetPreviewPanelTab).not.toHaveBeenCalledWith('commits', { source: 'automation' });
@@ -2202,6 +2204,42 @@ describe('ChatPanel', () => {
 
       const optionsArg = goalAutomationService.handleRegularFeature.mock.calls[0][8];
       expect(optionsArg).toEqual(expect.objectContaining({ preservePreviewTab: true }));
+    });
+
+    it('passes empty selectedAssetPaths when feature handling runs with a missing current project id', async () => {
+      useAppState.mockReturnValue({
+        currentProject: { id: null, name: 'No Id Project' },
+        stageAiChange: mockStageAiChange,
+        jobState: { jobsByProject: {} },
+        testingSettings: { coverageTarget: 100, maxSteps: 8 },
+        setPreviewPanelTab: mockSetPreviewPanelTab,
+        startAutomationJob: mockStartAutomationJob,
+        cancelAutomationJob: mockCancelAutomationJob,
+        getJobsForProject: mockGetJobsForProject,
+        markTestRunIntent: mockMarkTestRunIntent,
+        requestEditorFocus: vi.fn(),
+        syncBranchOverview: vi.fn(),
+        pausePreviewAutomation: mockPausePreviewAutomation,
+        clearEditorFocusRequest: mockClearEditorFocusRequest,
+        workingBranches: {}
+      });
+      goalAutomationService.handleRegularFeature.mockResolvedValueOnce({ success: false });
+
+      render(<ChatPanel width={320} side="left" />);
+
+      const hooks = ChatPanel.__testHooks?.handlers;
+      expect(typeof hooks?.handleAgentResult).toBe('function');
+
+      await act(async () => {
+        await hooks.handleAgentResult(
+          { kind: 'feature', planOnly: false, meta: { styleScope: { mode: 'global', targetHints: [] } } },
+          { prompt: 'apply style changes', resolvedPrompt: 'apply style changes' }
+        );
+      });
+
+      expect(goalAutomationService.handleRegularFeature).toHaveBeenCalledTimes(1);
+      const optionsArg = goalAutomationService.handleRegularFeature.mock.calls[0][8];
+      expect(optionsArg).toEqual(expect.objectContaining({ selectedAssetPaths: [] }));
     });
 
     it('ignores empty prompts when submit is triggered via Enter key', async () => {

@@ -76,6 +76,7 @@ const PreviewTab = forwardRef(
   const placeholderTimeoutRef = useRef(null);    // 10 s proxy-placeholder escalation
   const errorDelayRef = useRef(null);            // 1.2 s error confirmation delay
   const reloadTimeoutRef = useRef(null);         // 400 ms scheduled reload after restart
+  const placeholderRetryTimeoutRef = useRef(null); // placeholder auto-retry cadence
   const reloadDebounceRef = useRef(null);        // 300 ms debounce for soft-reloads
   const readyRevealTimeoutRef = useRef(null);    // delayed transition to ready phase
   const loadingOverlayFadeTimeoutRef = useRef(null); // fade-out cleanup timeout
@@ -153,6 +154,7 @@ const PreviewTab = forwardRef(
       errorDelayRef,
       autoRecoverTimeoutRef,
       reloadTimeoutRef,
+      placeholderRetryTimeoutRef,
       reloadDebounceRef,
       readyRevealTimeoutRef,
       loadingOverlayFadeTimeoutRef,
@@ -961,6 +963,31 @@ const PreviewTab = forwardRef(
             'proxy-placeholder'
           );
         }, 10000);
+      }
+
+      if (!placeholderRetryTimeoutRef.current) {
+        placeholderRetryTimeoutRef.current = setTimeout(async () => {
+          placeholderRetryTimeoutRef.current = null;
+
+          if (!project?.id || showNotRunningState || isStartingProject) {
+            return;
+          }
+
+          try {
+            await onRefreshProcessStatus?.(project.id);
+          } catch {
+            // ignore
+          }
+
+          try {
+            const iframeWindow = getIframeNode()?.contentWindow;
+            if (typeof iframeWindow?.location?.reload === 'function') {
+              iframeWindow.location.reload();
+            }
+          } catch {
+            // ignore
+          }
+        }, 1200);
       }
 
       // Keep the loading phase active (overlay stays visible).

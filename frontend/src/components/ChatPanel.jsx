@@ -1282,6 +1282,7 @@ const ChatPanel = ({
 
     if (result.kind === 'feature') {
       const preservePreviewTab = shouldPreservePreviewForShortCircuit(result);
+      const selectedAssetPaths = currentProject?.id ? getAssistantAssetContextPaths(currentProject.id) : [];
 
       if (preservePreviewTab) {
         pausePreviewAutomation?.();
@@ -1298,7 +1299,7 @@ const ChatPanel = ({
           setGoalCount,
           createMessage,
           setMessages,
-          { requestEditorFocus, syncBranchOverview, preservePreviewTab }
+          { requestEditorFocus, syncBranchOverview, preservePreviewTab, selectedAssetPaths }
         );
         return;
       }
@@ -1313,7 +1314,13 @@ const ChatPanel = ({
         setGoalCount,
         createMessage,
         setMessages,
-        { requestEditorFocus, syncBranchOverview, touchTracker: executionTouchTracker, preservePreviewTab }
+        {
+          requestEditorFocus,
+          syncBranchOverview,
+          touchTracker: executionTouchTracker,
+          preservePreviewTab,
+          selectedAssetPaths
+        }
       );
 
       if (execution?.needsClarification) {
@@ -1363,17 +1370,17 @@ const ChatPanel = ({
 
       if (execution?.success === true && typeof startAutomationJob === 'function') {
         if (preservePreviewTab) {
-          clearEditorFocusRequest?.();
           setMessages((prev) => [
             ...prev,
             createMessage(
               'assistant',
-              execution?.styleShortcutChangeApplied
-                ? 'Style shortcut applied. Staying on Preview. Commits tab has pending changes.'
-                : 'Style shortcut completed, but no stylesheet changes were applied.',
+              execution?.styleShortcutChangeApplied === false
+                ? 'Completed. No stylesheet changes were applied.'
+                : 'Completed style update.',
               { variant: 'status' }
             )
           ]);
+          clearEditorFocusRequest?.();
           return;
         }
 

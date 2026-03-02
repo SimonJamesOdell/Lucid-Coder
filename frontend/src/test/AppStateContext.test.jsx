@@ -446,6 +446,60 @@ describe('AppStateContext', () => {
     })
   })
 
+  test('retries hydrated auto-start after timer delay when start fails while backend is online', async () => {
+    const originalRetryFlag = globalThis.__lucidcoderEnableAutoStartRetryTests
+    globalThis.__lucidcoderEnableAutoStartRetryTests = true
+
+    try {
+      llmStatusPayload = {
+        ready: true,
+        config: {
+          provider: 'groq',
+          model: 'llama-3.1-70b-versatile',
+          api_url: 'https://api.groq.com/openai/v1',
+          requires_api_key: true,
+          has_api_key: true
+        }
+      }
+      localStorage.setItem('currentProject', JSON.stringify({ id: 'retry-project', name: 'Retry Project' }))
+
+      let startAttempt = 0
+      const baseFetchImpl = fetch.getMockImplementation()
+      fetch.mockImplementation((url = '', options = {}) => {
+        if (url === '/api/projects/retry-project/start') {
+          startAttempt += 1
+          if (startAttempt === 1) {
+            return Promise.resolve(mockApiResponse({ success: false, error: 'start failed' }, false, 500))
+          }
+          return Promise.resolve(mockApiResponse({ success: true, message: 'started' }))
+        }
+        return baseFetchImpl(url, options)
+      })
+
+      const { result } = renderUseAppState()
+
+      await waitFor(() => {
+        expect(result.current.currentProject?.id).toBe('retry-project')
+      })
+
+      await waitFor(() => {
+        const startCalls = fetch.mock.calls.filter(([url]) => url === '/api/projects/retry-project/start')
+        expect(startCalls.length).toBeGreaterThanOrEqual(1)
+      })
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2200))
+      })
+
+      await waitFor(() => {
+        const startCalls = fetch.mock.calls.filter(([url]) => url === '/api/projects/retry-project/start')
+        expect(startCalls.length).toBe(2)
+      })
+    } finally {
+      globalThis.__lucidcoderEnableAutoStartRetryTests = originalRetryFlag
+    }
+  }, 15000)
+
   test('configureLLM updates in-memory state', async () => {
     const { result } = renderUseAppState()
     const config = { provider: 'groq', model: 'llama-3.1-70b-versatile' }

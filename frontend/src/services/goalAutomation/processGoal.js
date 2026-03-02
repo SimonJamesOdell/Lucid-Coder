@@ -122,6 +122,8 @@ const buildFileOpRetryContext = (error, knownPathsSet) => {
 
 const isTestFilePath = (path) => /__tests__\//.test(path) || /\.(test|spec)\.[jt]sx?$/.test(path);
 const isStylesheetPath = (path) => /\.(css|scss|sass|less)$/i.test(path);
+const isStyleJsonPath = (path) => /(^|\/)style_[^/]+\.json$/i.test(path) || /\/styles?\/.+\.json$/i.test(path);
+const isComponentStyleJsonPath = (path) => /(^|\/)style_(?!global\.json$)[^/]+\.json$/i.test(path);
 const LCDT_ALLOWED_LANES = ['llm_src', 'llm_src_backend'];
 
 const hasLcdtProjectMarker = (projectInfo) => {
@@ -237,6 +239,40 @@ const extractSelectedProjectAssets = (value) => {
   return Array.from(new Set(results));
 };
 
+const normalizeRequiredAssetPath = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return normalizeRepoPath(value).toLowerCase();
+};
+
+const editsReferenceRequiredAssetPaths = (edits, requiredAssetPaths) => {
+  if (!Array.isArray(edits) || edits.length === 0 || !Array.isArray(requiredAssetPaths) || requiredAssetPaths.length === 0) {
+    return true;
+  }
+
+  const requiredNormalized = requiredAssetPaths
+    .map((candidate) => normalizeRequiredAssetPath(candidate))
+    .filter(Boolean);
+
+  if (requiredNormalized.length === 0) {
+    return true;
+  }
+
+  return edits.some((edit) => {
+    try {
+      const blob = JSON.stringify(edit);
+      if (typeof blob !== 'string' || !blob) {
+        return false;
+      }
+      const normalizedBlob = blob.toLowerCase();
+      return requiredNormalized.some((requiredPath) => normalizedBlob.includes(requiredPath));
+    } catch {
+      return false;
+    }
+  });
+};
+
 const markTouchTrackerForPath = (touchTracker, filePath) => {
   if (!touchTracker || typeof touchTracker !== 'object' || typeof filePath !== 'string') {
     return;
@@ -291,9 +327,17 @@ export async function processGoal(
         return null;
       }
 
+      const allowedLanePrefixes = lcdtLanePolicy.enabled
+        ? lcdtLanePolicy.allowedPrefixes.filter(Boolean)
+        : [];
+
       for (const edit of edits) {
         const normalizedPath = normalizeRepoPath(edit?.path);
         if (!normalizedPath) {
+          continue;
+        }
+        const withinLcdtLane = allowedLanePrefixes.some((prefix) => normalizedPath.startsWith(prefix));
+        if (withinLcdtLane) {
           continue;
         }
         if (!isStylesheetPath(normalizedPath)) {
@@ -303,6 +347,175 @@ export async function processGoal(
             rule: 'style-shortcut-scope',
             message: 'Style shortcut edits must be limited to stylesheet files (.css/.scss/.sass/.less).'
           };
+        }
+      }
+
+      return null;
+    };
+
+    const validateShortcutExistingPathScope = (edits) => {
+      if (!options?.preservePreviewTab || !Array.isArray(edits)) {
+        return null;
+      }
+
+      const knownPaths = knownPathsSet;
+      if (!knownPaths || knownPaths.size === 0) {
+        return null;
+      }
+
+      for (const edit of edits) {
+        const normalizedPath = normalizeRepoPath(edit?.path);
+        if (!normalizedPath) {
+          continue;
+        }
+        if (!knownPaths.has(normalizedPath)) {
+          const editType = String(edit?.type || '').toLowerCase();
+          if (editType === 'upsert' && typeof edit?.content === 'string') {
+            continue;
+          }
+          return {
+            type: 'style-shortcut-existing-path',
+            path: normalizedPath,
+            rule: 'style-shortcut-existing-path',
+            message: `Preview-preserving style shortcut edits must target existing files unless creating a new file with an upsert edit. Use an existing path or switch to upsert for ${normalizedPath}.`
+          };
+        }
+      }
+
+      return null;
+    };
+
+    const validateShortcutVisualTargetScope = (edits) => {
+      if (!options?.preservePreviewTab || !Array.isArray(edits)) {
+        return null;
+      }
+
+      const hasVisualTargetPath = edits.some((edit) => {
+        const normalizedPath = normalizeRepoPath(edit?.path);
+        if (!normalizedPath) {
+          return false;
+        }
+        if (isStylesheetPath(normalizedPath) || isStyleJsonPath(normalizedPath)) {
+          return true;
+        }
+
+        const styleSignalRegex = /(background|color|theme|font|padding|margin|border|style)/i;
+        if (Array.isArray(edit?.replacements)) {
+          return edit.replacements.some((replacement) => {
+            const replaceText = String(replacement?.replace || '');
+            return styleSignalRegex.test(replaceText);
+          });
+        }
+
+        if (typeof edit?.content === 'string') {
+          return styleSignalRegex.test(edit.content);
+        }
+
+        return false;
+      });
+
+      if (hasVisualTargetPath) {
+        return null;
+      }
+
+      const firstPath = edits
+        .map((edit) => normalizeRepoPath(edit?.path))
+        .find(Boolean);
+
+      return {
+        type: 'style-shortcut-visual-target',
+          path: firstPath,
+        rule: 'style-shortcut-visual-target',
+        message:
+          'Preview-preserving style shortcut edits must target style-bearing files (e.g. styles/*.json or .css) or include concrete style-value changes.'
+      };
+    };
+
+    const validateShortcutStyleJsonContractScope = (edits) => {
+      if (!options?.preservePreviewTab || !Array.isArray(edits)) {
+        return null;
+      }
+
+      const shouldRejectContractReplacement = (candidate) => {
+        if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+          return false;
+        }
+
+        const hasLegacyContract =
+          typeof candidate.id === 'string'
+          && candidate.id.trim().length > 0
+          && typeof candidate.type === 'string'
+          && candidate.type.trim().toLowerCase() === 'style'
+          && typeof candidate.target === 'string'
+          && candidate.target.trim().length > 0
+          && typeof candidate.css === 'string';
+
+        if (hasLegacyContract) {
+          return false;
+        }
+
+        const hasStructuredStyleSignals = (() => {
+          if (typeof candidate.selector === 'string') {
+            return true;
+          }
+          if (Array.isArray(candidate.styles)) {
+            return true;
+          }
+
+          for (const key of ['rules', 'styles', 'properties', 'keyframes']) {
+            if (candidate[key] && typeof candidate[key] === 'object') {
+              return true;
+            }
+          }
+
+          return Object.keys(candidate).some((key) => typeof key === 'string' && key.startsWith('@'));
+        })();
+
+        return hasStructuredStyleSignals;
+      };
+
+      const parseCandidateObject = (value) => {
+        if (typeof value !== 'string') {
+          return null;
+        }
+        const trimmed = value.trim();
+        if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+          return null;
+        }
+        try {
+          return JSON.parse(trimmed);
+        } catch {
+          return null;
+        }
+      };
+
+      for (const edit of edits) {
+        const normalizedPath = normalizeRepoPath(edit?.path);
+        if (!normalizedPath || !isComponentStyleJsonPath(normalizedPath)) {
+          continue;
+        }
+
+        const upsertCandidate = parseCandidateObject(edit?.content);
+        if (shouldRejectContractReplacement(upsertCandidate)) {
+          return {
+            type: 'style-shortcut-style-json-contract',
+            path: normalizedPath,
+            rule: 'style-shortcut-style-json-contract',
+            message: `Preview-preserving style shortcut edits must preserve the component style JSON contract for ${normalizedPath}. Keep id/type/target/description/css and edit the css string instead of replacing with selector/styles-only JSON.`
+          };
+        }
+
+        const replacements = Array.isArray(edit?.replacements) ? edit.replacements : [];
+        for (const replacement of replacements) {
+          const replacementCandidate = parseCandidateObject(replacement?.replace);
+          if (shouldRejectContractReplacement(replacementCandidate)) {
+            return {
+              type: 'style-shortcut-style-json-contract',
+              path: normalizedPath,
+              rule: 'style-shortcut-style-json-contract',
+              message: `Preview-preserving style shortcut edits must preserve the component style JSON contract for ${normalizedPath}. Keep id/type/target/description/css and edit the css string instead of replacing with selector/styles-only JSON.`
+            };
+          }
         }
       }
 
@@ -364,7 +577,105 @@ export async function processGoal(
         return promptText;
       }
       const allowedPrefixes = lcdtLanePolicy.allowedPrefixes.filter(Boolean);
-      return `${promptText}\n\nPath lane constraint: Edit ONLY files under ${allowedPrefixes.join(', ')}. Do not propose edits outside these paths.`;
+
+      const knownLaneFiles = (() => {
+        if (!(knownPathsSet instanceof Set) || knownPathsSet.size === 0) {
+          return [];
+        }
+
+        const promptLower = promptText.toLowerCase();
+        const styleFocused = /\b(background|color|style|styling|theme|css)\b/.test(promptLower);
+        const candidates = Array.from(knownPathsSet)
+          .map((path) => normalizeRepoPath(path))
+          .filter(Boolean)
+          .filter((path) => allowedPrefixes.some((prefix) => path.startsWith(prefix)));
+
+        const scoreLanePath = (path) => {
+          let score = 0;
+          if (/\/manifest\.json$/i.test(path)) {
+            score += 6;
+          }
+          if (/\/styles?\//i.test(path)) {
+            score += 5;
+          }
+          if (/style_/i.test(path)) {
+            score += 4;
+          }
+          if (/\.(json|css|scss|sass|less)$/i.test(path)) {
+            score += 3;
+          }
+          if (/\.(js|jsx|ts|tsx)$/i.test(path)) {
+            score += 1;
+          }
+          if (styleFocused && /\.(json|css|scss|sass|less)$/i.test(path)) {
+            score += 2;
+          }
+          score -= Math.max(0, path.split('/').length - 3) * 0.1;
+          return score;
+        };
+
+        return candidates
+          .sort((left, right) => {
+            const delta = scoreLanePath(right) - scoreLanePath(left);
+            if (delta !== 0) {
+              return delta;
+            }
+            return left.localeCompare(right);
+          })
+          .slice(0, 10);
+      })();
+
+      const laneHints = knownLaneFiles.length > 0
+        ? `\nKnown existing lane files (prefer these when applicable):\n- ${knownLaneFiles.join('\n- ')}`
+        : '';
+
+      return `${promptText}\n\nPath lane constraint: Edit ONLY files under ${allowedPrefixes.join(', ')}. Do not propose edits outside these paths.${laneHints}`;
+    };
+
+    const reconcileScopeReflectionWithLcdtLanes = () => {
+      if (!lcdtLanePolicy.enabled || !scopeReflection || typeof scopeReflection !== 'object') {
+        return;
+      }
+
+      const allowedPrefixes = lcdtLanePolicy.allowedPrefixes
+        .map((prefix) => normalizeRepoPath(prefix))
+        .filter(Boolean);
+      if (allowedPrefixes.length === 0) {
+        return;
+      }
+
+      const normalizeScopeList = (value) => (
+        Array.isArray(value)
+          ? value.map((entry) => normalizeRepoPath(entry)).filter(Boolean)
+          : []
+      );
+
+      const keepIfWithinAllowedLanes = (entries) => entries.filter((entry) => (
+        allowedPrefixes.some((prefix) => entry.startsWith(prefix) || prefix.startsWith(entry))
+      ));
+
+      const mustChangeBefore = normalizeScopeList(scopeReflection.mustChange);
+      const mustAvoidBefore = normalizeScopeList(scopeReflection.mustAvoid);
+      const mustChangeAfter = keepIfWithinAllowedLanes(mustChangeBefore);
+      const mustAvoidAfter = keepIfWithinAllowedLanes(mustAvoidBefore);
+
+      scopeReflection.mustChange = mustChangeAfter;
+      scopeReflection.mustAvoid = mustAvoidAfter;
+
+      if (
+        mustChangeAfter.length !== mustChangeBefore.length
+        || mustAvoidAfter.length !== mustAvoidBefore.length
+      ) {
+        automationLog('processGoal:scopeReflection:lcdtLaneReconciled', {
+          goalId: goal?.id,
+          source: lcdtLanePolicy.source,
+          allowedPrefixes,
+          mustChangeBefore,
+          mustChangeAfter,
+          mustAvoidBefore,
+          mustAvoidAfter
+        });
+      }
     };
 
     const scopeReflectionGloballyDisabled =
@@ -638,6 +949,11 @@ export async function processGoal(
         ? options.enableScopeReflection
         : !scopeReflectionGloballyDisabled;
     const executionContractGateEnabled = scopeReflectionEnabled;
+    const selectedAssetPathsFromOptions = Array.isArray(options?.selectedAssetPaths)
+      ? options.selectedAssetPaths
+          .map((assetPath) => (typeof assetPath === 'string' ? assetPath.trim() : ''))
+          .filter(Boolean)
+      : [];
     let scopeReflection = null;
     const cloneScopeReflection = (reflection) => {
       if (!reflection || typeof reflection !== 'object') {
@@ -656,7 +972,10 @@ export async function processGoal(
           buildScopeReflectionPrompt({ projectInfo, goalPrompt: goal?.prompt })
         );
         scopeReflection = cloneScopeReflection(parseScopeReflectionResponse(reflectionResponse));
-        const selectedAssetPaths = extractSelectedProjectAssets(goal?.prompt);
+        const selectedAssetPaths = Array.from(new Set([
+          ...extractSelectedProjectAssets(goal?.prompt),
+          ...selectedAssetPathsFromOptions
+        ]));
         if (scopeReflection && selectedAssetPaths.length > 0) {
           scopeReflection.requiredAssetPaths = selectedAssetPaths;
         }
@@ -688,11 +1007,12 @@ export async function processGoal(
       : styleOnlyGoal && !testFailureContext
       ? false
       : scopeReflection?.testsNeeded !== false;
-    const requiredAssetPaths = Array.isArray(scopeReflection?.requiredAssetPaths)
+    const requiredAssetPathsSource = Array.isArray(scopeReflection?.requiredAssetPaths)
       ? scopeReflection.requiredAssetPaths
-          .map((path) => (typeof path === 'string' ? path.trim() : ''))
-          .filter(Boolean)
-      : [];
+      : selectedAssetPathsFromOptions;
+    const requiredAssetPaths = requiredAssetPathsSource
+      .map((path) => (typeof path === 'string' ? path.trim() : ''))
+      .filter(Boolean);
     const hasRequiredAssetPaths = requiredAssetPaths.length > 0;
 
     if (!(await waitWhilePaused())) {
@@ -799,6 +1119,7 @@ export async function processGoal(
       return { success: false, cancelled: true };
     }
     await refreshRepoContext();
+    reconcileScopeReflectionWithLcdtLanes();
 
     let totalEditsReceived = 0;
     let totalEditsApplied = 0;
@@ -1008,6 +1329,7 @@ export async function processGoal(
       return { success: false, cancelled: true };
     }
     await refreshRepoContext();
+    reconcileScopeReflectionWithLcdtLanes();
 
     if (!(await waitWhilePaused())) {
       return { success: false, cancelled: true };
@@ -1100,6 +1422,15 @@ export async function processGoal(
           throw buildEmptyEditsError('implementation');
         }
 
+        if (hasRequiredAssetPaths && !editsReferenceRequiredAssetPaths(edits, requiredAssetPaths)) {
+          throw buildScopeViolationError({
+            type: 'required-asset-paths',
+            rule: 'required-asset-paths',
+            path: requiredAssetPaths[0],
+            message: `Implementation edits must reference one of the selected asset paths: ${requiredAssetPaths.join(', ')}.`
+          });
+        }
+
         const coverageViolation = validateCoverageScope(edits);
         if (coverageViolation) {
           throw buildScopeViolationError(coverageViolation);
@@ -1108,6 +1439,21 @@ export async function processGoal(
         const shortcutViolation = validateShortcutStyleScope(edits);
         if (shortcutViolation) {
           throw buildScopeViolationError(shortcutViolation);
+        }
+
+        const shortcutExistingPathViolation = validateShortcutExistingPathScope(edits);
+        if (shortcutExistingPathViolation) {
+          throw buildScopeViolationError(shortcutExistingPathViolation);
+        }
+
+        const shortcutVisualTargetViolation = validateShortcutVisualTargetScope(edits);
+        if (shortcutVisualTargetViolation) {
+          throw buildScopeViolationError(shortcutVisualTargetViolation);
+        }
+
+        const shortcutStyleJsonContractViolation = validateShortcutStyleJsonContractScope(edits);
+        if (shortcutStyleJsonContractViolation) {
+          throw buildScopeViolationError(shortcutStyleJsonContractViolation);
         }
 
         const lcdtLaneViolation = validateLcdtLaneScope(edits);
@@ -1139,8 +1485,17 @@ export async function processGoal(
           onFileApplied,
           syncBranchOverview
         });
-        totalEditsApplied += appliedSummary?.applied || 0;
+        const implementationAppliedCount = appliedSummary?.applied || 0;
+        totalEditsApplied += implementationAppliedCount;
         automationLog('processGoal:llm:impl:applySummary', { ...appliedSummary, attempt });
+        if (options?.preservePreviewTab && implementationAppliedCount === 0) {
+          automationLog('processGoal:llm:impl:noAppliedEdits', {
+            attempt,
+            preservePreviewTab: true,
+            ...appliedSummary
+          });
+          throw buildEmptyEditsError('implementation');
+        }
         implAttemptSucceeded = true;
         implRetryContext = null;
         break;
@@ -1324,6 +1679,7 @@ export const __processGoalTestHooks = {
   isScopeViolationError,
   buildEmptyEditsError,
   isEmptyEditsError,
+  editsReferenceRequiredAssetPaths,
   buildFileOpRetryContext,
   buildCoverageScope,
   hasLcdtProjectMarker,

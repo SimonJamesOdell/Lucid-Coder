@@ -906,6 +906,171 @@ describe('previewProxy', () => {
     await expect(__testOnly.resolveFrontendPortCandidates(12)).resolves.toContain(5173);
   });
 
+  test('resolveFrontendPortCandidates includes frontend process port even when aggregate state is stopped', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: 5174 } },
+      state: 'stopped'
+    });
+    getProjectMock.mockResolvedValue({ id: 12, frontendPort: 5100, framework: 'react,express' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 5100, backend: null });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5100, backend: 3000 });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: 5100 });
+
+    const candidates = await __testOnly.resolveFrontendPortCandidates(12);
+    expect(candidates).toContain(5174);
+    expect(candidates[0]).toBe(5174);
+  });
+
+  test('resolveFrontendPortCandidates includes frontend port inferred from logs', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: {
+        frontend: {
+          port: 5100,
+          logs: [
+            { message: 'Port 5100 is in use, trying another one...' },
+            { message: '\u001b[32m➜\u001b[39m  \u001b[1mLocal\u001b[22m:   \u001b[36mhttp://localhost:\u001b[1m5104\u001b[22m/\u001b[39m' }
+          ]
+        }
+      },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 67, frontendPort: 5100, framework: 'react,express' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 5100, backend: 5501 });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5100, backend: 5501 });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: 5100 });
+
+    const candidates = await __testOnly.resolveFrontendPortCandidates(67);
+    expect(candidates).toContain(5104);
+  });
+
+  test('resolveFrontendPortCandidates infers frontend port from generic URL logs and skips non-string messages', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: {
+        frontend: {
+          port: null,
+          logs: [
+            { message: null },
+            { message: 'Dev server available at http://localhost:5107/' }
+          ]
+        }
+      },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 77, frontendPort: null, framework: 'react,express' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: null, backend: null });
+    getProjectPortHintsMock.mockReturnValue({ frontend: null, backend: null });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: null });
+
+    const candidates = await __testOnly.resolveFrontendPortCandidates(77);
+    expect(candidates[0]).toBe(5107);
+  });
+
+  test('resolveFrontendPortCandidates ignores invalid generic URL ports and continues past non-string log entries', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: {
+        frontend: {
+          port: null,
+          logs: [
+            { message: 'Dev server available at http://localhost:0/' },
+            { message: null }
+          ]
+        }
+      },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 78, frontendPort: null, framework: 'react,express' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: null, backend: null });
+    getProjectPortHintsMock.mockReturnValue({ frontend: null, backend: null });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: null });
+
+    const candidates = await __testOnly.resolveFrontendPortCandidates(78);
+    expect(candidates).not.toContain(0);
+    expect(candidates).toContain(5173);
+  });
+
+  test('resolveFrontendPort returns null when no frontend port candidates resolve', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: { frontend: { port: null, logs: [] } },
+      state: 'idle'
+    });
+    getProjectMock.mockResolvedValue(null);
+    getStoredProjectPortsMock.mockReturnValue({ frontend: null, backend: null });
+    getProjectPortHintsMock.mockReturnValue({ frontend: null, backend: null });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: null });
+
+    await expect(__testOnly.resolveFrontendPort(79)).resolves.toBeNull();
+  });
+
+  test('resolveFrontendPortCandidates ignores invalid Network URL log ports', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: {
+        frontend: {
+          port: null,
+          logs: [{ message: 'Network: http://localhost:0/' }]
+        }
+      },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 80, frontendPort: null, framework: 'react' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: null, backend: null });
+    getProjectPortHintsMock.mockReturnValue({ frontend: null, backend: null });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: null });
+
+    const candidates = await __testOnly.resolveFrontendPortCandidates(80);
+    expect(candidates).not.toContain(0);
+    expect(candidates).toContain(5173);
+  });
+
+  test('resolveFrontendPortCandidates skips non-empty log messages with no URL matches', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: {
+        frontend: {
+          port: null,
+          logs: [{ message: 'Vite dev server booted successfully' }]
+        }
+      },
+      state: 'running'
+    });
+    getProjectMock.mockResolvedValue({ id: 81, frontendPort: null, framework: 'react' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: null, backend: null });
+    getProjectPortHintsMock.mockReturnValue({ frontend: null, backend: null });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: null });
+
+    const candidates = await __testOnly.resolveFrontendPortCandidates(81);
+    expect(candidates).toContain(5173);
+  });
+
+  test('resolveFrontendPortCandidates adds framework default when stored and hinted ports are stale', async () => {
+    const { __testOnly } = await import('../routes/previewProxy.js');
+
+    getRunningProcessEntryMock.mockReturnValue({
+      processes: null,
+      state: 'idle'
+    });
+    getProjectMock.mockResolvedValue({ id: 67, frontendPort: 5100, framework: 'react,express' });
+    getStoredProjectPortsMock.mockReturnValue({ frontend: 5100, backend: 5501 });
+    getProjectPortHintsMock.mockReturnValue({ frontend: 5100, backend: 5501 });
+    getPortSettingsMock.mockResolvedValue({ frontendPortBase: 5100 });
+
+    const candidates = await __testOnly.resolveFrontendPortCandidates(67);
+    expect(candidates).toContain(5100);
+    expect(candidates).toContain(5173);
+  });
+
   test('resolveFrontendPortForRequest preserves localhost host casing in test mode', async () => {
     const { __testOnly } = await import('../routes/previewProxy.js');
     const original = process.env.LUCIDCODER_PREVIEW_UPSTREAM_HOST;
@@ -1629,7 +1794,7 @@ describe('previewProxy', () => {
     expect(proxiedUrl).toBe('/src/App.jsx');
   });
 
-  test('middleware returns 409 html when project is not running', async () => {
+  test('middleware returns placeholder html when project is not running', async () => {
     getRunningProcessEntryMock.mockReturnValue({
       processes: null,
       state: 'idle'
@@ -1648,7 +1813,7 @@ describe('previewProxy', () => {
     await instance.middleware(req, res, next);
 
     expect(proxyStub.web).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.status).toHaveBeenCalledWith(200);
     expect(res.send).toHaveBeenCalledWith(expect.stringContaining('Preview unavailable'));
   });
 
@@ -1679,7 +1844,7 @@ describe('previewProxy', () => {
     await expect(__testOnly.resolveFrontendPort(1)).resolves.toBe(4200);
   });
 
-  test('resolveFrontendPort returns null when no stored or hinted ports exist', async () => {
+  test('resolveFrontendPort falls back to framework default when no stored or hinted ports exist', async () => {
     getRunningProcessEntryMock.mockReturnValue({
       processes: null,
       state: 'idle'
@@ -1690,7 +1855,7 @@ describe('previewProxy', () => {
 
     const { __testOnly } = await import('../routes/previewProxy.js');
 
-    await expect(__testOnly.resolveFrontendPort(1)).resolves.toBeNull();
+    await expect(__testOnly.resolveFrontendPort(1)).resolves.toBe(5173);
   });
 
   test('proxyRes handler no-ops when request context is missing', async () => {

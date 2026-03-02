@@ -1,4 +1,6 @@
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import sharp from 'sharp';
 import { getProject } from '../../database.js';
 import { runGitCommand } from '../../utils/git.js';
@@ -14,6 +16,8 @@ import {
   resolveProjectRelativePath,
   requireDestructiveConfirmation
 } from './internals.js';
+
+const execFileAsync = promisify(execFile);
 
 export function registerProjectFileRoutes(router) {
   const TRANSMISSION_OPTIMIZED_EXTENSIONS = new Set([
@@ -37,6 +41,38 @@ export function registerProjectFileRoutes(router) {
   const isUploadsRepoPath = (repoPath) => {
     const normalized = normalizeRepoPath(repoPath);
     return normalized === 'uploads' || normalized.startsWith('uploads/');
+  };
+
+  const isLlmSourcePath = (repoPath) => {
+    const normalized = normalizeRepoPath(repoPath);
+    return normalized === 'llm_src' || normalized.startsWith('llm_src/');
+  };
+
+  const maybeRebuildLlmBundle = async ({ projectPath, repoPath, fs }) => {
+    if (!isLlmSourcePath(repoPath) || !projectPath) {
+      return;
+    }
+
+    const bundleScriptPath = path.join(projectPath, 'build_llm_bundle.cjs');
+    try {
+      const stats = await fs.stat(bundleScriptPath);
+      if (!stats.isFile()) {
+        return;
+      }
+    } catch {
+      return;
+    }
+
+    try {
+      await execFileAsync(process.execPath, [bundleScriptPath], {
+        cwd: projectPath,
+        windowsHide: true,
+        timeout: 20_000,
+        maxBuffer: 1024 * 1024
+      });
+    } catch (error) {
+      console.warn('Failed to rebuild llm bundle after file edit:', error?.message || error);
+    }
   };
 
   const stageUploadsPaths = async (projectId, repoPaths = []) => {
@@ -660,6 +696,11 @@ export function registerProjectFileRoutes(router) {
       }
 
       await fs.writeFile(fullPath, content, 'utf-8');
+      await maybeRebuildLlmBundle({
+        projectPath: project.path,
+        repoPath: resolved.normalized,
+        fs
+      });
       await stageUploadsPaths(id, [resolved.normalized]);
 
       const io = req.app?.get?.('io');
@@ -826,6 +867,12 @@ export function registerProjectFileRoutes(router) {
         }
         throw error;
       }
+
+      await maybeRebuildLlmBundle({
+        projectPath: project.path,
+        repoPath: normalized,
+        fs
+      });
 
       await stageUploadsPaths(id, [normalized]);
 

@@ -208,6 +208,20 @@ export function registerProjectProcessRoutes(router) {
         frontend: exposedSnapshot.frontend?.port ?? lastKnownPorts.frontend,
         backend: exposedSnapshot.backend?.port ?? lastKnownPorts.backend
       };
+
+      const nextPortPatch = {};
+      const inferredFrontendPort = normalizePositiveInteger(fullSnapshot.frontend?.port);
+      const inferredBackendPort = normalizePositiveInteger(fullSnapshot.backend?.port);
+      if (inferredFrontendPort && inferredFrontendPort !== storedPorts.frontend) {
+        nextPortPatch.frontendPort = inferredFrontendPort;
+      }
+      if (inferredBackendPort && inferredBackendPort !== storedPorts.backend) {
+        nextPortPatch.backendPort = inferredBackendPort;
+      }
+      if (Object.keys(nextPortPatch).length > 0) {
+        await Promise.resolve(updateProjectPorts(project.id, nextPortPatch)).catch(() => null);
+      }
+
       const hasConventionalBackendEntrypoint = await backendEntrypointExists(project.path);
       const isLucidTemplate = await isLucidTemplateProject(project.id)
         || await isLucidTemplateByGitConfig(project.path);

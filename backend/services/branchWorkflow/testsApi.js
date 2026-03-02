@@ -22,6 +22,7 @@ export const createBranchWorkflowTests = (core) => {
     resolveCoveragePolicy,
     getTestingSettings,
     getProjectTestingSettings,
+    isStyleOnlyPath,
     runProjectGit,
     run,
     get,
@@ -56,6 +57,13 @@ export const createBranchWorkflowTests = (core) => {
     functions: target,
     branches: target
   });
+
+  const isStyleOnlyPathPredicate = typeof isStyleOnlyPath === 'function'
+    ? isStyleOnlyPath
+    : ((value) => {
+      const normalized = String(value || '').trim().toLowerCase();
+      return normalized.endsWith('.css') || /(^|\/)llm_src\/styles\/style_[^/]+\.json$/i.test(normalized);
+    });
 
   const shouldInstallNodeDependencies = ({ workspaceName, changedPaths = [] }) => {
     if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -187,17 +195,12 @@ export const createBranchWorkflowTests = (core) => {
     autoTestTimers.set(key, timer);
   };
 
-  const isCssStylesheetPath = (value) => {
-    const normalized = String(value || '').trim().toLowerCase();
-    return normalized.endsWith('.css');
-  };
-
   const determineCssOnlyStatus = async (projectId, branch) => {
     const context = await getProjectContext(projectId);
     const stagedFiles = parseStagedFiles(branch?.staged_files);
     const stagedCssOnly = Array.isArray(stagedFiles)
       && stagedFiles.length > 0
-      && stagedFiles.every((entry) => isCssStylesheetPath(entry?.path));
+      && stagedFiles.every((entry) => isStyleOnlyPathPredicate(entry?.path));
 
     if (!context?.gitReady || !branch?.name) {
       return { context, isCssOnly: stagedCssOnly, indicator: stagedCssOnly ? 'staged' : null };
@@ -209,7 +212,7 @@ export const createBranchWorkflowTests = (core) => {
         return { context, isCssOnly: stagedCssOnly, indicator: stagedCssOnly ? 'staged' : null };
       }
 
-      const cssOnlyDiff = changedPaths.every((filePath) => isCssStylesheetPath(filePath));
+      const cssOnlyDiff = changedPaths.every((filePath) => isStyleOnlyPathPredicate(filePath));
       return { context, isCssOnly: cssOnlyDiff, indicator: cssOnlyDiff ? 'git-diff' : null };
     } catch {
       return { context, isCssOnly: stagedCssOnly, indicator: stagedCssOnly ? 'staged' : null };

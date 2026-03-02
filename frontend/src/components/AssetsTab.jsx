@@ -438,17 +438,15 @@ const AssetsTab = ({ project }) => {
       if (selectedAssetPath === assetPath) {
         setSelectedAssetPath(nextPath);
       }
-      setAssistantAssetContextPathsState((previous) => {
-        const nextPaths = [...new Set(previous.map((path) => (path === assetPath ? nextPath : path)))]
-          .sort((left, right) => left.localeCompare(right));
-
-        if (nextPaths.length === previous.length && nextPaths.every((path, index) => path === previous[index])) {
-          return previous;
-        }
-
+      const nextPaths = [...new Set(assistantAssetContextPaths.map((path) => (path === assetPath ? nextPath : path)))]
+        .sort((left, right) => left.localeCompare(right));
+      if (
+        nextPaths.length !== assistantAssetContextPaths.length
+        || nextPaths.some((path, index) => path !== assistantAssetContextPaths[index])
+      ) {
         setAssistantAssetContextPaths(projectId, nextPaths);
-        return nextPaths;
-      });
+        setAssistantAssetContextPathsState(nextPaths);
+      }
       setOptimizeModalAssetPath('');
     } catch (err) {
       console.error('Failed to optimize asset:', err);
@@ -456,19 +454,17 @@ const AssetsTab = ({ project }) => {
     } finally {
       setOptimizingPath('');
     }
-  }, [loadAssets, projectId, selectedAssetPath]);
+  }, [assistantAssetContextPaths, loadAssets, projectId, selectedAssetPath]);
 
   const toggleAssistantAssetContextPath = useCallback((assetPath) => {
     if (!projectId || !assetPath) {
       return;
     }
 
-    setAssistantAssetContextPathsState((previous) => {
-      const nextPaths = previous.includes(assetPath) ? [] : [assetPath];
-      setAssistantAssetContextPaths(projectId, nextPaths);
-      return nextPaths;
-    });
-  }, [projectId]);
+    const nextPaths = assistantAssetContextPaths.includes(assetPath) ? [] : [assetPath];
+    setAssistantAssetContextPaths(projectId, nextPaths);
+    setAssistantAssetContextPathsState(nextPaths);
+  }, [assistantAssetContextPaths, projectId]);
 
   const cards = useMemo(() => {
     return assets.map((entry) => {

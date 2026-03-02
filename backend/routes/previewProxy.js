@@ -26,9 +26,16 @@ const autoRestartStateByProject = new Map();
 const autoRestartInFlightByProject = new Map();
 
 const PREVIEW_PROXY_TIMEOUT_MS = 7_000;
-const PREVIEW_PORT_PROBE_TIMEOUT_MS = 250;
+const PREVIEW_PORT_PROBE_TIMEOUT_MS = 1500;
 const PROJECT_UPLOADS_PREFIX = '/uploads/';
 const isTestEnvironment = process.env.NODE_ENV === 'test';
+
+const DEFAULT_FRONTEND_PORTS = {
+  react: 5173,
+  vue: 5173,
+  nextjs: 3000,
+  angular: 4200
+};
 
 const UPLOAD_CONTENT_TYPES = {
   '.png': 'image/png',
@@ -708,6 +715,53 @@ const resolveFrontendPort = async (projectId) => {
   return candidates[0] ?? null;
 };
 
+const resolveFrameworkDefaultFrontendPort = (project) => {
+  const rawFrontendFramework =
+    project?.frontend_framework ??
+    project?.frontendFramework ??
+    project?.framework ??
+    '';
+  const firstFramework = String(rawFrontendFramework)
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean)[0];
+  return DEFAULT_FRONTEND_PORTS[firstFramework] || DEFAULT_FRONTEND_PORTS.react;
+};
+
+const inferFrontendPortFromProcessLogs = (processInfo) => {
+  const logs = Array.isArray(processInfo?.logs) ? processInfo.logs : [];
+  if (!logs.length) {
+    return null;
+  }
+
+  const ansiEscapeRegex = /\u001b\[[0-9;]*m/g;
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const rawMessage = typeof logs[index]?.message === 'string' ? logs[index].message : '';
+    if (!rawMessage) {
+      continue;
+    }
+
+    const message = rawMessage.replace(ansiEscapeRegex, '');
+    const localOrNetworkMatch = message.match(/(?:Local|Network)\s*:\s*https?:\/\/[^\s:/]+:(\d+)/i);
+    if (localOrNetworkMatch) {
+      const numericPort = Number(localOrNetworkMatch[1]);
+      if (Number.isInteger(numericPort) && numericPort > 0) {
+        return numericPort;
+      }
+    }
+
+    const genericUrlMatch = message.match(/https?:\/\/[^\s:/]+:(\d+)/i);
+    if (genericUrlMatch) {
+      const numericPort = Number(genericUrlMatch[1]);
+      if (Number.isInteger(numericPort) && numericPort > 0) {
+        return numericPort;
+      }
+    }
+  }
+
+  return null;
+};
+
 const resolveFrontendPortCandidates = async (projectId) => {
   const uniquePorts = [];
   const addCandidate = (value) => {
@@ -720,16 +774,24 @@ const resolveFrontendPortCandidates = async (projectId) => {
     }
   };
 
-  const { processes, state } = getRunningProcessEntry(projectId);
+  const { processes } = getRunningProcessEntry(projectId);
   const portCandidate = processes?.frontend?.port;
   const numericPort = Number(portCandidate);
   if (
-    state === 'running' &&
     Number.isInteger(numericPort) &&
     numericPort > 0 &&
     !isFrontendPortRememberedBad(projectId, numericPort)
   ) {
     addCandidate(numericPort);
+  }
+
+  const inferredPortFromLogs = inferFrontendPortFromProcessLogs(processes?.frontend);
+  if (
+    Number.isInteger(inferredPortFromLogs) &&
+    inferredPortFromLogs > 0 &&
+    !isFrontendPortRememberedBad(projectId, inferredPortFromLogs)
+  ) {
+    addCandidate(inferredPortFromLogs);
   }
 
   const project = await getProject(projectId);
@@ -742,6 +804,8 @@ const resolveFrontendPortCandidates = async (projectId) => {
 
   const portHints = getProjectPortHints(project);
   addCandidate(portHints?.frontend);
+
+  addCandidate(resolveFrameworkDefaultFrontendPort(project));
 
   let configuredPortSettings = null;
   try {
@@ -1082,7 +1146,7 @@ export const createPreviewProxy = ({ logger = console } = {}) => {
   const proxyWebRequest = async (req, res, { projectId, forwardPath, setCookie }) => {
     const selectedTarget = await resolveFrontendPortForRequest(projectId, req, { returnTarget: true });
     if (!selectedTarget?.port) {
-      res.status(409).send(
+      res.status(200).send(
         '<!doctype html><html><head><meta charset="utf-8"/><title>Preview unavailable</title>' +
         '<style>html,body{margin:0;padding:0;background:transparent;}</style></head>' +
         '<body></body></html>'

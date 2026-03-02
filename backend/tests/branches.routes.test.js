@@ -368,6 +368,24 @@ describe('Branch workflow routes', () => {
     expect(commitResponse.body.overview.current).toBe(branchName);
   });
 
+  test('POST /branches/:branch/commit allows committing template style JSON-only staged changes without passing tests', async () => {
+    const stageResponse = await request(app)
+      .post(`/api/projects/${project.id}/branches/stage`)
+      .send({ filePath: 'llm_src/styles/style_Global.json', description: 'Template style tweak' });
+
+    const branchName = stageResponse.body.branch.name;
+
+    const commitResponse = await request(app)
+      .post(`/api/projects/${project.id}/branches/${encodeURIComponent(branchName)}/commit`)
+      .send({ message: 'style: tweak template style json' });
+
+    expect(commitResponse.status).toBe(200);
+    expect(commitResponse.body.success).toBe(true);
+    expect(commitResponse.body.commit.message).toBe('style: tweak template style json');
+    expect(commitResponse.body.branch.stagedFiles).toHaveLength(0);
+    expect(commitResponse.body.overview.current).toBe(branchName);
+  });
+
   test('POST /branches/:branch/commit requires fixing failing tests before committing', async () => {
     const stageResponse = await request(app)
       .post(`/api/projects/${project.id}/branches/stage`)

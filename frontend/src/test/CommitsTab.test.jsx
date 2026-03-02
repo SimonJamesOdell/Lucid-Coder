@@ -176,6 +176,23 @@ describe('CommitsTab', () => {
     expect(screen.queryByTestId('branch-commit-subject')).not.toBeInTheDocument();
   });
 
+  test('shows commit composer when tests have not passed and staged changes are template style JSON-only', async () => {
+    workingBranchesValue = {
+      [mockProject.id]: {
+        name: 'feature-style-json',
+        lastTestStatus: 'failed',
+        stagedFiles: [{ path: 'llm_src/styles/style_Global.json', source: 'editor', timestamp: '2025-01-01T10:00:00.000Z' }]
+      }
+    };
+
+    axios.get.mockResolvedValueOnce({ data: { success: true, commits: [] } });
+
+    await renderCommitsTab();
+
+    expect(await screen.findByTestId('branch-commit-submit')).toBeInTheDocument();
+    expect(screen.getByTestId('commit-pending')).toHaveTextContent('CSS-only (tests optional)');
+  });
+
   test('renders commit list and shows first commit details', async () => {
     axios.get
       .mockResolvedValueOnce({ data: { success: true, commits: baseCommits } })
@@ -491,7 +508,7 @@ describe('CommitsTab', () => {
 
     await renderCommitsTab();
 
-    expect(screen.getByTestId('commits-empty')).toHaveTextContent('No commits found');
+    expect(await screen.findByTestId('commits-empty')).toHaveTextContent('No commits found');
     expect(screen.getByTestId('commit-no-selection')).toBeInTheDocument();
     expect(axios.get).toHaveBeenCalledTimes(1);
   });
@@ -501,7 +518,7 @@ describe('CommitsTab', () => {
 
     await renderCommitsTab();
 
-    expect(screen.getByTestId('commits-empty')).toHaveTextContent('No commits found');
+    expect(await screen.findByTestId('commits-empty')).toHaveTextContent('No commits found');
     expect(axios.get).toHaveBeenCalledTimes(1);
   });
 

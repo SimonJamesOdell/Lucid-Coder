@@ -15,6 +15,14 @@ const {
 } = automationUtils;
 
 describe('tryParseLooseJson', () => {
+  it('returns arrays and objects as-is without reparsing', () => {
+    const rawArray = [{ id: 1 }];
+    const rawObject = { edits: [] };
+
+    expect(tryParseLooseJson(rawArray)).toBe(rawArray);
+    expect(tryParseLooseJson(rawObject)).toBe(rawObject);
+  });
+
   it('returns null for non-string inputs', () => {
     expect(tryParseLooseJson(null)).toBeNull();
     expect(tryParseLooseJson(42)).toBeNull();
@@ -951,6 +959,43 @@ describe('buildEditsPrompt', () => {
 });
 
 describe('parseEditsFromLLM', () => {
+  it('returns edits from loose-json object fallback when no explicit JSON block is extracted', () => {
+    const edits = parseEditsFromLLM({
+      data: {
+        response: 'notes: done, edits: [{ type: "modify", path: "frontend/src/App.jsx" }]'
+      }
+    });
+
+    expect(edits).toEqual([{ type: 'modify', path: 'frontend/src/App.jsx' }]);
+  });
+
+  it('returns [] when decode wrapper parse returns a non-string value', () => {
+    const parseSpy = vi.spyOn(JSON, 'parse');
+    parseSpy.mockImplementationOnce(() => ({ unexpected: true }));
+
+    const edits = parseEditsFromLLM({ data: { response: '"plain text"' } });
+
+    expect(edits).toEqual([]);
+    parseSpy.mockRestore();
+  });
+
+  it('returns [] when decode wrapper parse throws for quoted content', () => {
+    const parseSpy = vi.spyOn(JSON, 'parse');
+    parseSpy.mockImplementationOnce(() => {
+      throw new Error('decode-failed');
+    });
+
+    const edits = parseEditsFromLLM({ data: { response: '"plain text"' } });
+
+    expect(edits).toEqual([]);
+    parseSpy.mockRestore();
+  });
+
+  it('returns an empty array when loose-json fallback is not an edits array', () => {
+    const edits = parseEditsFromLLM({ data: { response: 'notes only, no edit payload' } });
+    expect(edits).toEqual([]);
+  });
+
   it('returns parsed edits when JSON is well-formed', () => {
     const edits = parseEditsFromLLM({
       data: {
@@ -1004,6 +1049,16 @@ describe('parseEditsFromLLM', () => {
     });
 
     expect(edits).toEqual([{ type: 'modify', path: 'frontend/src/App.jsx' }]);
+  });
+
+  it('parses edits when payload is double-encoded as an escaped JSON string', () => {
+    const edits = parseEditsFromLLM({
+      data: {
+        response: '"{\\"edits\\":[{\\"type\\":\\"modify\\",\\"path\\":\\"llm_src/manifest.json\\"}]}"'
+      }
+    });
+
+    expect(edits).toEqual([{ type: 'modify', path: 'llm_src/manifest.json' }]);
   });
 
   it('returns an empty array when no JSON payload can be extracted', () => {
